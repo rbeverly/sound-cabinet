@@ -1,4 +1,4 @@
-// lofi-kit.sc — Voices for lofi hip-hop compositions
+// lofi-kit.sc — Voices for lo-fi compositions
 
 // Chords (Cm7 → Abmaj7 → Fm7 → G7)
 voice chord1 = (0.3 * saw(131) + 0.3 * saw(156) + 0.3 * saw(196) + 0.25 * saw(233)) >> lowpass(800, 0.6)
@@ -12,12 +12,16 @@ voice bass_ab = (sine(52) + 0.3 * triangle(104)) >> lowpass(300, 0.8)
 voice bass_f  = (sine(44) + 0.3 * triangle(87))  >> lowpass(300, 0.8)
 voice bass_g  = (sine(49) + 0.3 * triangle(98))  >> lowpass(300, 0.8)
 
-// Vinyl crackle
-voice crackle = 0.04 * noise() >> highpass(3000, 0.5) >> lowpass(8000, 0.5)
+// Vinyl texture layers
+voice hiss = 0.03 * noise() >> highpass(3000, 0.5) >> lowpass(8000, 0.5)
+voice pop = 0.05 * noise() >> highpass(1000, 0.8) >> lowpass(4000, 0.6) >> decay(80)
+voice click = 0.06 * noise() >> highpass(4000, 1.0) >> lowpass(10000, 0.5) >> decay(120)
+voice scratch = 0.04 * noise() >> highpass(2000, 0.7) >> lowpass(6000, 0.8) >> decay(30)
 
 // Drums
-voice kick  = (0.8 * sine(55) + 0.3 * sine(30)) >> decay(12)
+voice kick  = (0.7 * sine(55) + 0.5 * sine(30)) >> decay(12)
 voice snare = 0.3 * noise() >> highpass(1500, 1.2) >> lowpass(6000, 0.8) >> decay(15)
+voice ghost_snare = 0.1 * noise() >> highpass(2000, 1.0) >> lowpass(5000, 0.6) >> decay(20)
 voice hat   = 0.12 * noise() >> highpass(6000, 1.0) >> decay(25)
 
 // Melody notes (C minor pentatonic)
