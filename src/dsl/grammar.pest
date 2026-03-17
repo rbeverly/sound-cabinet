@@ -2,7 +2,7 @@ WHITESPACE = _{ " " | "\t" }
 COMMENT    = _{ "//" ~ (!NEWLINE ~ ANY)* }
 
 script = { SOI ~ (line ~ NEWLINE)* ~ line? ~ EOI }
-line   = { voice_def | bpm_stmt | at_stmt | empty_line }
+line   = { voice_def | bpm_stmt | at_stmt | import_stmt | play_stmt | empty_line }
 empty_line = { "" }
 
 // Voice definitions: voice name = expr
@@ -14,6 +14,35 @@ bpm_stmt = { "bpm" ~ number }
 // Scheduled events: at 0 play expr for 4 beats
 at_stmt = { "at" ~ number ~ "play" ~ expr ~ "for" ~ number ~ beat_unit }
 beat_unit = { "beats" | "beat" }
+
+// Import: import path/to/file.sc
+import_stmt = { "import" ~ file_path }
+file_path   = @{ (!NEWLINE ~ !(" ") ~ ANY)+ }
+
+// Pattern header: pattern boom_bap = 4 beats
+pattern_header = { "pattern" ~ ident ~ "=" ~ number ~ beat_unit }
+
+// Section header: section verse = 16 beats
+section_header = { "section" ~ ident ~ "=" ~ number ~ beat_unit }
+
+// Section entry: repeat boom_bap every 4 beats
+section_entry_repeat = { "repeat" ~ ident ~ "every" ~ number ~ beat_unit }
+// Section entry: play jazz_chords
+section_entry_play = { "play" ~ ident }
+
+// Repeat header: repeat 4 {
+repeat_header = { "repeat" ~ integer ~ "{" }
+integer = @{ ASCII_DIGIT+ }
+
+// Pick: pick [verse:3, chorus:1]
+pick_stmt = { "pick" ~ "[" ~ weighted_item ~ ("," ~ weighted_item)* ~ "]" }
+weighted_item = { ident ~ (":" ~ number)? }
+
+// Shuffle: shuffle [a, b, c]
+shuffle_stmt = { "shuffle" ~ "[" ~ ident ~ ("," ~ ident)* ~ "]" }
+
+// Top-level play: play intro
+play_stmt = { "play" ~ ident }
 
 // Expressions — operator precedence: pipe (lowest) > sum > mul (highest)
 expr      = { pipe_expr }

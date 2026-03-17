@@ -99,6 +99,18 @@ fn build_fn_call(
             Ok(net)
         }
 
+        // Envelope: 1 input, 1 output — multiplies signal by exp(-rate * t)
+        "decay" => {
+            let rate = expect_number(&args, 0, name)?;
+            let env = Net::wrap(Box::new(envelope(move |t: f64| {
+                (-t * rate).exp()
+            })));
+            let pass_through = Net::wrap(Box::new(pass()));
+            let mut net = pass_through * env;
+            net.set_sample_rate(sample_rate);
+            Ok(net)
+        }
+
         _ => Err(anyhow!("Unknown DSP function: {name}")),
     }
 }

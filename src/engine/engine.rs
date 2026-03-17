@@ -60,6 +60,16 @@ impl Engine {
                     net,
                 });
             }
+            // These variants are resolved before reaching the engine
+            Command::Import { .. }
+            | Command::PatternDef { .. }
+            | Command::SectionDef { .. }
+            | Command::PlaySequential { .. }
+            | Command::RepeatBlock { .. } => {
+                return Err(anyhow::anyhow!(
+                    "Unexpanded command reached engine — run expand_script first"
+                ));
+            }
         }
         Ok(())
     }

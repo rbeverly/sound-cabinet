@@ -1,0 +1,317 @@
+use std::collections::HashMap;
+
+use anyhow::{anyhow, Result};
+use rand::Rng;
+
+use super::ast::{Command, PatternEvent, RepeatBody, Script, SectionEntry};
+
+struct PatternInfo {
+    duration_beats: f64,
+    events: Vec<PatternEvent>,
+}
+
+struct SectionInfo {
+    duration_beats: f64,
+    entries: Vec<SectionEntry>,
+}
+
+struct ExpansionContext {
+    patterns: HashMap<String, PatternInfo>,
+    sections: HashMap<String, SectionInfo>,
+}
+
+impl ExpansionContext {
+    fn new() -> Self {
+        Self {
+            patterns: HashMap::new(),
+            sections: HashMap::new(),
+        }
+    }
+
+    fn duration_of(&self, name: &str) -> Result<f64> {
+        if let Some(p) = self.patterns.get(name) {
+            Ok(p.duration_beats)
+        } else if let Some(s) = self.sections.get(name) {
+            Ok(s.duration_beats)
+        } else {
+            Err(anyhow!("Unknown pattern or section: '{name}'"))
+        }
+    }
+
+    fn expand_name(&self, name: &str, base_beat: f64) -> Result<Vec<Command>> {
+        if let Some(p) = self.patterns.get(name) {
+            Ok(expand_pattern_events(&p.events, base_beat))
+        } else if let Some(s) = self.sections.get(name) {
+            self.expand_section(s, base_beat)
+        } else {
+            Err(anyhow!("Unknown pattern or section: '{name}'"))
+        }
+    }
+
+    fn expand_section(&self, section: &SectionInfo, base_beat: f64) -> Result<Vec<Command>> {
+        let mut output = Vec::new();
+
+        for entry in &section.entries {
+            match entry {
+                SectionEntry::RepeatEvery { name, every_beats } => {
+                    let mut beat = 0.0;
+                    while beat < section.duration_beats {
+                        let cmds = self.expand_name(name, base_beat + beat)?;
+                        output.extend(cmds);
+                        beat += every_beats;
+                    }
+                }
+                SectionEntry::Play { name } => {
+                    let cmds = self.expand_name(name, base_beat)?;
+                    output.extend(cmds);
+                }
+            }
+        }
+
+        Ok(output)
+    }
+}
+
+fn expand_pattern_events(events: &[PatternEvent], base_beat: f64) -> Vec<Command> {
+    events
+        .iter()
+        .map(|e| Command::PlayAt {
+            beat: base_beat + e.beat_offset,
+            expr: e.expr.clone(),
+            duration_beats: e.duration_beats,
+        })
+        .collect()
+}
+
+/// Expand a script containing patterns, sections, repeat blocks, pick, and shuffle
+/// into a flat script of VoiceDef, SetBpm, and PlayAt commands.
+pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
+    let mut ctx = ExpansionContext::new();
+    let mut output = Vec::new();
+    let mut cursor: f64 = 0.0;
+
+    for cmd in script.commands {
+        match cmd {
+            Command::VoiceDef { .. } | Command::SetBpm(_) | Command::Import { .. } => {
+                output.push(cmd);
+            }
+            Command::PlayAt { .. } => {
+                output.push(cmd);
+            }
+            Command::PatternDef {
+                name,
+                duration_beats,
+                events,
+            } => {
+                ctx.patterns
+                    .insert(name, PatternInfo { duration_beats, events });
+            }
+            Command::SectionDef {
+                name,
+                duration_beats,
+                entries,
+            } => {
+                ctx.sections
+                    .insert(name, SectionInfo { duration_beats, entries });
+            }
+            Command::PlaySequential { name } => {
+                let duration = ctx.duration_of(&name)?;
+                let events = ctx.expand_name(&name, cursor)?;
+                output.extend(events);
+                cursor += duration;
+            }
+            Command::RepeatBlock { count, body } => {
+                for _ in 0..count {
+                    for item in &body {
+                        match item {
+                            RepeatBody::Play(name) => {
+                                let duration = ctx.duration_of(name)?;
+                                let events = ctx.expand_name(name, cursor)?;
+                                output.extend(events);
+                                cursor += duration;
+                            }
+                            RepeatBody::Pick(choices) => {
+                                let name = weighted_pick(choices, rng);
+                                let duration = ctx.duration_of(&name)?;
+                                let events = ctx.expand_name(&name, cursor)?;
+                                output.extend(events);
+                                cursor += duration;
+                            }
+                            RepeatBody::Shuffle(names) => {
+                                let mut shuffled = names.clone();
+                                shuffle_vec(&mut shuffled, rng);
+                                for name in &shuffled {
+                                    let duration = ctx.duration_of(name)?;
+                                    let events = ctx.expand_name(name, cursor)?;
+                                    output.extend(events);
+                                    cursor += duration;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(Script { commands: output })
+}
+
+fn weighted_pick(
+    choices: &[super::ast::WeightedChoice],
+    rng: &mut impl Rng,
+) -> String {
+    let total: f64 = choices.iter().map(|c| c.weight).sum();
+    let mut r = rng.gen_range(0.0..total);
+    for choice in choices {
+        r -= choice.weight;
+        if r <= 0.0 {
+            return choice.name.clone();
+        }
+    }
+    choices.last().unwrap().name.clone()
+}
+
+fn shuffle_vec(v: &mut [String], rng: &mut impl Rng) {
+    let len = v.len();
+    for i in (1..len).rev() {
+        let j = rng.gen_range(0..=i);
+        v.swap(i, j);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dsl::ast::*;
+    use rand::SeedableRng;
+
+    fn make_rng() -> rand::rngs::StdRng {
+        rand::rngs::StdRng::seed_from_u64(42)
+    }
+
+    #[test]
+    fn test_expand_pattern() {
+        let script = Script {
+            commands: vec![
+                Command::VoiceDef {
+                    name: "kick".into(),
+                    expr: Expr::FnCall {
+                        name: "sine".into(),
+                        args: vec![Expr::Number(55.0)],
+                    },
+                },
+                Command::SetBpm(120.0),
+                Command::PatternDef {
+                    name: "drums".into(),
+                    duration_beats: 4.0,
+                    events: vec![
+                        PatternEvent {
+                            beat_offset: 0.0,
+                            expr: Expr::VoiceRef("kick".into()),
+                            duration_beats: 0.5,
+                        },
+                        PatternEvent {
+                            beat_offset: 2.0,
+                            expr: Expr::VoiceRef("kick".into()),
+                            duration_beats: 0.5,
+                        },
+                    ],
+                },
+                Command::PlaySequential {
+                    name: "drums".into(),
+                },
+                Command::PlaySequential {
+                    name: "drums".into(),
+                },
+            ],
+        };
+
+        let mut rng = make_rng();
+        let expanded = expand_script(script, &mut rng).unwrap();
+
+        // VoiceDef + SetBpm + 2 PlayAt (first drums) + 2 PlayAt (second drums) = 6
+        assert_eq!(expanded.commands.len(), 6);
+
+        // First pattern at cursor=0: beats 0.0 and 2.0
+        match &expanded.commands[2] {
+            Command::PlayAt { beat, .. } => assert_eq!(*beat, 0.0),
+            _ => panic!("Expected PlayAt"),
+        }
+        match &expanded.commands[3] {
+            Command::PlayAt { beat, .. } => assert_eq!(*beat, 2.0),
+            _ => panic!("Expected PlayAt"),
+        }
+
+        // Second pattern at cursor=4: beats 4.0 and 6.0
+        match &expanded.commands[4] {
+            Command::PlayAt { beat, .. } => assert_eq!(*beat, 4.0),
+            _ => panic!("Expected PlayAt"),
+        }
+        match &expanded.commands[5] {
+            Command::PlayAt { beat, .. } => assert_eq!(*beat, 6.0),
+            _ => panic!("Expected PlayAt"),
+        }
+    }
+
+    #[test]
+    fn test_expand_section() {
+        let script = Script {
+            commands: vec![
+                Command::PatternDef {
+                    name: "drums".into(),
+                    duration_beats: 4.0,
+                    events: vec![PatternEvent {
+                        beat_offset: 0.0,
+                        expr: Expr::VoiceRef("kick".into()),
+                        duration_beats: 0.5,
+                    }],
+                },
+                Command::SectionDef {
+                    name: "verse".into(),
+                    duration_beats: 8.0,
+                    entries: vec![SectionEntry::RepeatEvery {
+                        name: "drums".into(),
+                        every_beats: 4.0,
+                    }],
+                },
+                Command::PlaySequential {
+                    name: "verse".into(),
+                },
+            ],
+        };
+
+        let mut rng = make_rng();
+        let expanded = expand_script(script, &mut rng).unwrap();
+
+        // 2 PlayAt events (drums tiled at 0 and 4)
+        assert_eq!(expanded.commands.len(), 2);
+        match &expanded.commands[0] {
+            Command::PlayAt { beat, .. } => assert_eq!(*beat, 0.0),
+            _ => panic!("Expected PlayAt"),
+        }
+        match &expanded.commands[1] {
+            Command::PlayAt { beat, .. } => assert_eq!(*beat, 4.0),
+            _ => panic!("Expected PlayAt"),
+        }
+    }
+
+    #[test]
+    fn test_absolute_play_at_passes_through() {
+        let script = Script {
+            commands: vec![Command::PlayAt {
+                beat: 10.0,
+                expr: Expr::VoiceRef("x".into()),
+                duration_beats: 2.0,
+            }],
+        };
+
+        let mut rng = make_rng();
+        let expanded = expand_script(script, &mut rng).unwrap();
+        assert_eq!(expanded.commands.len(), 1);
+        match &expanded.commands[0] {
+            Command::PlayAt { beat, .. } => assert_eq!(*beat, 10.0),
+            _ => panic!("Expected PlayAt"),
+        }
+    }
+}
