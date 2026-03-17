@@ -15,6 +15,38 @@ pub enum Expr {
     Mul(Box<Expr>, Box<Expr>),
 }
 
+/// A single event within a pattern — beat offset is relative to pattern start.
+#[derive(Debug, Clone)]
+pub struct PatternEvent {
+    pub beat_offset: f64,
+    pub expr: Expr,
+    pub duration_beats: f64,
+}
+
+/// A placement within a section.
+#[derive(Debug, Clone)]
+pub enum SectionEntry {
+    /// `repeat boom_bap every 4 beats`
+    RepeatEvery { name: String, every_beats: f64 },
+    /// `play jazz_chords`
+    Play { name: String },
+}
+
+/// A weighted choice for `pick`.
+#[derive(Debug, Clone)]
+pub struct WeightedChoice {
+    pub name: String,
+    pub weight: f64,
+}
+
+/// An item inside a `repeat N { ... }` block.
+#[derive(Debug, Clone)]
+pub enum RepeatBody {
+    Play(String),
+    Pick(Vec<WeightedChoice>),
+    Shuffle(Vec<String>),
+}
+
 /// A single command in the score.
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -27,6 +59,27 @@ pub enum Command {
         beat: f64,
         expr: Expr,
         duration_beats: f64,
+    },
+    /// Import another .sc file: `import voices/kick.sc`
+    Import { path: String },
+    /// Define a named pattern with relative events
+    PatternDef {
+        name: String,
+        duration_beats: f64,
+        events: Vec<PatternEvent>,
+    },
+    /// Define a named section that composes patterns
+    SectionDef {
+        name: String,
+        duration_beats: f64,
+        entries: Vec<SectionEntry>,
+    },
+    /// Top-level sequential play: `play intro`
+    PlaySequential { name: String },
+    /// Repeat block: `repeat 4 { ... }`
+    RepeatBlock {
+        count: u32,
+        body: Vec<RepeatBody>,
     },
 }
 

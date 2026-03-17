@@ -38,5 +38,7 @@ fn command_to_msg(cmd: Command) -> EngineMsg {
             expr,
             duration_beats,
         },
+        // Streaming mode only handles single-line commands
+        _ => return EngineMsg::SetBpm(0.0), // no-op fallback
     }
 }

@@ -26,13 +26,13 @@ voice bass_g  = (sine(49) + 0.3 * triangle(98))  >> lowpass(300, 0.8)
 voice crackle = 0.04 * noise() >> highpass(3000, 0.5) >> lowpass(8000, 0.5)
 
 // Kick — low sine thump
-voice kick = 0.8 * sine(55) + 0.3 * sine(30)
+voice kick = (0.8 * sine(55) + 0.3 * sine(30)) >> decay(12)
 
-// Snare — filtered noise
-voice snare = 0.3 * noise() >> highpass(1500, 1.2) >> lowpass(6000, 0.8)
+// Snare — filtered noise with decay
+voice snare = 0.3 * noise() >> highpass(1500, 1.2) >> lowpass(6000, 0.8) >> decay(15)
 
-// Hi-hat — high filtered noise
-voice hat = 0.12 * noise() >> highpass(6000, 1.0)
+// Hi-hat — high filtered noise with sharp decay
+voice hat = 0.12 * noise() >> highpass(6000, 1.0) >> decay(25)
 
 // Simple melodic motif — pentatonic noodling
 voice mel_c5  = 0.15 * triangle(523)  >> lowpass(2000, 0.5)

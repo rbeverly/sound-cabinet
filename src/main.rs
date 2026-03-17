@@ -1,10 +1,10 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
 use anyhow::{anyhow, Result};
 
-use sound_cabinet::dsl::parse_script;
+use sound_cabinet::dsl::{expand_script, parse_script, resolve_imports};
 use sound_cabinet::engine::Engine;
 use sound_cabinet::render::realtime;
 use sound_cabinet::render::wav::render_to_wav;
@@ -53,6 +53,9 @@ fn cmd_render(args: &[String]) -> Result<()> {
 
     let source = std::fs::read_to_string(score_path)?;
     let script = parse_script(&source)?;
+    let base_dir = Path::new(score_path).parent().unwrap_or(Path::new("."));
+    let script = resolve_imports(script, base_dir)?;
+    let script = expand_script(script, &mut rand::thread_rng())?;
 
     let mut engine = Engine::new(SAMPLE_RATE);
     for cmd in script.commands {
@@ -74,6 +77,9 @@ fn cmd_play(args: &[String]) -> Result<()> {
     let score_path = &args[0];
     let source = std::fs::read_to_string(score_path)?;
     let script = parse_script(&source)?;
+    let base_dir = Path::new(score_path).parent().unwrap_or(Path::new("."));
+    let script = resolve_imports(script, base_dir)?;
+    let script = expand_script(script, &mut rand::thread_rng())?;
 
     let mut engine = Engine::new(SAMPLE_RATE);
     for cmd in script.commands {
