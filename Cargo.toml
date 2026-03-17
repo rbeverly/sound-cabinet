@@ -1,0 +1,13 @@
+[package]
+name = "sound-cabinet"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fundsp = "0.18"
+hound = "3.5"
+cpal = "0.15"
+pest = "2.7"
+pest_derive = "2.7"
+anyhow = "1"
+crossbeam-channel = "0.5"

@@ -1,0 +1,35 @@
+WHITESPACE = _{ " " | "\t" }
+COMMENT    = _{ "//" ~ (!NEWLINE ~ ANY)* }
+
+script = { SOI ~ (line ~ NEWLINE)* ~ line? ~ EOI }
+line   = { voice_def | bpm_stmt | at_stmt | empty_line }
+empty_line = { "" }
+
+// Voice definitions: voice name = expr
+voice_def = { "voice" ~ ident ~ "=" ~ expr }
+
+// BPM: bpm 120
+bpm_stmt = { "bpm" ~ number }
+
+// Scheduled events: at 0 play expr for 4 beats
+at_stmt = { "at" ~ number ~ "play" ~ expr ~ "for" ~ number ~ beat_unit }
+beat_unit = { "beats" | "beat" }
+
+// Expressions — operator precedence: pipe (lowest) > sum > mul (highest)
+expr      = { pipe_expr }
+pipe_expr = { sum_expr ~ (">>" ~ sum_expr)* }
+sum_expr  = { mul_expr ~ ("+" ~ mul_expr)* }
+mul_expr  = { atom ~ ("*" ~ atom)* }
+
+atom = {
+    fn_call
+  | number
+  | ident
+  | "(" ~ expr ~ ")"
+}
+
+fn_call  = { ident ~ "(" ~ arg_list? ~ ")" }
+arg_list = { expr ~ ("," ~ expr)* }
+
+ident  = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
