@@ -6,19 +6,19 @@ A DSL-driven sound synthesis tool. Write compositions in a simple text format, r
 
 ### Pre-built binaries
 
-Download the latest release for your platform from [Releases](https://github.com/your-user/sound-cabinet/releases):
+Download the latest release for your platform from [Releases](https://github.com/rbeverly/sound-cabinet/releases):
 
 ```bash
 # macOS (Apple Silicon)
-curl -L https://github.com/your-user/sound-cabinet/releases/latest/download/sound-cabinet-aarch64-apple-darwin.tar.gz | tar xz
+curl -L https://github.com/rbeverly/sound-cabinet/releases/latest/download/sound-cabinet-aarch64-apple-darwin.tar.gz | tar xz
 sudo mv sound-cabinet /usr/local/bin/
 
 # macOS (Intel)
-curl -L https://github.com/your-user/sound-cabinet/releases/latest/download/sound-cabinet-x86_64-apple-darwin.tar.gz | tar xz
+curl -L https://github.com/rbeverly/sound-cabinet/releases/latest/download/sound-cabinet-x86_64-apple-darwin.tar.gz | tar xz
 sudo mv sound-cabinet /usr/local/bin/
 
 # Linux (x86_64)
-curl -L https://github.com/your-user/sound-cabinet/releases/latest/download/sound-cabinet-x86_64-unknown-linux-gnu.tar.gz | tar xz
+curl -L https://github.com/rbeverly/sound-cabinet/releases/latest/download/sound-cabinet-x86_64-unknown-linux-gnu.tar.gz | tar xz
 sudo mv sound-cabinet /usr/local/bin/
 ```
 
@@ -28,7 +28,7 @@ Requires [Rust](https://www.rust-lang.org/tools/install) (1.70+):
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh  # if you don't have Rust
-git clone https://github.com/your-user/sound-cabinet.git
+git clone https://github.com/rbeverly/sound-cabinet.git
 cd sound-cabinet
 cargo build --release
 ```
