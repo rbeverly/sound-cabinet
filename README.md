@@ -373,6 +373,50 @@ Waves don't have to be symmetric — asymmetry adds even harmonics (tube/tape wa
 wave evolving = cycle [wonky, spiky, spiky, wonky]
 ```
 
+### Arp enhancements
+
+Direction, octave spanning, and randomization for the arpeggiator:
+
+```
+pluck >> arp(Cm7, 4, "down")       // descending
+pluck >> arp(Cm7, 4, "updown")     // ascending then descending per cycle
+pluck >> arp(Cm7, 4, "random")     // random note order each cycle
+pluck >> arp(Cm7, 4, "up2")        // ascend across 2 octaves before repeating
+```
+
+### Tuning & microtonal
+
+Change the reference pitch from the default A4=440 Hz:
+
+```
+tuning 432        // A4 = 432 Hz — all notes shift accordingly
+```
+
+Beyond alternate reference pitches, support non-12-TET tuning systems — 19-TET, 24-TET (quarter tones), just intonation, gamelan pelog/slendro. This changes the fundamental interval math from `2^(semitones/12)` to pluggable tuning tables. Named scale systems (ragas, maqam, pentatonic modes) could work as selections from a tuning: `arp(raga_bhairav, 4)`.
+
+### Swing & humanize
+
+Composable timing transforms — they change *when* events fire, not the audio signal. Can be applied at the pattern definition, at play-time via piping, or globally. Transforms compose multiplicatively when stacked.
+
+```
+// On the pattern definition
+pattern drums = 4 beats swing 0.6
+  at 0 play kick for 0.5 beats
+  at 1 play hat for 0.25 beats
+
+// At play-time — different swing per layer in the same section
+section groove = 16 beats
+  repeat hats every 4 beats >> swing 0.7
+  repeat kick_pattern every 4 beats
+  play chords >> swing 0.6
+  play bass
+
+// Global jitter
+humanize 10       // ±10ms per note
+```
+
+Swing is the foundation of shuffle, jazz, and boom-bap grooves. Humanize adds the subtle imprecision of a real player. Stacking swing (e.g., swung pattern played with additional swing) pushes notes progressively behind the beat — a real production technique for that Dilla-style loose feel.
+
 ### Velocity & dynamics
 
 Per-note velocity so drum patterns and melodies feel human instead of mechanical:
