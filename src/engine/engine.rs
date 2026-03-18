@@ -4,13 +4,17 @@ use anyhow::Result;
 use fundsp::hacker::*;
 
 use crate::dsl::ast::{Command, Expr};
-use crate::engine::graph::build_graph;
+use crate::engine::graph::{build_graph, extract_swell, strip_swell};
 
 /// A scheduled playback event with absolute sample positions.
 struct ScheduledEvent {
     start_sample: u64,
     end_sample: u64,
+    duration_secs: f64,
     net: Net,
+    /// Optional swell envelope applied in the render loop (attack_secs, release_secs).
+    /// Handled here instead of in the DSP graph for precise, non-cycling timing.
+    swell: Option<(f64, f64)>,
 }
 
 /// The central audio engine. Manages voice definitions, scheduled events,
@@ -51,13 +55,19 @@ impl Engine {
                 let start_sample = self.beats_to_samples(beat);
                 let duration_samples = self.beats_to_samples(duration_beats);
                 let end_sample = start_sample + duration_samples;
+                let duration_secs = duration_beats * 60.0 / self.bpm;
+                let swell = extract_swell(&expr);
+                let clean_expr = strip_swell(&expr);
 
-                let net = build_graph(&expr, &self.voices, self.sample_rate)?;
+                let net =
+                    build_graph(&clean_expr, &self.voices, self.sample_rate, Some(duration_secs))?;
 
                 self.schedule.push(ScheduledEvent {
                     start_sample,
                     end_sample,
+                    duration_secs,
                     net,
+                    swell,
                 });
             }
             // These variants are resolved before reaching the engine
@@ -87,13 +97,19 @@ impl Engine {
                 let start_sample = self.current_sample + offset;
                 let duration_samples = self.beats_to_samples(duration_beats);
                 let end_sample = start_sample + duration_samples;
+                let duration_secs = duration_beats * 60.0 / self.bpm;
+                let swell = extract_swell(&expr);
+                let clean_expr = strip_swell(&expr);
 
-                let net = build_graph(&expr, &self.voices, self.sample_rate)?;
+                let net =
+                    build_graph(&clean_expr, &self.voices, self.sample_rate, Some(duration_secs))?;
 
                 self.schedule.push(ScheduledEvent {
                     start_sample,
                     end_sample,
+                    duration_secs,
                     net,
+                    swell,
                 });
             }
             other => self.handle_command(other)?,
@@ -109,34 +125,68 @@ impl Engine {
             *sample = 0.0;
         }
 
+        let buf_start = self.current_sample;
+        let buf_end = buf_start + buffer.len() as u64;
+
         for event in &mut self.schedule {
-            for (i, sample) in buffer.iter_mut().enumerate() {
-                let pos = self.current_sample + i as u64;
+            // Skip events entirely outside this buffer window
+            if event.start_sample >= buf_end || event.end_sample <= buf_start {
+                continue;
+            }
 
-                if pos >= event.start_sample && pos < event.end_sample {
-                    // Apply a short fade-in/fade-out envelope to avoid clicks
-                    let samples_into = pos - event.start_sample;
-                    let samples_remaining = event.end_sample - pos;
-                    let fade_samples = 256u64;
-                    let env = if samples_into < fade_samples {
-                        samples_into as f32 / fade_samples as f32
-                    } else if samples_remaining < fade_samples {
-                        samples_remaining as f32 / fade_samples as f32
-                    } else {
+            // Calculate the active range within this buffer
+            let active_start = if event.start_sample > buf_start {
+                (event.start_sample - buf_start) as usize
+            } else {
+                0
+            };
+            let active_end = if event.end_sample < buf_end {
+                (event.end_sample - buf_start) as usize
+            } else {
+                buffer.len()
+            };
+
+            let fade_samples = 256u64;
+
+            for i in active_start..active_end {
+                let pos = buf_start + i as u64;
+                let samples_into = pos - event.start_sample;
+                let samples_remaining = event.end_sample - pos;
+
+                // Short fade-in/fade-out to avoid clicks at voice boundaries
+                let anti_click = if samples_into < fade_samples {
+                    samples_into as f32 / fade_samples as f32
+                } else if samples_remaining < fade_samples {
+                    samples_remaining as f32 / fade_samples as f32
+                } else {
+                    1.0
+                };
+
+                // Swell envelope: computed from sample position for exact timing
+                let swell_env = if let Some((attack, release)) = event.swell {
+                    let t = samples_into as f64 / self.sample_rate;
+                    let dur = event.duration_secs;
+                    let fade_in = (t / attack).min(1.0);
+                    let fade_start = (dur - release).max(0.0);
+                    let fade_out = if t <= fade_start {
                         1.0
+                    } else {
+                        (1.0 - (t - fade_start) / release).max(0.0)
                     };
+                    fade_in.min(fade_out) as f32
+                } else {
+                    1.0
+                };
 
-                    let out = event.net.get_mono();
-                    *sample += out * env;
-                }
+                let out = event.net.get_mono();
+                buffer[i] += out * anti_click * swell_env;
             }
         }
 
-        self.current_sample += buffer.len() as u64;
+        self.current_sample = buf_end;
 
         // Remove finished events
-        self.schedule
-            .retain(|e| e.end_sample > self.current_sample);
+        self.schedule.retain(|e| e.end_sample > buf_end);
     }
 
     /// Returns true when all scheduled events have finished playing.
