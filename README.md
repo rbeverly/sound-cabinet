@@ -231,24 +231,45 @@ Effects process a signal in the pipe chain — place them after the source and a
 | `distort(amount)` | Soft clipping (tanh saturation). 1.0 = subtle warmth, 4.0+ = heavy drive. | `saw(C2) >> lowpass(400, 1.2) >> distort(4.0)` |
 | `vibrato(rate, depth)` | Pitch wobble via modulated delay. `rate` in Hz, `depth` in samples. | `saw(E4) >> vibrato(4.0, 15.0)` |
 | `chorus(sep, var, freq)` | Detuned copies for width. `sep`/`var` in seconds, `freq` in Hz. | `triangle(E5) >> chorus(0.015, 0.005, 0.3)` |
+| `delay(time, fb, mix)` | Feedback delay. `time` in seconds, `fb` 0.0-1.0 (recirculation), `mix` 0.0-1.0 (dry/wet). Auto-damped HF in feedback path. | `triangle(G5) >> delay(0.3, 0.5, 0.4)` |
+| `reverb(size, damp, mix)` | Freeverb algorithmic reverb. `size` 0.0-1.0 (room size), `damp` 0.0-1.0 (HF absorption), `mix` 0.0-1.0 (dry/wet). | `saw(C4) >> reverb(0.8, 0.4, 0.3)` |
 
 Effects are just pipe stages — you can stack them freely:
 
 ```
-voice lead = saw(G5) >> lowpass(1200, 0.7) >> vibrato(4.0, 15.0) >> chorus(0.012, 0.004, 0.2)
+voice lead = saw(G5) >> lowpass(1200, 0.7) >> delay(0.3, 0.4, 0.3) >> reverb(0.6, 0.5, 0.25)
 ```
+
+### Chords
+
+`chord(name)` generates a summed set of saw oscillators for a named chord. Use it anywhere you'd use an oscillator:
+
+```
+voice pad = chord(Cm7) >> lowpass(800, 0.6) >> reverb(0.7, 0.5, 0.2)
+voice bright = chord(Fmaj7) >> chorus(0.012, 0.004, 0.2)
+```
+
+Supported chord types: `maj`, `m`/`min`, `dim`, `aug`, `7`/`dom7`, `m7`/`min7`, `maj7`, `dim7`, `aug7`, `9`/`dom9`, `m9`/`min9`, `maj9`, `sus2`, `sus4`.
+
+The root is any note letter (A-G) with optional accidental (`#`, `s`, `b`). Octave defaults to 4 but can be specified: `Cm73` for C minor 7th in octave 3.
+
+Note: `G7` is parsed as the note G in octave 7, not a G dominant 7th chord. Use `Gdom7` for the chord.
 
 ### Arpeggiator
 
-The arpeggiator splits a voice into a sequence of notes over time. It lives in the pipe chain, so downstream effects apply to all notes:
+The arpeggiator splits a voice into a sequence of notes over time. It lives in the pipe chain, so downstream effects apply to all notes. You can spell out individual notes or use chord names:
 
 ```
 voice pluck = 0.3 * saw(0) >> lowpass(2000, 0.8) >> decay(10)
 
+// Chord shorthand — Cm7 expands to C4, Eb4, G4, Bb4
+at 0 play pluck >> arp(Cm7, 4) >> lowpass(1500, 0.6) for 4 beats
+
+// Or spell out individual notes
 at 0 play pluck >> arp(C4, Eb4, G4, Bb4, 4) >> lowpass(1500, 0.6) for 4 beats
 ```
 
-`arp(note1, note2, ..., speed)` — the last argument is notes per beat. The voice to the left is the template: its oscillator frequencies are replaced by each arp note in turn. Effects to the right of the arp (like `lowpass` above) are applied to every note.
+`arp(notes..., speed)` — the last argument is notes per beat. The voice to the left is the template: its oscillator frequencies are replaced by each arp note in turn. Effects to the right of the arp (like `lowpass` above) are applied to every note.
 
 If the voice template has a frequency of `0`, that's fine — the arp substitutes it. If the voice already has a real frequency, the arp overrides it.
 
@@ -297,4 +318,89 @@ Render any example:
 ```bash
 sound-cabinet render examples/effects-demo.sc -o effects-demo.wav
 sound-cabinet render examples/lofi-afternoon.sc -o lofi-afternoon.wav
+```
+
+## Roadmap
+
+What's coming next, roughly in priority order.
+
+### Pulse oscillator
+
+Variable-width pulse wave — the classic synth waveform that sine/saw/triangle/square can't replicate. Different duty cycles produce dramatically different timbres (thin and nasal at 10%, hollow at 50%, bright at 90%):
+
+```
+pulse(C3, 0.25)                        // 25% duty cycle
+pulse(C3, 0.1) >> lowpass(800, 0.7)    // narrow pulse, filtered
+```
+
+### Waveshaping modes
+
+Extend `distort` with named modes beyond the current symmetric tanh soft-clip — asymmetric clipping (tube warmth), foldback distortion (aggressive harmonics), half-wave rectification (even harmonics):
+
+```
+saw(C3) >> distort(3.0, "fold")    // foldback
+sine(A4) >> distort(2.0, "asym")   // asymmetric / tube-style
+```
+
+### Custom waveforms
+
+Define arbitrary waveform shapes as arrays of sample points. The oscillator interpolates between them and loops at the given frequency:
+
+```
+wave wonky = [0.0, 0.3, 0.8, 1.0, 1.0, 0.6, 0.2, -0.5, -0.8, -1.0, -0.4, 0.0]
+
+at 0 play wonky(C3) >> lowpass(800, 0.7) for 4 beats
+```
+
+Or as a visual grid (rows = amplitude, columns = time):
+
+```
+wave spiky = 8x8 {
+  . . . X . . . .
+  . . X . X . . .
+  . X . . . . . .
+  X . . . . . . X
+  . . . . . . X .
+  . . . . . X . .
+  . . . . X . . .
+  . . . . . . . .
+}
+```
+
+Waves don't have to be symmetric — asymmetry adds even harmonics (tube/tape warmth). Multi-cycle patterns are also possible, where the repeating unit is longer than one wave period:
+
+```
+wave evolving = cycle [wonky, spiky, spiky, wonky]
+```
+
+### Velocity & dynamics
+
+Per-note velocity so drum patterns and melodies feel human instead of mechanical:
+
+```
+at 0 play kick vel 0.9 for 0.5 beats
+at 1 play snare vel 0.6 for 0.25 beats
+```
+
+### Parameter automation
+
+Sweep any parameter over the duration of an event:
+
+```
+saw(C3) >> lowpass(800 -> 4000, 0.7)   // filter opens over time
+saw(C3) >> lowpass(800, 0.7) >> lfo(2.0 -> 8.0, 0.4)  // LFO speeds up
+```
+
+This is how filter sweeps, risers, and drops work in electronic music.
+
+### MIDI export
+
+Render to `.mid` instead of `.wav` so compositions can be brought into a DAW with real instruments. The arp and note-name infrastructure already maps cleanly to MIDI events.
+
+### Watch mode
+
+Live reload on file save for fast iteration:
+
+```bash
+sound-cabinet watch examples/demo.sc
 ```

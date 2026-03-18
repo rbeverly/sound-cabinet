@@ -4,6 +4,7 @@ use anyhow::Result;
 use fundsp::hacker::*;
 
 use crate::dsl::ast::{Command, Expr};
+use crate::dsl::parser::resolve_chord;
 use crate::engine::graph::{build_graph, extract_arp, extract_swell, strip_swell, substitute_freq};
 
 /// A scheduled playback event with absolute sample positions.
@@ -245,13 +246,28 @@ impl Engine {
                 ))
             }
         };
-        let notes: Vec<f64> = arp_args[..arp_args.len() - 1]
-            .iter()
-            .map(|a| match a {
-                Expr::Number(v) => Ok(*v),
-                _ => Err(anyhow::anyhow!("arp: note arguments must be numbers")),
-            })
-            .collect::<Result<_>>()?;
+        // Expand arp note args — supports individual notes (Expr::Number from note names)
+        // and chord names (Expr::VoiceRef that resolves as a chord like "Cm7")
+        let mut notes: Vec<f64> = Vec::new();
+        for arg in &arp_args[..arp_args.len() - 1] {
+            match arg {
+                Expr::Number(v) => notes.push(*v),
+                Expr::VoiceRef(name) => {
+                    if let Some(chord_notes) = resolve_chord(name) {
+                        notes.extend(chord_notes);
+                    } else {
+                        return Err(anyhow::anyhow!(
+                            "arp: '{name}' is not a known chord or note"
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "arp: arguments must be notes or chord names"
+                    ))
+                }
+            }
+        }
 
         // Extract swell from the post-chain if present
         let swell = post_chain.as_ref().and_then(|pc| extract_swell(pc));

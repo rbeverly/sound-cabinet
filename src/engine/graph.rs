@@ -4,6 +4,8 @@ use anyhow::{anyhow, Result};
 use fundsp::hacker::*;
 
 use crate::dsl::ast::Expr;
+use crate::dsl::parser::resolve_chord;
+use crate::engine::effects::{FeedbackDelay, Freeverb};
 
 /// Translate an AST Expr into a fundsp Net (boxed dynamic signal graph).
 ///
@@ -190,6 +192,54 @@ fn build_fn_call(
             let mod_freq = expect_number(args, 2, name)? as f32;
             let mut net = Net::wrap(Box::new(chorus(0, separation, variation, mod_freq)));
             net.set_sample_rate(sample_rate);
+            Ok(net)
+        }
+
+        // Delay: feedback delay line with automatic damping.
+        // delay(time_seconds, feedback_0_to_1, mix_0_to_1)
+        "delay" => {
+            let time = expect_number(args, 0, name)?;
+            let feedback = expect_number(args, 1, name)? as f32;
+            let mix = expect_number(args, 2, name)? as f32;
+            let mut net = Net::wrap(Box::new(An(FeedbackDelay::new(time, feedback, mix))));
+            net.set_sample_rate(sample_rate);
+            Ok(net)
+        }
+
+        // Reverb: Freeverb algorithm — 8 comb filters + 4 allpass diffusers.
+        // reverb(room_size_0_to_1, damping_0_to_1, mix_0_to_1)
+        "reverb" => {
+            let room_size = expect_number(args, 0, name)? as f32;
+            let damping = expect_number(args, 1, name)? as f32;
+            let mix = expect_number(args, 2, name)? as f32;
+            let mut net = Net::wrap(Box::new(An(Freeverb::new(room_size, damping, mix))));
+            net.set_sample_rate(sample_rate);
+            Ok(net)
+        }
+
+        // Chord: play all notes of a named chord simultaneously.
+        // chord(Cm7) — generates summed saw oscillators scaled by 1/N.
+        "chord" => {
+            let chord_name = match args.first() {
+                Some(Expr::VoiceRef(name)) => name.clone(),
+                _ => {
+                    return Err(anyhow!(
+                        "chord: argument must be a chord name like Cm7, Am, Fmaj7"
+                    ))
+                }
+            };
+            let notes = resolve_chord(&chord_name)
+                .ok_or_else(|| anyhow!("chord: unknown chord '{chord_name}'"))?;
+            let scale = 1.0 / notes.len() as f32;
+            let mut net = Net::wrap(Box::new(dc(0.0)));
+            net.set_sample_rate(sample_rate);
+            for freq in &notes {
+                let mut osc = Net::wrap(Box::new(saw_hz(*freq as f32)));
+                osc.set_sample_rate(sample_rate);
+                let mut gain = Net::wrap(Box::new(dc(scale)));
+                gain.set_sample_rate(sample_rate);
+                net = net + (osc * gain);
+            }
             Ok(net)
         }
 

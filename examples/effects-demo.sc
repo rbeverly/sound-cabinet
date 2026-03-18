@@ -1,21 +1,21 @@
-// effects-demo.sc — Showcase of new DSL features
-// Note names, LFO, distortion, vibrato, chorus, and arpeggiator
+// effects-demo.sc — Showcase of DSL features
+// Note names, effects (LFO, distortion, vibrato, chorus, delay, reverb), and arpeggiator
 
 bpm 100
 
-// --- Note names: A4, Bb3, C#5, Fs4 all resolve to Hz at parse time ---
+// --- Voices ---
 
-// Warm pad with vibrato
-voice warm_pad = (0.3 * saw(C4) + 0.3 * saw(E4) + 0.3 * saw(G4)) >> lowpass(1200, 0.7) >> vibrato(4.0, 15.0)
+// Warm pad using chord() shorthand — same as manually summing saw(C4) + saw(E4) + saw(G4)
+voice warm_pad = chord(Cmaj) >> lowpass(1200, 0.7) >> vibrato(4.0, 15.0) >> reverb(0.8, 0.4, 0.3)
 
-// Lead with LFO tremolo
-voice lead = 0.4 * triangle(G5) >> lfo(6.0, 0.4)
+// Lead with delay echoes — dotted-eighth feel at 100 bpm (0.45s ≈ dotted 8th)
+voice lead = 0.4 * triangle(G5) >> lfo(6.0, 0.4) >> delay(0.45, 0.4, 0.35)
 
 // Dirty bass with distortion
 voice dirty_bass = 0.5 * saw(C2) >> lowpass(400, 1.2) >> distort(4.0)
 
-// Shimmery texture with chorus
-voice shimmer = 0.2 * triangle(E5) >> chorus(0.015, 0.005, 0.3)
+// Shimmery texture with chorus and reverb
+voice shimmer = 0.2 * triangle(E5) >> chorus(0.015, 0.005, 0.3) >> reverb(0.9, 0.6, 0.4)
 
 // Arp voice: saw with filter and decay — arp substitutes the frequency
 voice pluck = 0.3 * saw(0) >> lowpass(2000, 0.8) >> decay(10)
@@ -33,9 +33,9 @@ pattern beat = 4 beats
   at 3 play hat for 0.25 beats
   at 3.5 play hat for 0.25 beats
 
-// Arpeggiator: pluck voice piped into arp, then through a lowpass
+// Arpeggiator with chord shorthand — Cm7 expands to C4, Eb4, G4, Bb4
 pattern arp_pattern = 4 beats
-  at 0 play pluck >> arp(C4, Eb4, G4, Bb4, 4) >> lowpass(1500, 0.6) for 4 beats
+  at 0 play pluck >> arp(Cm7, 4) >> lowpass(1500, 0.6) >> delay(0.3, 0.35, 0.3) for 4 beats
 
 pattern lead_phrase = 4 beats
   at 0 play lead >> swell(0.5, 1.0) for 3 beats
@@ -62,11 +62,18 @@ section main = 8 beats
   repeat arp_pattern every 4 beats
   play pad_bed
 
+section bridge = 8 beats
+  repeat beat every 4 beats
+  repeat arp_pattern every 4 beats
+  play shimmer_layer
+
 section outro = 8 beats
   repeat beat every 4 beats
   play shimmer_layer
 
 play intro
 play main
+play main
+play bridge
 play main
 play outro

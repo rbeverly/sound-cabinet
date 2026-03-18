@@ -431,6 +431,98 @@ fn note_name_to_hz(s: &str) -> Result<f64> {
     Ok(hz)
 }
 
+/// Resolve a chord name like "Cm7", "Fmaj7", "Am9" to a vector of frequencies in Hz.
+/// Returns None if the string isn't a valid chord name.
+///
+/// Format: Root[Accidental]Quality[Octave]
+///   Root: A-G
+///   Accidental: # s b (optional)
+///   Quality: maj, m, min, dim, aug, 7, dom7, m7, min7, maj7, dim7, aug7,
+///            9, dom9, m9, min9, maj9, sus2, sus4 (or empty = major triad)
+///   Octave: 0-9 (optional, defaults to 4)
+pub fn resolve_chord(name: &str) -> Option<Vec<f64>> {
+    let mut chars = name.chars().peekable();
+
+    // Parse root letter
+    let letter = chars.next()?;
+    let semitone_base: i32 = match letter {
+        'C' => 0,
+        'D' => 2,
+        'E' => 4,
+        'F' => 5,
+        'G' => 7,
+        'A' => 9,
+        'B' => 11,
+        _ => return None,
+    };
+
+    // Parse optional accidental
+    let rest: String = chars.collect();
+    let (accidental, rest) = if rest.starts_with('#') || rest.starts_with('s') {
+        (1i32, &rest[1..])
+    } else if rest.starts_with('b') {
+        (-1i32, &rest[1..])
+    } else {
+        (0i32, rest.as_str())
+    };
+
+    // If nothing left after root+accidental, it's a bare note letter, not a chord
+    if rest.is_empty() {
+        return None;
+    }
+
+    // Try to match quality suffix (longest first to avoid partial matches)
+    // Each entry: (suffix, intervals)
+    let qualities: &[(&str, &[i32])] = &[
+        ("maj9", &[0, 4, 7, 11, 14]),
+        ("min9", &[0, 3, 7, 10, 14]),
+        ("maj7", &[0, 4, 7, 11]),
+        ("min7", &[0, 3, 7, 10]),
+        ("dim7", &[0, 3, 6, 9]),
+        ("aug7", &[0, 4, 8, 10]),
+        ("dom9", &[0, 4, 7, 10, 14]),
+        ("dom7", &[0, 4, 7, 10]),
+        ("sus2", &[0, 2, 7]),
+        ("sus4", &[0, 5, 7]),
+        ("min", &[0, 3, 7]),
+        ("maj", &[0, 4, 7]),
+        ("dim", &[0, 3, 6]),
+        ("aug", &[0, 4, 8]),
+        ("m9", &[0, 3, 7, 10, 14]),
+        ("m7", &[0, 3, 7, 10]),
+        ("m", &[0, 3, 7]),
+        ("9", &[0, 4, 7, 10, 14]),
+        ("7", &[0, 4, 7, 10]),
+    ];
+
+    let (intervals, after_quality) = qualities
+        .iter()
+        .find_map(|(suffix, intervals)| {
+            rest.strip_prefix(suffix).map(|remaining| (*intervals, remaining))
+        })?;
+
+    // Parse optional octave digit, default to 4
+    let octave: i32 = if after_quality.is_empty() {
+        4
+    } else if after_quality.len() == 1 && after_quality.as_bytes()[0].is_ascii_digit() {
+        (after_quality.as_bytes()[0] - b'0') as i32
+    } else {
+        return None; // leftover unparsed chars
+    };
+
+    // Convert each interval to Hz
+    let root_midi = (octave + 1) * 12 + semitone_base + accidental;
+    let notes: Vec<f64> = intervals
+        .iter()
+        .map(|interval| {
+            let midi = root_midi + interval;
+            440.0 * 2.0_f64.powf((midi as f64 - 69.0) / 12.0)
+        })
+        .collect();
+
+    Some(notes)
+}
+
 fn parse_binary_expr(pair: Pair<Rule>) -> Result<Expr> {
     let rule = pair.as_rule();
     let mut inner = pair.into_inner();
@@ -693,5 +785,70 @@ repeat 3 {
             }
             _ => panic!("Expected RepeatBlock"),
         }
+    }
+
+    #[test]
+    fn test_resolve_chord_cm7() {
+        let notes = resolve_chord("Cm7").unwrap();
+        assert_eq!(notes.len(), 4);
+        let c4 = note_name_to_hz("C4").unwrap();
+        let eb4 = note_name_to_hz("Eb4").unwrap();
+        let g4 = note_name_to_hz("G4").unwrap();
+        let bb4 = note_name_to_hz("Bb4").unwrap();
+        assert!((notes[0] - c4).abs() < 0.01, "Root should be C4");
+        assert!((notes[1] - eb4).abs() < 0.01, "3rd should be Eb4");
+        assert!((notes[2] - g4).abs() < 0.01, "5th should be G4");
+        assert!((notes[3] - bb4).abs() < 0.01, "7th should be Bb4");
+    }
+
+    #[test]
+    fn test_resolve_chord_fmaj7() {
+        let notes = resolve_chord("Fmaj7").unwrap();
+        assert_eq!(notes.len(), 4);
+        let f4 = note_name_to_hz("F4").unwrap();
+        let a4 = note_name_to_hz("A4").unwrap();
+        assert!((notes[0] - f4).abs() < 0.01);
+        assert!((notes[1] - a4).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_resolve_chord_am() {
+        let notes = resolve_chord("Am").unwrap();
+        assert_eq!(notes.len(), 3); // minor triad
+        let a4 = note_name_to_hz("A4").unwrap();
+        assert!((notes[0] - a4).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_resolve_chord_gdom7() {
+        let notes = resolve_chord("Gdom7").unwrap();
+        assert_eq!(notes.len(), 4);
+        let g4 = note_name_to_hz("G4").unwrap();
+        let b4 = note_name_to_hz("B4").unwrap();
+        assert!((notes[0] - g4).abs() < 0.01);
+        assert!((notes[1] - b4).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_resolve_chord_bbm7() {
+        let notes = resolve_chord("Bbm7").unwrap();
+        assert_eq!(notes.len(), 4);
+        let bb4 = note_name_to_hz("Bb4").unwrap();
+        assert!((notes[0] - bb4).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_resolve_chord_with_octave() {
+        let notes3 = resolve_chord("Cm73").unwrap();
+        let notes4 = resolve_chord("Cm7").unwrap();
+        // Octave 3 should be one octave below octave 4
+        assert!((notes3[0] - notes4[0] / 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_resolve_chord_invalid() {
+        assert!(resolve_chord("foo").is_none());
+        assert!(resolve_chord("X7").is_none());
+        assert!(resolve_chord("C").is_none()); // bare letter, not a chord
     }
 }

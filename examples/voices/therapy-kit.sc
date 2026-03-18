@@ -14,7 +14,7 @@ voice gamma_soft = (0.22 * noise() >> highpass(3000, 0.8) >> lowpass(9000, 0.6))
 
 // Alpha-range (10 Hz) amplitude shimmer — two close frequencies beat at ~10 Hz
 // Chorus widens it into a shimmering cloud
-voice alpha_shimmer = 0.01 * (sine(200) + sine(210)) >> lowpass(400, 0.4) >> chorus(0.020, 0.008, 0.1)
+voice alpha_shimmer = 0.02 * (sine(200) + sine(210)) >> lowpass(400, 0.4) >> chorus(0.020, 0.008, 0.1)
 
 // Deep sub-bass drone at 38 Hz — bone-resonant range (30-50 Hz)
 // Light saturation adds presence on small speakers
@@ -25,10 +25,10 @@ voice bone_drone = (0.05 * sine(43.5) + 0.02 * sine(76)) >> distort(1.2)
 // Tuned slightly flat for that warped-tape feel
 // Chorus adds dreamy pitch drift
 
-voice chord_dm  = (0.12 * saw(146) + 0.12 * saw(174) + 0.10 * saw(220) + 0.08 * saw(262) + 0.06 * saw(330)) >> lowpass(700, 0.5) >> chorus(0.010, 0.003, 0.15)
-voice chord_bb  = (0.12 * saw(116) + 0.12 * saw(146) + 0.10 * saw(175) + 0.08 * saw(220)) >> lowpass(700, 0.5) >> chorus(0.010, 0.003, 0.15)
-voice chord_gm  = (0.12 * saw(196) + 0.12 * saw(233) + 0.10 * saw(294) + 0.08 * saw(349)) >> lowpass(700, 0.5) >> chorus(0.010, 0.003, 0.15)
-voice chord_a7  = (0.12 * saw(220) + 0.12 * saw(277) + 0.10 * saw(330) + 0.08 * saw(196)) >> lowpass(800, 0.6) >> chorus(0.010, 0.003, 0.15)
+voice chord_dm  = (0.12 * saw(146) + 0.12 * saw(174) + 0.10 * saw(220) + 0.08 * saw(262) + 0.06 * saw(330)) >> lowpass(700, 0.5) >> chorus(0.010, 0.003, 0.15) >> reverb(0.7, 0.5, 0.2)
+voice chord_bb  = (0.12 * saw(116) + 0.12 * saw(146) + 0.10 * saw(175) + 0.08 * saw(220)) >> lowpass(700, 0.5) >> chorus(0.010, 0.003, 0.15) >> reverb(0.7, 0.5, 0.2)
+voice chord_gm  = (0.12 * saw(196) + 0.12 * saw(233) + 0.10 * saw(294) + 0.08 * saw(349)) >> lowpass(700, 0.5) >> chorus(0.010, 0.003, 0.15) >> reverb(0.7, 0.5, 0.2)
+voice chord_a7  = (0.12 * saw(220) + 0.12 * saw(277) + 0.10 * saw(330) + 0.08 * saw(196)) >> lowpass(800, 0.6) >> chorus(0.010, 0.003, 0.15) >> reverb(0.7, 0.5, 0.2)
 
 // --- Sub bass (musically correct roots, several land in the 35-50 Hz therapeutic zone) ---
 // D1=36.7, Bb0=29.1, G1=49.0, A1=55.0
@@ -52,11 +52,11 @@ voice click   = 0.05 * noise() >> highpass(4000, 1.0) >> lowpass(10000, 0.5) >> 
 // --- Melody (pentatonic minor — D, F, G, A, C) ---
 // Detuned triangle + sine for warmth, decay for natural fade (like a kalimba/Rhodes)
 // Vibrato adds gentle pitch wobble — expressive, human quality
-voice mel_d5  = (0.08 * triangle(587) + 0.05 * sine(585))  >> lowpass(1800, 0.4) >> decay(3) >> vibrato(4.0, 10.0)
-voice mel_f5  = (0.08 * triangle(698) + 0.05 * sine(696))  >> lowpass(1800, 0.4) >> decay(3) >> vibrato(4.0, 10.0)
-voice mel_g5  = (0.08 * triangle(784) + 0.05 * sine(782))  >> lowpass(1800, 0.4) >> decay(3) >> vibrato(4.0, 10.0)
-voice mel_a4  = (0.08 * triangle(440) + 0.05 * sine(438))  >> lowpass(1800, 0.4) >> decay(3) >> vibrato(4.0, 10.0)
-voice mel_c5  = (0.08 * triangle(523) + 0.05 * sine(521))  >> lowpass(1800, 0.4) >> decay(3) >> vibrato(4.0, 10.0)
+voice mel_d5  = (0.08 * triangle(587) + 0.05 * sine(585))  >> lowpass(1800, 0.4) >> decay(3) >> vibrato(4.0, 10.0) >> delay(0.5, 0.25, 0.2)
+voice mel_f5  = (0.08 * triangle(698) + 0.05 * sine(696))  >> lowpass(1800, 0.4) >> decay(3) >> vibrato(4.0, 10.0) >> delay(0.5, 0.25, 0.2)
+voice mel_g5  = (0.08 * triangle(784) + 0.05 * sine(782))  >> lowpass(1800, 0.4) >> decay(3) >> vibrato(4.0, 10.0) >> delay(0.5, 0.25, 0.2)
+voice mel_a4  = (0.08 * triangle(440) + 0.05 * sine(438))  >> lowpass(1800, 0.4) >> decay(3) >> vibrato(4.0, 10.0) >> delay(0.5, 0.25, 0.2)
+voice mel_c5  = (0.08 * triangle(523) + 0.05 * sine(521))  >> lowpass(1800, 0.4) >> decay(3) >> vibrato(4.0, 10.0) >> delay(0.5, 0.25, 0.2)
 
 // Added notes for full D natural minor (E, Bb)
 voice mel_e5  = (0.08 * triangle(659) + 0.05 * sine(657))  >> lowpass(1800, 0.4) >> decay(3) >> vibrato(4.0, 10.0)
