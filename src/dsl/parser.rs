@@ -389,9 +389,46 @@ fn parse_expr(pair: Pair<Rule>) -> Result<Expr> {
         Rule::atom => parse_atom(pair),
         Rule::fn_call => parse_fn_call(pair),
         Rule::number => Ok(Expr::Number(pair.as_str().parse()?)),
+        Rule::note_name => Ok(Expr::Number(note_name_to_hz(pair.as_str())?)),
         Rule::ident => Ok(Expr::VoiceRef(pair.as_str().to_string())),
         _ => Err(anyhow!("Unexpected rule: {:?}", pair.as_rule())),
     }
+}
+
+/// Convert a note name like "A4", "Bb3", "C#5", "Fs4" to frequency in Hz.
+/// Uses standard tuning: A4 = 440 Hz.
+fn note_name_to_hz(s: &str) -> Result<f64> {
+    let mut chars = s.chars();
+
+    let letter = chars.next().ok_or_else(|| anyhow!("Empty note name"))?;
+    let semitone_base: i32 = match letter {
+        'C' => 0,
+        'D' => 2,
+        'E' => 4,
+        'F' => 5,
+        'G' => 7,
+        'A' => 9,
+        'B' => 11,
+        _ => return Err(anyhow!("Invalid note letter: {letter}")),
+    };
+
+    // Peek at next char: could be accidental or octave digit
+    let rest: String = chars.collect();
+    let (accidental, octave_str) = if rest.starts_with('#') || rest.starts_with('s') {
+        (1i32, &rest[1..])
+    } else if rest.starts_with('b') {
+        (-1i32, &rest[1..])
+    } else {
+        (0i32, rest.as_str())
+    };
+
+    let octave: i32 = octave_str
+        .parse()
+        .map_err(|_| anyhow!("Invalid octave in note: {s}"))?;
+
+    let midi = (octave + 1) * 12 + semitone_base + accidental;
+    let hz = 440.0 * 2.0_f64.powf((midi as f64 - 69.0) / 12.0);
+    Ok(hz)
 }
 
 fn parse_binary_expr(pair: Pair<Rule>) -> Result<Expr> {
@@ -590,6 +627,50 @@ repeat 4 {
             Command::PlaySequential { name } => assert_eq!(name, "intro"),
             _ => panic!("Expected PlaySequential"),
         }
+    }
+
+    #[test]
+    fn test_note_name_a4() {
+        let script = parse_script("voice x = sine(A4)\n").unwrap();
+        match &script.commands[0] {
+            Command::VoiceDef { expr, .. } => match expr {
+                Expr::FnCall { args, .. } => match &args[0] {
+                    Expr::Number(hz) => assert!((hz - 440.0).abs() < 0.01),
+                    other => panic!("Expected Number, got {other:?}"),
+                },
+                other => panic!("Expected FnCall, got {other:?}"),
+            },
+            other => panic!("Expected VoiceDef, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_note_name_c4() {
+        let hz = note_name_to_hz("C4").unwrap();
+        assert!((hz - 261.63).abs() < 0.01, "C4 should be ~261.63, got {hz}");
+    }
+
+    #[test]
+    fn test_note_name_bb3() {
+        let hz = note_name_to_hz("Bb3").unwrap();
+        assert!(
+            (hz - 233.08).abs() < 0.01,
+            "Bb3 should be ~233.08, got {hz}"
+        );
+    }
+
+    #[test]
+    fn test_note_name_fsharp4() {
+        let hz_sharp = note_name_to_hz("F#4").unwrap();
+        let hz_s = note_name_to_hz("Fs4").unwrap();
+        assert!(
+            (hz_sharp - 369.99).abs() < 0.01,
+            "F#4 should be ~369.99, got {hz_sharp}"
+        );
+        assert!(
+            (hz_sharp - hz_s).abs() < 0.001,
+            "F#4 and Fs4 should be equal"
+        );
     }
 
     #[test]

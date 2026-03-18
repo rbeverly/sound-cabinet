@@ -52,10 +52,13 @@ mul_expr  = { atom ~ ("*" ~ atom)* }
 
 atom = {
     fn_call
+  | note_name
   | number
   | ident
   | "(" ~ expr ~ ")"
 }
+
+note_name = @{ ('A'..'G') ~ ("#" | "b" | "s")? ~ ('0'..'9') }
 
 fn_call  = { ident ~ "(" ~ arg_list? ~ ")" }
 arg_list = { expr ~ ("," ~ expr)* }

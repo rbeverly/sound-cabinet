@@ -130,6 +130,69 @@ fn build_fn_call(
             Ok(net)
         }
 
+        // LFO / tremolo: amplitude modulation at a given rate and depth.
+        // depth is 0..1 — at depth=1 the signal swings from silence to full.
+        "lfo" => {
+            let rate = expect_number(args, 0, name)?;
+            let depth = expect_number(args, 1, name)?;
+            let env = Net::wrap(Box::new(envelope(move |t: f64| {
+                1.0 - depth + depth * (t * rate * std::f64::consts::TAU).sin()
+            })));
+            let pass_through = Net::wrap(Box::new(pass()));
+            let mut net = pass_through * env;
+            net.set_sample_rate(sample_rate);
+            Ok(net)
+        }
+
+        // Distortion: tanh soft-clipping, normalized to preserve peak level.
+        // amount ~1 = subtle warmth, ~5 = heavy saturation.
+        "distort" => {
+            let amount = expect_number(args, 0, name)? as f32;
+            let norm = amount.tanh();
+            let mut net = Net::wrap(Box::new(shape_fn(move |x: f32| {
+                (x * amount).tanh() / norm
+            })));
+            net.set_sample_rate(sample_rate);
+            Ok(net)
+        }
+
+        // Vibrato: pitch modulation via a modulated delay line.
+        // rate = LFO frequency in Hz, depth_cents = pitch excursion in cents.
+        "vibrato" => {
+            let rate = expect_number(args, 0, name)? as f32;
+            let depth_cents = expect_number(args, 1, name)? as f32;
+            // Convert cents to delay modulation depth.
+            // For small pitch deviations, Δt ≈ cents / (1200 * freq).
+            // We use a fixed average delay with modulation around it.
+            let max_delay: f32 = 0.03; // 30 ms buffer
+            let avg_delay: f32 = max_delay / 2.0;
+            // cents → fractional pitch ratio → delay excursion
+            let depth: f32 = avg_delay * (2.0_f32.powf(depth_cents / 1200.0) - 1.0);
+            // Build: input signal + LFO-modulated delay time → tap
+            let lfo_signal = Net::wrap(Box::new(
+                dc(avg_delay) + sine_hz(rate) * dc(depth),
+            ));
+            let input = Net::wrap(Box::new(pass()));
+            let tap_node = Net::wrap(Box::new(tap(
+                (avg_delay - depth).max(0.001),
+                avg_delay + depth + 0.001,
+            )));
+            let mut net = (input | lfo_signal) >> tap_node;
+            net.set_sample_rate(sample_rate);
+            Ok(net)
+        }
+
+        // Chorus: fundsp's built-in mono chorus effect.
+        // separation = base delay, variation = modulation depth, mod_freq = LFO rate.
+        "chorus" => {
+            let separation = expect_number(args, 0, name)? as f32;
+            let variation = expect_number(args, 1, name)? as f32;
+            let mod_freq = expect_number(args, 2, name)? as f32;
+            let mut net = Net::wrap(Box::new(chorus(0, separation, variation, mod_freq)));
+            net.set_sample_rate(sample_rate);
+            Ok(net)
+        }
+
         _ => Err(anyhow!("Unknown DSP function: {name}")),
     }
 }
