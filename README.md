@@ -83,7 +83,7 @@ Sets beats per minute. Defaults to 120 if omitted.
 #### Define a voice
 
 ```
-voice pad = (saw(40) + 0.5 * sine(80)) >> lowpass(2000, 0.7)
+voice pad = (saw(C3) + 0.5 * sine(C4)) >> lowpass(2000, 0.7)
 ```
 
 Names a reusable signal graph. Voices are templates — they don't produce sound until played.
@@ -92,10 +92,23 @@ Names a reusable signal graph. Voices are templates — they don't produce sound
 
 ```
 at 0 play pad for 4 beats
-at 2 play sine(440) for 1 beat
+at 2 play sine(A4) for 1 beat
 ```
 
 `at <beat>` is when to start (beat 0 = beginning). `for <N> beats` is the duration. Multiple events can overlap — they're mixed together.
+
+### Note Names
+
+Use standard note names instead of raw frequencies. Notes are written as a letter (`A`-`G`), an optional accidental (`#`, `s` for sharp, `b` for flat), and an octave number (`0`-`9`):
+
+```
+sine(A4)         // 440 Hz
+saw(C4)          // middle C, 261.63 Hz
+triangle(Eb3)    // E-flat 3
+square(Fs4)      // F-sharp 4 (use 's' instead of '#' if you prefer)
+```
+
+Note names work anywhere a frequency is expected — oscillator arguments, arp notes, or any numeric expression.
 
 ### Composability
 
@@ -164,53 +177,20 @@ repeat 8 {
 - `shuffle [a, b, c]` — play all in random order each iteration
 - `play X` — play one specific pattern/section
 
-### Full composition example
-
-```
-import voices/lofi-kit.sc
-
-bpm 75
-
-pattern drums = 4 beats
-  at 0 play kick for 0.5 beats
-  at 1 play snare for 0.25 beats
-  at 2 play kick for 0.5 beats
-  at 3 play snare for 0.25 beats
-
-pattern chords = 16 beats
-  at 0  play chord1 for 4 beats
-  at 4  play chord2 for 4 beats
-  at 8  play chord3 for 4 beats
-  at 12 play chord4 for 4 beats
-
-section intro = 16 beats
-  play chords
-
-section groove = 16 beats
-  play chords
-  repeat drums every 4 beats
-
-play intro
-repeat 4 {
-  play groove
-}
-play intro
-```
-
 ## Building Expressions
 
-Expressions describe signal graphs using operators and built-in functions.
+Expressions describe signal graphs using operators and built-in functions. Think of each step as a box — signal flows left to right through the chain.
 
 ### Oscillators
 
-Generate a waveform at a given frequency (Hz):
+Generate a waveform at a given frequency:
 
 | Function | Sound |
 |---|---|
-| `sine(440)` | Pure sine wave — clean, simple |
-| `saw(100)` | Sawtooth — bright, buzzy |
-| `triangle(200)` | Triangle — softer than saw |
-| `square(60)` | Square — hollow, woody |
+| `sine(A4)` | Pure sine wave — clean, simple |
+| `saw(C3)` | Sawtooth — bright, buzzy |
+| `triangle(E4)` | Triangle — softer than saw |
+| `square(G2)` | Square — hollow, woody |
 | `noise()` | White noise (no frequency argument) |
 
 ### Filters
@@ -229,6 +209,7 @@ Shape amplitude over time:
 | Function | Effect |
 |---|---|
 | `decay(rate)` | Exponential decay: amplitude drops as `e^(-rate * t)`. Higher rate = faster decay. |
+| `swell(attack, release)` | Fade in over `attack` seconds, fade out over `release` seconds at the end of the event. |
 
 Decay values for common sounds:
 
@@ -240,21 +221,46 @@ Decay values for common sounds:
 | `decay(25)` | Hi-hat "tss" | ~0.12s |
 | `decay(40)` | Sharp click | ~0.07s |
 
-Example — a hi-hat with a sharp percussive attack:
+### Effects
+
+Effects process a signal in the pipe chain — place them after the source and any filters:
+
+| Function | Effect | Example |
+|---|---|---|
+| `lfo(rate, depth)` | Tremolo — amplitude modulation. `rate` in Hz, `depth` 0.0-1.0. | `saw(C3) >> lfo(6.0, 0.4)` |
+| `distort(amount)` | Soft clipping (tanh saturation). 1.0 = subtle warmth, 4.0+ = heavy drive. | `saw(C2) >> lowpass(400, 1.2) >> distort(4.0)` |
+| `vibrato(rate, depth)` | Pitch wobble via modulated delay. `rate` in Hz, `depth` in samples. | `saw(E4) >> vibrato(4.0, 15.0)` |
+| `chorus(sep, var, freq)` | Detuned copies for width. `sep`/`var` in seconds, `freq` in Hz. | `triangle(E5) >> chorus(0.015, 0.005, 0.3)` |
+
+Effects are just pipe stages — you can stack them freely:
 
 ```
-voice hat = 0.12 * noise() >> highpass(6000, 1.0) >> decay(25)
+voice lead = saw(G5) >> lowpass(1200, 0.7) >> vibrato(4.0, 15.0) >> chorus(0.012, 0.004, 0.2)
 ```
+
+### Arpeggiator
+
+The arpeggiator splits a voice into a sequence of notes over time. It lives in the pipe chain, so downstream effects apply to all notes:
+
+```
+voice pluck = 0.3 * saw(0) >> lowpass(2000, 0.8) >> decay(10)
+
+at 0 play pluck >> arp(C4, Eb4, G4, Bb4, 4) >> lowpass(1500, 0.6) for 4 beats
+```
+
+`arp(note1, note2, ..., speed)` — the last argument is notes per beat. The voice to the left is the template: its oscillator frequencies are replaced by each arp note in turn. Effects to the right of the arp (like `lowpass` above) are applied to every note.
+
+If the voice template has a frequency of `0`, that's fine — the arp substitutes it. If the voice already has a real frequency, the arp overrides it.
 
 ### Operators
 
 | Operator | Meaning | Example |
 |---|---|---|
-| `>>` | Chain — output of left feeds into right | `saw(100) >> lowpass(800, 0.7)` |
-| `+` | Mix — add signals together | `sine(440) + sine(880)` |
-| `*` | Scale — multiply by a number | `0.5 * sine(440)` (half volume) |
+| `>>` | Chain — output of left feeds into right | `saw(C3) >> lowpass(800, 0.7)` |
+| `+` | Mix — add signals together | `sine(A4) + sine(A5)` |
+| `*` | Scale — multiply by a number | `0.5 * sine(A4)` (half volume) |
 
-Parentheses group sub-expressions: `(saw(40) + sine(80)) >> lowpass(1000, 1.0)`
+Parentheses group sub-expressions: `(saw(C3) + sine(C4)) >> lowpass(1000, 1.0)`
 
 Operator precedence (highest to lowest): `*`, `+`, `>>`.
 
@@ -268,22 +274,27 @@ Reads lines from stdin. Each line is parsed and played immediately — `at 0` me
 
 ```bash
 echo "bpm 120
-at 0 play sine(440) for 2 beats" | sound-cabinet stream
+at 0 play sine(A4) for 2 beats" | sound-cabinet stream
 ```
 
 This is the foundation for generative music — pipe output from an LLM or any program that generates `.sc` lines.
 
-## Frequency Reference
+## Examples
 
-| Note | Hz | Note | Hz | Note | Hz |
-|---|---|---|---|---|---|
-| C3 | 131 | C4 | 262 | C5 | 523 |
-| D3 | 147 | D4 | 294 | D5 | 587 |
-| Eb3 | 156 | Eb4 | 311 | Eb5 | 622 |
-| E3 | 165 | E4 | 330 | E5 | 659 |
-| F3 | 175 | F4 | 349 | F5 | 698 |
-| G3 | 196 | G4 | 392 | G5 | 784 |
-| Ab3 | 208 | Ab4 | 415 | Ab5 | 831 |
-| A3 | 220 | A4 | 440 | A5 | 880 |
-| Bb3 | 233 | Bb4 | 466 | Bb5 | 932 |
-| B3 | 247 | B4 | 494 | B5 | 988 |
+The `examples/` directory includes several complete compositions:
+
+| File | Description |
+|---|---|
+| `demo.sc` | Basic features walkthrough |
+| `effects-demo.sc` | Showcases effects, arp, and note names |
+| `lofi-afternoon.sc` | Lofi hip-hop track with chorus, distortion, and vibrato |
+| `therapy-lofi.sc` | Extended ambient/lofi piece (~4 min) |
+
+Voice kits in `examples/voices/` define reusable instrument sets that compositions import.
+
+Render any example:
+
+```bash
+sound-cabinet render examples/effects-demo.sc -o effects-demo.wav
+sound-cabinet render examples/lofi-afternoon.sc -o lofi-afternoon.wav
+```
