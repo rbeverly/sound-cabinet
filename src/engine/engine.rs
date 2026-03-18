@@ -4,7 +4,7 @@ use anyhow::Result;
 use fundsp::hacker::*;
 
 use crate::dsl::ast::{Command, Expr};
-use crate::engine::graph::{build_graph, extract_swell, strip_swell};
+use crate::engine::graph::{build_graph, extract_arp, extract_swell, strip_swell, substitute_freq};
 
 /// A scheduled playback event with absolute sample positions.
 struct ScheduledEvent {
@@ -211,24 +211,23 @@ impl Engine {
         self.current_sample
     }
 
-    /// Check if the expression is an arpeggiator call (possibly piped to swell).
+    /// Check if the expression contains an `arp(...)` call anywhere in a pipe chain.
     /// If so, decompose it into sub-events and schedule them. Returns Ok(Some(())) if handled.
+    ///
+    /// Supports the pipe syntax: `voice >> arp(C4, E4, G4, 4) >> lowpass(800, 0.7)`
+    /// - Everything before arp is the voice template (frequency gets substituted per note)
+    /// - Everything after arp is the post-processing chain (applied to each note)
+    /// - If no voice before arp, defaults to `triangle(freq) >> decay(8)`
     fn try_handle_arp(
         &mut self,
         expr: &Expr,
         base_start: u64,
         duration_beats: f64,
     ) -> Result<Option<()>> {
-        // Match: arp(...) or arp(...) >> swell(...)
-        let (arp_args, swell) = match expr {
-            Expr::FnCall { name, args } if name == "arp" => (args, None),
-            Expr::Pipe(a, _) => match a.as_ref() {
-                Expr::FnCall { name, args } if name == "arp" => {
-                    (args, extract_swell(expr))
-                }
-                _ => return Ok(None),
-            },
-            _ => return Ok(None),
+        // Find arp(...) in the pipe chain and split into pre/post
+        let (pre_chain, arp_args, post_chain) = match extract_arp(expr) {
+            Some(parts) => parts,
+            None => return Ok(None),
         };
 
         if arp_args.len() < 2 {
@@ -254,6 +253,19 @@ impl Engine {
             })
             .collect::<Result<_>>()?;
 
+        // Extract swell from the post-chain if present
+        let swell = post_chain.as_ref().and_then(|pc| extract_swell(pc));
+        let clean_post = post_chain.map(|pc| strip_swell(&pc));
+        // Drop the post-chain if it was only swell (strip_swell returns the inner expr)
+        let clean_post = clean_post.and_then(|pc| {
+            // If stripping swell left us with a pass-through equivalent, discard it
+            if matches!(&pc, Expr::FnCall { name, .. } if name == "swell") {
+                None
+            } else {
+                Some(pc)
+            }
+        });
+
         let step_beats = 1.0 / rate;
         let step_samples = self.beats_to_samples(step_beats);
         let total_steps = (duration_beats * rate).round() as usize;
@@ -264,23 +276,35 @@ impl Engine {
             let end = start + step_samples;
             let dur_secs = step_beats * 60.0 / self.bpm;
 
-            // Each arp note: triangle oscillator with decay
-            let note_expr = Expr::Pipe(
-                Box::new(Expr::FnCall {
-                    name: "triangle".to_string(),
-                    args: vec![Expr::Number(freq)],
-                }),
-                Box::new(Expr::FnCall {
-                    name: "decay".to_string(),
-                    args: vec![Expr::Number(8.0)],
-                }),
-            );
-            let net = build_graph(&note_expr, &self.voices, self.sample_rate, Some(dur_secs))?;
+            // Build the note expression: substitute freq into voice template,
+            // or use default triangle+decay if no voice was provided
+            let note_expr = if let Some(ref voice_template) = pre_chain {
+                substitute_freq(voice_template, &self.voices, freq)
+            } else {
+                // Default voice: triangle oscillator with decay
+                Expr::Pipe(
+                    Box::new(Expr::FnCall {
+                        name: "triangle".to_string(),
+                        args: vec![Expr::Number(freq)],
+                    }),
+                    Box::new(Expr::FnCall {
+                        name: "decay".to_string(),
+                        args: vec![Expr::Number(8.0)],
+                    }),
+                )
+            };
 
-            // Apply overall swell envelope to each sub-event's amplitude
-            // by scaling the swell timing relative to the overall duration
-            let sub_swell = swell.map(|(attack, release)| {
-                // Calculate this sub-event's position within the whole arp
+            // Pipe through the post-processing chain if present
+            let full_expr = if let Some(ref post) = clean_post {
+                Expr::Pipe(Box::new(note_expr), Box::new(post.clone()))
+            } else {
+                note_expr
+            };
+
+            let net = build_graph(&full_expr, &self.voices, self.sample_rate, Some(dur_secs))?;
+
+            // Compute per-step swell envelope value and bake it as a gain multiplier
+            let sub_swell_gain = swell.map(|(attack, release)| {
                 let t_start = (i as f64) * step_beats * 60.0 / self.bpm;
                 let total_dur = duration_beats * 60.0 / self.bpm;
                 let fade_in = (t_start / attack).min(1.0);
@@ -291,12 +315,7 @@ impl Engine {
                 } else {
                     (1.0 - (t_end - fade_start) / release).max(0.0)
                 };
-                let envelope_val = fade_in.min(fade_out);
-                // Bake the swell into the sub-event as a short constant swell
-                // that starts and ends at the calculated envelope value
-                // We achieve this by not using swell at all, and instead
-                // scaling later — but for simplicity we store None and handle below
-                envelope_val
+                fade_in.min(fade_out)
             });
 
             self.schedule.push(ScheduledEvent {
@@ -307,18 +326,27 @@ impl Engine {
                 swell: None,
             });
 
-            // If we have a swell envelope, scale the event's contribution
-            // by pre-multiplying with the envelope value.
-            // We do this by wrapping the net in a gain node.
-            if let Some(env_val) = sub_swell {
-                if let Some(event) = self.schedule.last_mut() {
-                    let gain_net =
-                        build_graph(&Expr::Number(env_val), &self.voices, self.sample_rate, None)?;
-                    let original = std::mem::replace(
-                        &mut event.net,
-                        build_graph(&Expr::Number(0.0), &self.voices, self.sample_rate, None)?,
-                    );
-                    event.net = original * gain_net;
+            // Apply the pre-computed swell gain to this sub-event
+            if let Some(env_val) = sub_swell_gain {
+                if env_val < 1.0 {
+                    if let Some(event) = self.schedule.last_mut() {
+                        let gain_net = build_graph(
+                            &Expr::Number(env_val),
+                            &self.voices,
+                            self.sample_rate,
+                            None,
+                        )?;
+                        let original = std::mem::replace(
+                            &mut event.net,
+                            build_graph(
+                                &Expr::Number(0.0),
+                                &self.voices,
+                                self.sample_rate,
+                                None,
+                            )?,
+                        );
+                        event.net = original * gain_net;
+                    }
                 }
             }
         }

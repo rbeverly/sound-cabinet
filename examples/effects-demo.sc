@@ -17,6 +17,9 @@ voice dirty_bass = 0.5 * saw(C2) >> lowpass(400, 1.2) >> distort(4.0)
 // Shimmery texture with chorus
 voice shimmer = 0.2 * triangle(E5) >> chorus(0.015, 0.005, 0.3)
 
+// Arp voice: saw with filter and decay — arp substitutes the frequency
+voice pluck = 0.3 * saw(0) >> lowpass(2000, 0.8) >> decay(10)
+
 // Simple kick and hat
 voice kick = (0.7 * sine(A1) + 0.5 * sine(B0)) >> decay(12)
 voice hat = 0.1 * noise() >> highpass(6000, 1.0) >> decay(25)
@@ -30,9 +33,9 @@ pattern beat = 4 beats
   at 3 play hat for 0.25 beats
   at 3.5 play hat for 0.25 beats
 
-// Arpeggiator: cycles through C minor triad at 16th notes
+// Arpeggiator: pluck voice piped into arp, then through a lowpass
 pattern arp_pattern = 4 beats
-  at 0 play arp(C4, Eb4, G4, Bb4, 4) for 4 beats
+  at 0 play pluck >> arp(C4, Eb4, G4, Bb4, 4) >> lowpass(1500, 0.6) for 4 beats
 
 pattern lead_phrase = 4 beats
   at 0 play lead >> swell(0.5, 1.0) for 3 beats

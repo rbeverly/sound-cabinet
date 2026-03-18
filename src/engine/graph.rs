@@ -235,6 +235,103 @@ pub fn strip_swell(expr: &Expr) -> Expr {
     }
 }
 
+/// Flatten a left-associative pipe chain into a vec of segments.
+/// `a >> b >> c` (parsed as `Pipe(Pipe(a, b), c)`) becomes `[a, b, c]`.
+fn flatten_pipe_chain(expr: &Expr) -> Vec<Expr> {
+    match expr {
+        Expr::Pipe(a, b) => {
+            let mut v = flatten_pipe_chain(a);
+            v.extend(flatten_pipe_chain(b));
+            v
+        }
+        other => vec![other.clone()],
+    }
+}
+
+/// Rebuild a pipe chain from segments: `[a, b, c]` becomes `a >> b >> c`.
+fn build_pipe_chain(segments: &[Expr]) -> Option<Expr> {
+    if segments.is_empty() {
+        None
+    } else {
+        let mut result = segments[0].clone();
+        for seg in &segments[1..] {
+            result = Expr::Pipe(Box::new(result), Box::new(seg.clone()));
+        }
+        Some(result)
+    }
+}
+
+/// Find an `arp(...)` call anywhere in a pipe chain and split the chain into
+/// (pre_chain, arp_args, post_chain). Returns None if no arp is present.
+///
+/// For `pluck >> arp(C4, E4, G4, 4) >> lowpass(800, 0.7)`:
+///   pre  = Some(VoiceRef("pluck"))
+///   args = [Number(261.63), Number(329.63), Number(392.0), Number(4.0)]
+///   post = Some(FnCall("lowpass", [2000, 0.7]))
+pub fn extract_arp(expr: &Expr) -> Option<(Option<Expr>, Vec<Expr>, Option<Expr>)> {
+    let segments = flatten_pipe_chain(expr);
+    let arp_idx = segments.iter().position(
+        |s| matches!(s, Expr::FnCall { name, .. } if name == "arp"),
+    )?;
+
+    let arp_args = match &segments[arp_idx] {
+        Expr::FnCall { args, .. } => args.clone(),
+        _ => unreachable!(),
+    };
+
+    let pre = if arp_idx > 0 {
+        build_pipe_chain(&segments[..arp_idx])
+    } else {
+        None
+    };
+
+    let post = if arp_idx + 1 < segments.len() {
+        build_pipe_chain(&segments[arp_idx + 1..])
+    } else {
+        None
+    };
+
+    Some((pre, arp_args, post))
+}
+
+const OSCILLATOR_NAMES: &[&str] = &["sine", "saw", "triangle", "square"];
+
+/// Walk an expression tree and replace every oscillator's frequency argument
+/// with the given frequency. Resolves VoiceRefs by inlining the voice expression.
+/// This lets `pluck >> arp(C4, E4, G4, 4)` substitute C4/E4/G4 into pluck's oscillators.
+pub fn substitute_freq(expr: &Expr, voices: &HashMap<String, Expr>, freq: f64) -> Expr {
+    match expr {
+        Expr::FnCall { name, args } if OSCILLATOR_NAMES.contains(&name.as_str()) && !args.is_empty() => {
+            let mut new_args = args.clone();
+            new_args[0] = Expr::Number(freq);
+            Expr::FnCall {
+                name: name.clone(),
+                args: new_args,
+            }
+        }
+        Expr::VoiceRef(name) => {
+            if let Some(voice_expr) = voices.get(name) {
+                substitute_freq(voice_expr, voices, freq)
+            } else {
+                expr.clone()
+            }
+        }
+        Expr::Pipe(a, b) => Expr::Pipe(
+            Box::new(substitute_freq(a, voices, freq)),
+            Box::new(substitute_freq(b, voices, freq)),
+        ),
+        Expr::Sum(a, b) => Expr::Sum(
+            Box::new(substitute_freq(a, voices, freq)),
+            Box::new(substitute_freq(b, voices, freq)),
+        ),
+        Expr::Mul(a, b) => Expr::Mul(
+            Box::new(substitute_freq(a, voices, freq)),
+            Box::new(substitute_freq(b, voices, freq)),
+        ),
+        other => other.clone(),
+    }
+}
+
 /// Extract a numeric literal from an argument list.
 fn expect_number(args: &[Expr], index: usize, fn_name: &str) -> Result<f64> {
     match args.get(index) {
