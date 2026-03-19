@@ -147,11 +147,32 @@ fn build_fn_call(
             }
         }
         "highpass" => {
-            let freq = expect_number(&args, 0, name)? as f32;
             let q = expect_number(&args, 1, name)? as f32;
-            let mut net = Net::wrap(Box::new(highpass_hz(freq, q)));
-            net.set_sample_rate(sample_rate);
-            Ok(net)
+
+            if let Some(Expr::Range(start, end)) = args.first() {
+                // Dynamic highpass: signal - lowpass(signal) = highpass(signal)
+                // Split signal, lowpass one copy with sweep, subtract
+                let start = *start;
+                let end = *end;
+                let dur = duration_secs.unwrap_or(4.0);
+                let sweep = Net::wrap(Box::new(envelope(move |t: f64| {
+                    let frac = (t / dur).min(1.0);
+                    start + (end - start) * frac
+                })));
+                let input = Net::wrap(Box::new(pass()));
+                let lp_filter = Net::wrap(Box::new(lowpass_q(q)));
+                let lp_path = (input | sweep) >> lp_filter;
+                // original - lowpass = highpass
+                let original = Net::wrap(Box::new(pass()));
+                let mut net = original - lp_path;
+                net.set_sample_rate(sample_rate);
+                Ok(net)
+            } else {
+                let freq = expect_number(&args, 0, name)? as f32;
+                let mut net = Net::wrap(Box::new(highpass_hz(freq, q)));
+                net.set_sample_rate(sample_rate);
+                Ok(net)
+            }
         }
 
         // Envelope: 1 input, 1 output — multiplies signal by exp(-rate * t)
