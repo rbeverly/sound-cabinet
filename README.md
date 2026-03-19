@@ -74,6 +74,9 @@ sound-cabinet render examples/demo.sc -o output.wav
 # Play a score through your speakers
 sound-cabinet play examples/demo.sc
 
+# Watch mode — live reload on file save
+sound-cabinet watch examples/demo.sc
+
 # Stream mode — type lines or pipe them in, hear them immediately
 sound-cabinet stream
 ```
@@ -564,10 +567,3 @@ Render to `.mid` instead of `.wav` so compositions can be brought into a DAW wit
 
 Compile Sound Cabinet instruments and effect chains into native DAW plugins (VST3 for cross-platform, Audio Unit for Logic/GarageBand). The Rust `nih-plug` framework provides the plugin host wrapper — the core work is packaging a fundsp signal graph as a plugin that accepts MIDI input and produces audio. This would let instruments built in Sound Cabinet run natively inside Logic, Ableton, GarageBand, etc.
 
-### Watch mode
-
-Live reload on file save for fast iteration:
-
-```bash
-sound-cabinet watch examples/demo.sc
-```
