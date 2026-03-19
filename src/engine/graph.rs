@@ -113,6 +113,34 @@ fn build_fn_call(
             net.set_sample_rate(sample_rate);
             Ok(net)
         }
+        "pulse" => {
+            let freq = expect_number(&args, 0, name)? as f32;
+            let freq_dc = Net::wrap(Box::new(dc(freq)));
+
+            // Width can be static or a sweep (pulse width modulation)
+            let width_signal = if let Some(Expr::Range(start, end)) = args.get(1) {
+                let start = *start;
+                let end = *end;
+                let dur = duration_secs.unwrap_or(4.0);
+                Net::wrap(Box::new(envelope(move |t: f64| {
+                    let frac = (t / dur).min(1.0);
+                    start + (end - start) * frac
+                })))
+            } else {
+                let width = if args.len() > 1 {
+                    expect_number(&args, 1, name)? as f32
+                } else {
+                    0.5 // default 50% = square wave
+                };
+                Net::wrap(Box::new(dc(width)))
+            };
+
+            // pulse() takes 2 inputs: frequency, duty cycle
+            let osc = Net::wrap(Box::new(pulse()));
+            let mut net = (freq_dc | width_signal) >> osc;
+            net.set_sample_rate(sample_rate);
+            Ok(net)
+        }
         "noise" => {
             let mut net = Net::wrap(Box::new(white()));
             net.set_sample_rate(sample_rate);
@@ -433,7 +461,7 @@ pub fn extract_arp(expr: &Expr) -> Option<(Option<Expr>, Vec<Expr>, Option<Expr>
     Some((pre, arp_args, post))
 }
 
-const OSCILLATOR_NAMES: &[&str] = &["sine", "saw", "triangle", "square"];
+const OSCILLATOR_NAMES: &[&str] = &["sine", "saw", "triangle", "square", "pulse"];
 
 /// Walk an expression tree and replace every oscillator's frequency argument
 /// with the given frequency. Resolves VoiceRefs by inlining the voice expression.

@@ -27,6 +27,12 @@ voice dirty_bass = 0.5 * saw(C2) >> lowpass(400, 1.2) >> distort(4.0)
 // Filter sweep: lowpass opens from 200 to 4000 Hz over the event duration
 voice sweep_pad = (0.4 * saw(C3) + 0.3 * saw(G3)) >> lowpass(200 -> 4000, 0.7)
 
+// Pulse wave — nasal, reedy character. 10% width = thin, 50% = square
+voice pulse_bass = 0.4 * pulse(C2, 0.15) >> lowpass(600, 0.8)
+
+// PWM sweep — pulse width modulates from thin to fat over the event duration
+voice pwm_pad = 0.3 * pulse(C3, 0.1 -> 0.9) >> lowpass(1500, 0.6) >> chorus(0.014, 0.005, 0.2)
+
 // Shimmery texture with chorus and reverb
 voice shimmer = 0.2 * triangle(E5) >> wide
 
@@ -73,6 +79,15 @@ pattern shimmer_layer = 8 beats
 pattern sweep_riser = 8 beats
   at 0 play sweep_pad >> swell(1.0, 1.0) for 8 beats
 
+// Pulse bass pattern
+pattern pulse_line = 4 beats
+  at 0 play pulse_bass for 2 beats
+  at 2.5 play pulse_bass for 1 beat
+
+// PWM sweep — the signature 80s synth pad
+pattern pwm_layer = 8 beats
+  at 0 play pwm_pad >> swell(1.5, 2.0) for 8 beats
+
 // --- Arrangement ---
 
 section intro = 8 beats
@@ -90,6 +105,12 @@ section bridge = 8 beats
   repeat keys_phrase every 4 beats
   play sweep_riser
 
+section pulse_section = 8 beats
+  repeat beat every 4 beats
+  repeat pulse_line every 4 beats
+  repeat arp_pattern every 4 beats
+  play pwm_layer
+
 section outro = 8 beats
   repeat beat every 4 beats
   play shimmer_layer
@@ -98,5 +119,7 @@ play intro
 play main
 play main
 play bridge
+play pulse_section
+play pulse_section
 play main
 play outro
