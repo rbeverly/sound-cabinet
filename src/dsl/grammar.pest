@@ -2,11 +2,14 @@ WHITESPACE = _{ " " | "\t" }
 COMMENT    = _{ "//" ~ (!NEWLINE ~ ANY)* }
 
 script = { SOI ~ (line ~ NEWLINE)* ~ line? ~ EOI }
-line   = { voice_def | bpm_stmt | at_stmt | import_stmt | play_stmt | empty_line }
+line   = { voice_def | fx_def | bpm_stmt | at_stmt | import_stmt | play_stmt | empty_line }
 empty_line = { "" }
 
 // Voice definitions: voice name = expr
 voice_def = { "voice" ~ ident ~ "=" ~ expr }
+
+// Effect chain definitions: fx name = effects...
+fx_def = { "fx" ~ ident ~ "=" ~ expr }
 
 // BPM: bpm 120
 bpm_stmt = { "bpm" ~ number }

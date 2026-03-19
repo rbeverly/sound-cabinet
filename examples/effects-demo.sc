@@ -1,21 +1,27 @@
 // effects-demo.sc — Showcase of DSL features
-// Note names, effects (LFO, distortion, vibrato, chorus, delay, reverb), and arpeggiator
+// Note names, effects, fx chains, chords, and arpeggiator
 
 bpm 100
 
-// --- Voices ---
+// --- Effect chains (reusable pipelines) ---
 
-// Warm pad using chord() shorthand — same as manually summing saw(C4) + saw(E4) + saw(G4)
-voice warm_pad = chord(Cmaj) >> lowpass(1200, 0.7) >> vibrato(4.0, 15.0) >> reverb(0.8, 0.4, 0.3)
+fx hall = reverb(0.8, 0.4, 0.3)
+fx echo = delay(0.45, 0.4, 0.35)
+fx wide = chorus(0.015, 0.005, 0.3) >> reverb(0.9, 0.6, 0.4)
 
-// Lead with delay echoes — dotted-eighth feel at 100 bpm (0.45s ≈ dotted 8th)
-voice lead = 0.4 * triangle(G5) >> lfo(6.0, 0.4) >> delay(0.45, 0.4, 0.35)
+// --- Voices (using fx chains) ---
+
+// Warm pad with vibrato and hall reverb
+voice warm_pad = chord(Cmaj) >> lowpass(1200, 0.7) >> vibrato(4.0, 15.0) >> hall
+
+// Lead with dotted-eighth delay echoes
+voice lead = 0.4 * triangle(G5) >> lfo(6.0, 0.4) >> echo
 
 // Dirty bass with distortion
 voice dirty_bass = 0.5 * saw(C2) >> lowpass(400, 1.2) >> distort(4.0)
 
 // Shimmery texture with chorus and reverb
-voice shimmer = 0.2 * triangle(E5) >> chorus(0.015, 0.005, 0.3) >> reverb(0.9, 0.6, 0.4)
+voice shimmer = 0.2 * triangle(E5) >> wide
 
 // Arp voice: saw with filter and decay — arp substitutes the frequency
 voice pluck = 0.3 * saw(0) >> lowpass(2000, 0.8) >> decay(10)

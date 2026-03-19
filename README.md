@@ -240,6 +240,21 @@ Effects are just pipe stages — you can stack them freely:
 voice lead = saw(G5) >> lowpass(1200, 0.7) >> delay(0.3, 0.4, 0.3) >> reverb(0.6, 0.5, 0.25)
 ```
 
+### Effect Chains (`fx`)
+
+Name a reusable pipeline of effects — like a guitar pedal board:
+
+```
+fx hall = reverb(0.8, 0.4, 0.35) >> delay(0.3, 0.2, 0.15)
+fx telephone = highpass(300, 0.5) >> lowpass(2000, 0.3) >> distort(3.0)
+fx tape = chorus(0.015, 0.008, 0.2) >> distort(1.2)
+
+voice pad = chord(Cm7) >> lowpass(800, 0.6) >> hall
+at 0 play sine(A4) >> telephone for 4 beats
+```
+
+An `fx` is a named chain of transforms with no signal source. Insert it anywhere in a pipe chain. Multiple voices can share the same `fx` for consistent processing.
+
 ### Chords
 
 `chord(name)` generates a summed set of saw oscillators for a named chord. Use it anywhere you'd use an oscillator:
@@ -308,6 +323,7 @@ The `examples/` directory includes several complete compositions:
 |---|---|
 | `demo.sc` | Basic features walkthrough |
 | `effects-demo.sc` | Showcases effects, arp, and note names |
+| `concerto2.sc` | Rachmaninoff Piano Concerto No. 2 (converted from MIDI) |
 | `lofi-afternoon.sc` | Lofi hip-hop track with chorus, distortion, and vibrato |
 | `therapy-lofi.sc` | Extended ambient/lofi piece (~4 min) |
 
@@ -323,6 +339,22 @@ sound-cabinet render examples/lofi-afternoon.sc -o lofi-afternoon.wav
 ## Roadmap
 
 What's coming next, roughly in priority order.
+
+### Instruments
+
+Parametric voice templates that define a full signal chain once and instantiate it at any pitch. Eliminates the need to define 60+ individual voices for a piano or other instrument spanning multiple octaves:
+
+```
+instrument piano
+  hammer = 0.45 * saw(freq) >> lowpass(freq * 4, 0.7) >> decay(8)
+  strings = 1.8 * saw(freq) + 0.35 * saw(freq * 2) >> lowpass(freq * 1.2, 0.6) >> chorus(0.016, 0.006, 0.1)
+  out = (hammer + strings) >> decay(2.0) >> reverb(0.6, 0.3, 0.2)
+
+at 0 play piano(C4) for 4 beats
+at 0 play piano(Ab3) for 4 beats
+```
+
+Parameters can be expressions of `freq`, enabling filter tracking (lowpass cutoff proportional to note frequency), per-register gain scaling, and other frequency-dependent behavior. Optional octave-range overrides for parameters that need to vary more dramatically across the keyboard.
 
 ### Pulse oscillator
 
