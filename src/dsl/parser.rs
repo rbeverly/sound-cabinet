@@ -161,6 +161,17 @@ pub fn parse_line(input: &str) -> Result<Command> {
             return parse_voice_def(pair);
         }
     }
+    if let Ok(pairs) = ScoreParser::parse(Rule::wave_def, trimmed) {
+        for pair in pairs {
+            let mut inner = pair.into_inner();
+            let name = inner.next().unwrap().as_str().to_string();
+            let samples: Vec<f64> = inner
+                .filter(|p| p.as_rule() == Rule::number)
+                .map(|p| p.as_str().parse().unwrap())
+                .collect();
+            return Ok(Command::WaveDef { name, samples });
+        }
+    }
     if let Ok(pairs) = ScoreParser::parse(Rule::pedal_down_stmt, trimmed) {
         for pair in pairs {
             let beat: f64 = pair.into_inner().next().unwrap().as_str().parse().unwrap();
@@ -227,6 +238,17 @@ fn parse_single_line(line: &str) -> Result<Option<Command>> {
     if let Ok(pairs) = ScoreParser::parse(Rule::instrument_def, line) {
         for pair in pairs {
             return Ok(Some(parse_voice_def(pair)?));
+        }
+    }
+    if let Ok(pairs) = ScoreParser::parse(Rule::wave_def, line) {
+        for pair in pairs {
+            let mut inner = pair.into_inner();
+            let name = inner.next().unwrap().as_str().to_string();
+            let samples: Vec<f64> = inner
+                .filter(|p| p.as_rule() == Rule::number)
+                .map(|p| p.as_str().parse().unwrap())
+                .collect();
+            return Ok(Some(Command::WaveDef { name, samples }));
         }
     }
     if let Ok(pairs) = ScoreParser::parse(Rule::pedal_down_stmt, line) {

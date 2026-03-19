@@ -93,6 +93,7 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
     for cmd in script.commands {
         match cmd {
             Command::VoiceDef { .. }
+            | Command::WaveDef { .. }
             | Command::SetBpm(_)
             | Command::Import { .. }
             | Command::PedalDown { .. }

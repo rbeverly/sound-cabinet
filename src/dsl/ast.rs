@@ -87,6 +87,8 @@ pub enum Command {
         count: u32,
         body: Vec<RepeatBody>,
     },
+    /// Define a named wavetable: `wave wonky = [0.0, 0.3, ...]`
+    WaveDef { name: String, samples: Vec<f64> },
     /// Sustain pedal down: `pedal down at 4.0`
     PedalDown { beat: f64 },
     /// Sustain pedal up: `pedal up at 8.0`

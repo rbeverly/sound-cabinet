@@ -5,7 +5,7 @@ use fundsp::hacker::*;
 
 use crate::dsl::ast::Expr;
 use crate::dsl::parser::resolve_chord;
-use crate::engine::effects::{Compressor, FeedbackDelay, Freeverb};
+use crate::engine::effects::{Compressor, FeedbackDelay, Freeverb, WavetableOsc};
 
 /// Translate an AST Expr into a fundsp Net (boxed dynamic signal graph).
 ///
@@ -17,6 +17,7 @@ use crate::engine::effects::{Compressor, FeedbackDelay, Freeverb};
 pub fn build_graph(
     expr: &Expr,
     voices: &HashMap<String, Expr>,
+    wavetables: &HashMap<String, Vec<f64>>,
     sample_rate: f64,
     duration_secs: Option<f64>,
 ) -> Result<Net> {
@@ -40,37 +41,37 @@ pub fn build_graph(
         }
 
         Expr::FnCall { name, args } => {
-            build_fn_call(name, args, voices, sample_rate, duration_secs)
+            build_fn_call(name, args, voices, wavetables, sample_rate, duration_secs)
         }
 
         Expr::VoiceRef(name) => {
             let voice_expr = voices
                 .get(name)
                 .ok_or_else(|| anyhow!("Unknown voice: {name}"))?;
-            build_graph(voice_expr, voices, sample_rate, duration_secs)
+            build_graph(voice_expr, voices, wavetables, sample_rate, duration_secs)
         }
 
         Expr::Pipe(a, b) => {
-            let net_a = build_graph(a, voices, sample_rate, duration_secs)?;
-            let net_b = build_graph(b, voices, sample_rate, duration_secs)?;
+            let net_a = build_graph(a, voices, wavetables, sample_rate, duration_secs)?;
+            let net_b = build_graph(b, voices, wavetables, sample_rate, duration_secs)?;
             Ok(net_a >> net_b)
         }
 
         Expr::Sum(a, b) => {
-            let net_a = build_graph(a, voices, sample_rate, duration_secs)?;
-            let net_b = build_graph(b, voices, sample_rate, duration_secs)?;
+            let net_a = build_graph(a, voices, wavetables, sample_rate, duration_secs)?;
+            let net_b = build_graph(b, voices, wavetables, sample_rate, duration_secs)?;
             Ok(net_a + net_b)
         }
 
         Expr::Mul(a, b) => {
-            let net_a = build_graph(a, voices, sample_rate, duration_secs)?;
-            let net_b = build_graph(b, voices, sample_rate, duration_secs)?;
+            let net_a = build_graph(a, voices, wavetables, sample_rate, duration_secs)?;
+            let net_b = build_graph(b, voices, wavetables, sample_rate, duration_secs)?;
             Ok(net_a * net_b)
         }
 
         Expr::Sub(a, b) => {
-            let net_a = build_graph(a, voices, sample_rate, duration_secs)?;
-            let net_b = build_graph(b, voices, sample_rate, duration_secs)?;
+            let net_a = build_graph(a, voices, wavetables, sample_rate, duration_secs)?;
+            let net_b = build_graph(b, voices, wavetables, sample_rate, duration_secs)?;
             Ok(net_a - net_b)
         }
 
@@ -84,6 +85,7 @@ fn build_fn_call(
     name: &str,
     args: &[Expr],
     voices: &HashMap<String, Expr>,
+    wavetables: &HashMap<String, Vec<f64>>,
     sample_rate: f64,
     duration_secs: Option<f64>,
 ) -> Result<Net> {
@@ -355,6 +357,15 @@ fn build_fn_call(
             Ok(net)
         }
 
+        // Wavetable oscillator: name(freq) where name is a defined wave
+        _ if wavetables.contains_key(name) => {
+            let samples = &wavetables[name];
+            let freq = expect_number(args, 0, name)? as f32;
+            let mut net = Net::wrap(Box::new(An(WavetableOsc::new(samples, freq))));
+            net.set_sample_rate(sample_rate);
+            Ok(net)
+        }
+
         // Instrument invocation: name(freq) or name(ChordName)
         _ => {
             if let Some(template) = voices.get(name) {
@@ -366,7 +377,7 @@ fn build_fn_call(
                         net.set_sample_rate(sample_rate);
                         for freq in &chord_notes {
                             let substituted = substitute_var(template, "freq", *freq);
-                            let note_net = build_graph(&substituted, voices, sample_rate, duration_secs)?;
+                            let note_net = build_graph(&substituted, voices, wavetables, sample_rate, duration_secs)?;
                             let mut gain = Net::wrap(Box::new(dc(scale)));
                             gain.set_sample_rate(sample_rate);
                             net = net + (note_net * gain);
@@ -377,7 +388,7 @@ fn build_fn_call(
                 // Single frequency
                 let freq = expect_number(args, 0, name)?;
                 let substituted = substitute_var(template, "freq", freq);
-                build_graph(&substituted, voices, sample_rate, duration_secs)
+                build_graph(&substituted, voices, wavetables, sample_rate, duration_secs)
             } else {
                 Err(anyhow!("Unknown DSP function: {name}"))
             }
@@ -487,9 +498,9 @@ const OSCILLATOR_NAMES: &[&str] = &["sine", "saw", "triangle", "square", "pulse"
 /// Walk an expression tree and replace every oscillator's frequency argument
 /// with the given frequency. Resolves VoiceRefs by inlining the voice expression.
 /// This lets `pluck >> arp(C4, E4, G4, 4)` substitute C4/E4/G4 into pluck's oscillators.
-pub fn substitute_freq(expr: &Expr, voices: &HashMap<String, Expr>, freq: f64) -> Expr {
+pub fn substitute_freq(expr: &Expr, voices: &HashMap<String, Expr>, wavetable_names: &[String], freq: f64) -> Expr {
     match expr {
-        Expr::FnCall { name, args } if OSCILLATOR_NAMES.contains(&name.as_str()) && !args.is_empty() => {
+        Expr::FnCall { name, args } if (OSCILLATOR_NAMES.contains(&name.as_str()) || wavetable_names.contains(name)) && !args.is_empty() => {
             let mut new_args = args.clone();
             new_args[0] = Expr::Number(freq);
             Expr::FnCall {
@@ -499,30 +510,30 @@ pub fn substitute_freq(expr: &Expr, voices: &HashMap<String, Expr>, freq: f64) -
         }
         Expr::VoiceRef(name) => {
             if let Some(voice_expr) = voices.get(name) {
-                substitute_freq(voice_expr, voices, freq)
+                substitute_freq(voice_expr, voices, wavetable_names, freq)
             } else {
                 expr.clone()
             }
         }
         Expr::Pipe(a, b) => Expr::Pipe(
-            Box::new(substitute_freq(a, voices, freq)),
-            Box::new(substitute_freq(b, voices, freq)),
+            Box::new(substitute_freq(a, voices, wavetable_names, freq)),
+            Box::new(substitute_freq(b, voices, wavetable_names, freq)),
         ),
         Expr::Sum(a, b) => Expr::Sum(
-            Box::new(substitute_freq(a, voices, freq)),
-            Box::new(substitute_freq(b, voices, freq)),
+            Box::new(substitute_freq(a, voices, wavetable_names, freq)),
+            Box::new(substitute_freq(b, voices, wavetable_names, freq)),
         ),
         Expr::Mul(a, b) => Expr::Mul(
-            Box::new(substitute_freq(a, voices, freq)),
-            Box::new(substitute_freq(b, voices, freq)),
+            Box::new(substitute_freq(a, voices, wavetable_names, freq)),
+            Box::new(substitute_freq(b, voices, wavetable_names, freq)),
         ),
         Expr::Div(a, b) => Expr::Div(
-            Box::new(substitute_freq(a, voices, freq)),
-            Box::new(substitute_freq(b, voices, freq)),
+            Box::new(substitute_freq(a, voices, wavetable_names, freq)),
+            Box::new(substitute_freq(b, voices, wavetable_names, freq)),
         ),
         Expr::Sub(a, b) => Expr::Sub(
-            Box::new(substitute_freq(a, voices, freq)),
-            Box::new(substitute_freq(b, voices, freq)),
+            Box::new(substitute_freq(a, voices, wavetable_names, freq)),
+            Box::new(substitute_freq(b, voices, wavetable_names, freq)),
         ),
         other => other.clone(),
     }

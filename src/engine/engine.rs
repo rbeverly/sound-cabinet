@@ -24,6 +24,7 @@ pub struct Engine {
     pub sample_rate: f64,
     pub bpm: f64,
     voices: HashMap<String, Expr>,
+    wavetables: HashMap<String, Vec<f64>>,
     schedule: Vec<ScheduledEvent>,
     current_sample: u64,
     pedal_windows: Vec<(u64, u64)>,
@@ -36,6 +37,7 @@ impl Engine {
             sample_rate,
             bpm: 120.0,
             voices: HashMap::new(),
+            wavetables: HashMap::new(),
             schedule: Vec::new(),
             current_sample: 0,
             pedal_windows: Vec::new(),
@@ -48,6 +50,9 @@ impl Engine {
         match cmd {
             Command::VoiceDef { name, expr } => {
                 self.voices.insert(name, expr);
+            }
+            Command::WaveDef { name, samples } => {
+                self.wavetables.insert(name, samples);
             }
             Command::SetBpm(bpm) => {
                 self.bpm = bpm;
@@ -71,7 +76,7 @@ impl Engine {
                     let clean_expr = strip_swell(&expr);
 
                     let net =
-                        build_graph(&clean_expr, &self.voices, self.sample_rate, Some(duration_secs))?;
+                        build_graph(&clean_expr, &self.voices, &self.wavetables, self.sample_rate, Some(duration_secs))?;
 
                     self.schedule.push(ScheduledEvent {
                         start_sample,
@@ -128,7 +133,7 @@ impl Engine {
                     let clean_expr = strip_swell(&expr);
 
                     let net =
-                        build_graph(&clean_expr, &self.voices, self.sample_rate, Some(duration_secs))?;
+                        build_graph(&clean_expr, &self.voices, &self.wavetables, self.sample_rate, Some(duration_secs))?;
 
                     self.schedule.push(ScheduledEvent {
                         start_sample,
@@ -331,7 +336,8 @@ impl Engine {
                 if contains_freq_var(voice_template, &self.voices) {
                     substitute_var(voice_template, "freq", freq)
                 } else {
-                    substitute_freq(voice_template, &self.voices, freq)
+                    let wt_names: Vec<String> = self.wavetables.keys().cloned().collect();
+                    substitute_freq(voice_template, &self.voices, &wt_names, freq)
                 }
             } else {
                 // Default voice: triangle oscillator with decay
@@ -354,7 +360,7 @@ impl Engine {
                 note_expr
             };
 
-            let net = build_graph(&full_expr, &self.voices, self.sample_rate, Some(dur_secs))?;
+            let net = build_graph(&full_expr, &self.voices, &self.wavetables, self.sample_rate, Some(dur_secs))?;
 
             // Compute per-step swell envelope value and bake it as a gain multiplier
             let sub_swell_gain = swell.map(|(attack, release)| {
@@ -386,6 +392,7 @@ impl Engine {
                         let gain_net = build_graph(
                             &Expr::Number(env_val),
                             &self.voices,
+                            &self.wavetables,
                             self.sample_rate,
                             None,
                         )?;
@@ -394,6 +401,7 @@ impl Engine {
                             build_graph(
                                 &Expr::Number(0.0),
                                 &self.voices,
+                                &self.wavetables,
                                 self.sample_rate,
                                 None,
                             )?,

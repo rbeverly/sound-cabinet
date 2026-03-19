@@ -357,3 +357,73 @@ impl AudioNode for Compressor {
         [x * gain].into()
     }
 }
+
+// ---------------------------------------------------------------------------
+// Wavetable Oscillator
+// ---------------------------------------------------------------------------
+
+/// Wavetable oscillator — reads through a user-defined array of sample points
+/// at the right speed for the desired frequency, interpolating linearly.
+///
+/// - `table`: one cycle of the waveform as sample values (typically -1.0 to 1.0)
+/// - `freq`: playback frequency in Hz
+///
+/// 0 inputs, 1 output (source oscillator).
+#[derive(Clone)]
+pub struct WavetableOsc {
+    table: Vec<f32>,
+    phase: f64,     // 0.0 to 1.0
+    freq: f32,
+    sample_rate: f64,
+}
+
+impl WavetableOsc {
+    pub fn new(samples: &[f64], freq: f32) -> Self {
+        let table: Vec<f32> = samples.iter().map(|s| *s as f32).collect();
+        WavetableOsc {
+            table,
+            phase: 0.0,
+            freq,
+            sample_rate: DEFAULT_SR,
+        }
+    }
+}
+
+impl AudioNode for WavetableOsc {
+    const ID: u64 = 1003;
+    type Inputs = U0;
+    type Outputs = U1;
+
+    fn reset(&mut self) {
+        self.phase = 0.0;
+    }
+
+    fn set_sample_rate(&mut self, sample_rate: f64) {
+        self.sample_rate = sample_rate;
+    }
+
+    #[inline]
+    fn tick(&mut self, _input: &Frame<f32, Self::Inputs>) -> Frame<f32, Self::Outputs> {
+        let len = self.table.len();
+        if len == 0 {
+            return [0.0].into();
+        }
+
+        // Fractional index into the table
+        let pos = self.phase * len as f64;
+        let idx = pos as usize;
+        let frac = pos - idx as f64;
+
+        // Linear interpolation between adjacent samples (wrapping)
+        let a = self.table[idx % len];
+        let b = self.table[(idx + 1) % len];
+        let sample = a + (b - a) * frac as f32;
+
+        // Advance phase
+        self.phase += self.freq as f64 / self.sample_rate;
+        // Wrap phase to avoid floating point drift over time
+        self.phase -= self.phase.floor();
+
+        [sample].into()
+    }
+}
