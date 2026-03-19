@@ -497,6 +497,40 @@ soft down at 4.0
 soft up at 8.0
 ```
 
+### EQ (parametric equalizer)
+
+Multi-band parametric EQ as a pipe-chain effect. Boost or cut specific frequency ranges — essential for mixing and for solving the equal-loudness problem in instrument definitions:
+
+```
+// 3-band EQ: boost bass, cut muddy mids, add treble air
+fx master_eq = eq(80, 6, "shelf") >> eq(400, -3, 1.0) >> eq(10000, 3, "shelf")
+
+// In an instrument: compensate for Fletcher-Munson curve
+instrument piano = ... >> eq(80, 8, "shelf") >> eq(200, 4, 1.0)
+```
+
+Also useful for shaping individual voices, creating telephone/radio effects, or matching the tonal character of reference tracks.
+
+### Master output / distribution-ready export
+
+Post-processing pipeline for the final mix: peak normalization, loudness targeting (LUFS), optional limiting, and export to distribution-ready formats. The goal is to go from `.sc` to DistroKid-ready without leaving Sound Cabinet:
+
+```bash
+sound-cabinet render track.sc -o track.wav --normalize --lufs -14 --format mp3
+```
+
+This includes: peak/RMS normalization, loudness metering (integrated LUFS per streaming platform targets), a brickwall limiter to prevent clipping, and format conversion (MP3, AAC, FLAC).
+
+### Fletcher-Munson equal-loudness compensation
+
+Built-in frequency-dependent gain compensation that models human hearing sensitivity. Low frequencies need significantly more energy to sound equally loud as midrange — this curve is logarithmic, not linear. A dedicated `loudness()` function in instruments would apply the ISO 226 equal-loudness contour automatically:
+
+```
+instrument piano = ... >> loudness(freq)   // auto-compensates based on pitch
+```
+
+This would replace the manual `200 / freq` approximation with a proper psychoacoustic curve.
+
 ### Parameter automation
 
 Sweep any parameter over the duration of an event:
