@@ -432,6 +432,12 @@ fn parse_expr(pair: Pair<Rule>) -> Result<Expr> {
         }
         Rule::atom => parse_atom(pair),
         Rule::fn_call => parse_fn_call(pair),
+        Rule::range => {
+            let mut inner = pair.into_inner();
+            let start: f64 = inner.next().unwrap().as_str().parse()?;
+            let end: f64 = inner.next().unwrap().as_str().parse()?;
+            Ok(Expr::Range(start, end))
+        }
         Rule::number => Ok(Expr::Number(pair.as_str().parse()?)),
         Rule::note_name => Ok(Expr::Number(note_name_to_hz(pair.as_str())?)),
         Rule::ident => Ok(Expr::VoiceRef(pair.as_str().to_string())),

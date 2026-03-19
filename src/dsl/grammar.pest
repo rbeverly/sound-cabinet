@@ -64,11 +64,15 @@ mul_op    = { "*" | "/" }
 
 atom = {
     fn_call
+  | range
   | note_name
   | number
   | ident
   | "(" ~ expr ~ ")"
 }
+
+// Parameter sweep: 800 -> 4000 (linear interpolation over event duration)
+range = { number ~ "->" ~ number }
 
 note_name = @{ ('A'..'G') ~ ("#" | "b" | "s")? ~ ('0'..'9') }
 

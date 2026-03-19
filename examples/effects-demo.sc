@@ -24,6 +24,9 @@ voice lead = 0.4 * triangle(G5) >> lfo(6.0, 0.4) >> echo
 // Dirty bass with distortion
 voice dirty_bass = 0.5 * saw(C2) >> lowpass(400, 1.2) >> distort(4.0)
 
+// Filter sweep: lowpass opens from 200 to 4000 Hz over the event duration
+voice sweep_pad = (0.4 * saw(C3) + 0.3 * saw(G3)) >> lowpass(200 -> 4000, 0.7)
+
 // Shimmery texture with chorus and reverb
 voice shimmer = 0.2 * triangle(E5) >> wide
 
@@ -66,6 +69,10 @@ pattern bass_line = 4 beats
 pattern shimmer_layer = 8 beats
   at 0 play shimmer >> swell(3.0, 2.0) for 8 beats
 
+// Filter sweep riser — opens up over 8 beats
+pattern sweep_riser = 8 beats
+  at 0 play sweep_pad >> swell(1.0, 1.0) for 8 beats
+
 // --- Arrangement ---
 
 section intro = 8 beats
@@ -81,7 +88,7 @@ section main = 8 beats
 section bridge = 8 beats
   repeat beat every 4 beats
   repeat keys_phrase every 4 beats
-  play shimmer_layer
+  play sweep_riser
 
 section outro = 8 beats
   repeat beat every 4 beats

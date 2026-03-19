@@ -17,6 +17,8 @@ pub enum Expr {
     Div(Box<Expr>, Box<Expr>),
     /// Subtract: a - b
     Sub(Box<Expr>, Box<Expr>),
+    /// Range/sweep: start -> end (linear interpolation over event duration)
+    Range(f64, f64),
 }
 
 /// A single event within a pattern — beat offset is relative to pattern start.

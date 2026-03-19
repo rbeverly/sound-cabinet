@@ -430,6 +430,6 @@ fn contains_freq_var(expr: &Expr, voices: &HashMap<String, Expr>) -> bool {
         Expr::Pipe(a, b) | Expr::Sum(a, b) | Expr::Sub(a, b) | Expr::Mul(a, b) | Expr::Div(a, b) => {
             contains_freq_var(a, voices) || contains_freq_var(b, voices)
         }
-        Expr::Number(_) => false,
+        Expr::Number(_) | Expr::Range(_, _) => false,
     }
 }

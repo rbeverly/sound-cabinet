@@ -26,6 +26,19 @@ pub fn build_graph(
             Ok(Net::wrap(Box::new(dc(val))))
         }
 
+        Expr::Range(start, end) => {
+            // Range as a standalone expression: produces a time-varying dc signal
+            let start = *start;
+            let end = *end;
+            let dur = duration_secs.unwrap_or(4.0);
+            let mut net = Net::wrap(Box::new(envelope(move |t: f64| {
+                let frac = (t / dur).min(1.0);
+                start + (end - start) * frac
+            })));
+            net.set_sample_rate(sample_rate);
+            Ok(net)
+        }
+
         Expr::FnCall { name, args } => {
             build_fn_call(name, args, voices, sample_rate, duration_secs)
         }
@@ -72,7 +85,7 @@ fn build_fn_call(
     args: &[Expr],
     voices: &HashMap<String, Expr>,
     sample_rate: f64,
-    _duration_secs: Option<f64>,
+    duration_secs: Option<f64>,
 ) -> Result<Net> {
     match name {
         // Oscillators: 0 inputs, 1 output
@@ -106,13 +119,32 @@ fn build_fn_call(
             Ok(net)
         }
 
-        // Filters: 1 input, 1 output
+        // Filters: 1 input, 1 output (with optional parameter automation)
         "lowpass" => {
-            let freq = expect_number(&args, 0, name)? as f32;
             let q = expect_number(&args, 1, name)? as f32;
-            let mut net = Net::wrap(Box::new(lowpass_hz(freq, q)));
-            net.set_sample_rate(sample_rate);
-            Ok(net)
+
+            // Check if frequency is a Range (sweep) or static Number
+            if let Some(Expr::Range(start, end)) = args.first() {
+                // Dynamic lowpass: (signal | cutoff_sweep) >> lowpass_q(q)
+                let start = *start;
+                let end = *end;
+                let dur = duration_secs.unwrap_or(4.0);
+                let sweep = Net::wrap(Box::new(envelope(move |t: f64| {
+                    let frac = (t / dur).min(1.0);
+                    start + (end - start) * frac
+                })));
+                let input = Net::wrap(Box::new(pass()));
+                let filter = Net::wrap(Box::new(lowpass_q(q)));
+                let mut net = (input | sweep) >> filter;
+                net.set_sample_rate(sample_rate);
+                Ok(net)
+            } else {
+                // Static lowpass (original behavior)
+                let freq = expect_number(&args, 0, name)? as f32;
+                let mut net = Net::wrap(Box::new(lowpass_hz(freq, q)));
+                net.set_sample_rate(sample_rate);
+                Ok(net)
+            }
         }
         "highpass" => {
             let freq = expect_number(&args, 0, name)? as f32;
@@ -264,7 +296,7 @@ fn build_fn_call(
                         net.set_sample_rate(sample_rate);
                         for freq in &chord_notes {
                             let substituted = substitute_var(template, "freq", *freq);
-                            let note_net = build_graph(&substituted, voices, sample_rate, _duration_secs)?;
+                            let note_net = build_graph(&substituted, voices, sample_rate, duration_secs)?;
                             let mut gain = Net::wrap(Box::new(dc(scale)));
                             gain.set_sample_rate(sample_rate);
                             net = net + (note_net * gain);
@@ -275,7 +307,7 @@ fn build_fn_call(
                 // Single frequency
                 let freq = expect_number(args, 0, name)?;
                 let substituted = substitute_var(template, "freq", freq);
-                build_graph(&substituted, voices, sample_rate, _duration_secs)
+                build_graph(&substituted, voices, sample_rate, duration_secs)
             } else {
                 Err(anyhow!("Unknown DSP function: {name}"))
             }
