@@ -156,6 +156,11 @@ pub fn parse_line(input: &str) -> Result<Command> {
             return parse_voice_def(pair);
         }
     }
+    if let Ok(pairs) = ScoreParser::parse(Rule::instrument_def, trimmed) {
+        for pair in pairs {
+            return parse_voice_def(pair);
+        }
+    }
     if let Ok(pairs) = ScoreParser::parse(Rule::bpm_stmt, trimmed) {
         for pair in pairs {
             return parse_bpm(pair);
@@ -203,6 +208,11 @@ fn parse_single_line(line: &str) -> Result<Option<Command>> {
         }
     }
     if let Ok(pairs) = ScoreParser::parse(Rule::fx_def, line) {
+        for pair in pairs {
+            return Ok(Some(parse_voice_def(pair)?));
+        }
+    }
+    if let Ok(pairs) = ScoreParser::parse(Rule::instrument_def, line) {
         for pair in pairs {
             return Ok(Some(parse_voice_def(pair)?));
         }

@@ -3,11 +3,11 @@
 midi2sc.py — Convert a MIDI file to Sound Cabinet .sc format.
 
 Reads a MIDI file, extracts a specified track, and generates a .sc
-composition file using per-note voice definitions from a voice kit.
+composition file using instruments (freq-parametric voice templates).
 
 Usage:
     python3 midi2sc.py input.mid --track 10 --max-time 155 --voice-kit voices/concerto2-kit.sc -o concerto2.sc
-    python3 midi2sc.py input.mid --track 10 --max-time 155 --voice-prefix p_ -o concerto2.sc
+    python3 midi2sc.py input.mid --track 10 --instrument piano --voice-kit voices/concerto2-kit.sc -o concerto2.sc
 """
 
 import argparse
@@ -101,6 +101,7 @@ def generate_sc(
     sustain_duration_beats,
     swell_release,
     pattern_size_beats,
+    instrument_name=None,
 ):
     """Generate .sc file content from extracted MIDI notes."""
 
@@ -175,8 +176,19 @@ def generate_sc(
             d = round(dur, 2)
             sr = swell_release
 
+            # Velocity as a gain multiplier (0.0-1.0)
+            vel_gain = round(vel / 127.0, 2)
+
+            if instrument_name:
+                # Use instrument syntax: piano(C4)
+                play_expr = f"{instrument_name}({note})"
+            else:
+                # Legacy voice syntax: p_c4
+                play_expr = voice
+
+            # Apply velocity as gain and swell for release
             lines.append(
-                f"  at {b} play {voice} >> swell(0.0, {sr}) for {d} beats"
+                f"  at {b} play {vel_gain} * {play_expr} >> swell(0.0, {sr}) for {d} beats"
             )
 
         lines.append(f"")
@@ -286,6 +298,7 @@ def main():
     parser.add_argument("--sustain", type=float, default=1.5, help="Sustain pedal duration in beats (short notes extended to this)")
     parser.add_argument("--swell-release", type=float, default=0.5, help="Swell release time")
     parser.add_argument("--pattern-size", type=int, default=16, help="Pattern size in beats")
+    parser.add_argument("--instrument", default=None, help="Instrument name to use (e.g., 'piano'). Uses instrument(Note) syntax instead of per-note voices.")
     parser.add_argument("--generate-kit", action="store_true", help="Generate voice kit file instead of composition")
     parser.add_argument("--kit-output", default="voices/auto-kit.sc", help="Output path for generated voice kit")
     parser.add_argument("--list-tracks", action="store_true", help="List tracks and exit")
@@ -330,12 +343,13 @@ def main():
             args.sustain,
             args.swell_release,
             args.pattern_size,
+            instrument_name=args.instrument,
         )
         with open(args.output, 'w') as f:
             f.write(sc_content)
         print(f"Composition written to {args.output}")
         # Count notes and patterns
-        note_count = sc_content.count("play " + args.voice_prefix)
+        note_count = sc_content.count("  at ")
         pattern_count = sc_content.count("pattern ")
         print(f"Generated {pattern_count} patterns with {note_count} note events")
 

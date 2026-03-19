@@ -5,7 +5,7 @@ use fundsp::hacker::*;
 
 use crate::dsl::ast::{Command, Expr};
 use crate::dsl::parser::resolve_chord;
-use crate::engine::graph::{build_graph, extract_arp, extract_swell, strip_swell, substitute_freq};
+use crate::engine::graph::{build_graph, extract_arp, extract_swell, strip_swell, substitute_freq, substitute_var};
 
 /// A scheduled playback event with absolute sample positions.
 struct ScheduledEvent {
@@ -293,9 +293,15 @@ impl Engine {
             let dur_secs = step_beats * 60.0 / self.bpm;
 
             // Build the note expression: substitute freq into voice template,
-            // or use default triangle+decay if no voice was provided
+            // or use default triangle+decay if no voice was provided.
+            // Use substitute_var for instrument templates (contain VoiceRef("freq")),
+            // substitute_freq for plain voices (only replaces oscillator args).
             let note_expr = if let Some(ref voice_template) = pre_chain {
-                substitute_freq(voice_template, &self.voices, freq)
+                if contains_freq_var(voice_template, &self.voices) {
+                    substitute_var(voice_template, "freq", freq)
+                } else {
+                    substitute_freq(voice_template, &self.voices, freq)
+                }
             } else {
                 // Default voice: triangle oscillator with decay
                 Expr::Pipe(
@@ -373,5 +379,26 @@ impl Engine {
     fn beats_to_samples(&self, beats: f64) -> u64 {
         let seconds_per_beat = 60.0 / self.bpm;
         (beats * seconds_per_beat * self.sample_rate) as u64
+    }
+}
+
+/// Check if an expression tree contains VoiceRef("freq"), either directly
+/// or inside a voice that it references. Used to decide whether arp should
+/// use substitute_var (for instruments) or substitute_freq (for plain voices).
+fn contains_freq_var(expr: &Expr, voices: &HashMap<String, Expr>) -> bool {
+    match expr {
+        Expr::VoiceRef(name) if name == "freq" => true,
+        Expr::VoiceRef(name) => {
+            if let Some(voice_expr) = voices.get(name) {
+                contains_freq_var(voice_expr, voices)
+            } else {
+                false
+            }
+        }
+        Expr::FnCall { args, .. } => args.iter().any(|a| contains_freq_var(a, voices)),
+        Expr::Pipe(a, b) | Expr::Sum(a, b) | Expr::Mul(a, b) => {
+            contains_freq_var(a, voices) || contains_freq_var(b, voices)
+        }
+        Expr::Number(_) => false,
     }
 }

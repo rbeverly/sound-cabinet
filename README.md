@@ -33,10 +33,22 @@ cd sound-cabinet
 cargo build --release
 ```
 
-The binary will be at `target/release/sound-cabinet`. Copy it somewhere on your `$PATH`:
+The binary will be at `target/release/sound-cabinet`. Either copy it to a system directory or add the build output to your shell's PATH:
 
 ```bash
+# Option A: copy to a system directory
 cp target/release/sound-cabinet /usr/local/bin/
+
+# Option B: add to your PATH (run from the sound-cabinet directory)
+
+# bash (~/.bashrc)
+echo 'export PATH="$PATH:'$(pwd)'/target/release"' >> ~/.bashrc && source ~/.bashrc
+
+# zsh (~/.zshrc)
+echo 'export PATH="$PATH:'$(pwd)'/target/release"' >> ~/.zshrc && source ~/.zshrc
+
+# fish (~/.config/fish/config.fish)
+echo 'fish_add_path '(pwd)'/target/release' >> ~/.config/fish/config.fish && source ~/.config/fish/config.fish
 ```
 
 #### Linux dependencies
@@ -255,6 +267,21 @@ at 0 play sine(A4) >> telephone for 4 beats
 
 An `fx` is a named chain of transforms with no signal source. Insert it anywhere in a pipe chain. Multiple voices can share the same `fx` for consistent processing.
 
+### Instruments
+
+Define a signal chain once, play it at any pitch. Use `freq` as a variable — it gets substituted with the actual Hz value when you invoke the instrument:
+
+```
+instrument piano = ((0.45 * saw(freq) >> lowpass(freq * 4, 0.7) >> decay(8)) + (1.8 * saw(freq) + 0.35 * saw(freq * 2)) >> lowpass(freq * 1.2, 0.6) >> chorus(0.016, 0.006, 0.1)) >> decay(2.0) >> reverb(0.6, 0.3, 0.2)
+
+at 0 play piano(C4) for 4 beats
+at 0 play piano(Ab3) >> swell(0.0, 0.5) for 4 beats
+```
+
+`freq` works anywhere in the expression — oscillator arguments, filter cutoffs (`freq * 4`), arithmetic (`freq * 2` for octave-up harmonics). Constant expressions are folded at substitution time.
+
+Instruments compose with everything: pipe into `fx` chains, use with `swell`, and arp uses `substitute_var` so filter tracking is preserved across all arpeggiated notes.
+
 ### Chords
 
 `chord(name)` generates a summed set of saw oscillators for a named chord. Use it anywhere you'd use an oscillator:
@@ -339,22 +366,6 @@ sound-cabinet render examples/lofi-afternoon.sc -o lofi-afternoon.wav
 ## Roadmap
 
 What's coming next, roughly in priority order.
-
-### Instruments
-
-Parametric voice templates that define a full signal chain once and instantiate it at any pitch. Eliminates the need to define 60+ individual voices for a piano or other instrument spanning multiple octaves:
-
-```
-instrument piano
-  hammer = 0.45 * saw(freq) >> lowpass(freq * 4, 0.7) >> decay(8)
-  strings = 1.8 * saw(freq) + 0.35 * saw(freq * 2) >> lowpass(freq * 1.2, 0.6) >> chorus(0.016, 0.006, 0.1)
-  out = (hammer + strings) >> decay(2.0) >> reverb(0.6, 0.3, 0.2)
-
-at 0 play piano(C4) for 4 beats
-at 0 play piano(Ab3) for 4 beats
-```
-
-Parameters can be expressions of `freq`, enabling filter tracking (lowpass cutoff proportional to note frequency), per-register gain scaling, and other frequency-dependent behavior. Optional octave-range overrides for parameters that need to vary more dramatically across the keyboard.
 
 ### Pulse oscillator
 
@@ -469,9 +480,13 @@ saw(C3) >> lowpass(800, 0.7) >> lfo(2.0 -> 8.0, 0.4)  // LFO speeds up
 
 This is how filter sweeps, risers, and drops work in electronic music.
 
-### MIDI export
+### MIDI export (sc2midi)
 
-Render to `.mid` instead of `.wav` so compositions can be brought into a DAW with real instruments. The arp and note-name infrastructure already maps cleanly to MIDI events.
+Render to `.mid` instead of `.wav` so compositions can be brought into a DAW with real instruments. The arp and note-name infrastructure already maps cleanly to MIDI events. Combined with the existing `midi2sc.py` importer, this creates a round-trip: MIDI → .sc (edit/compose) → MIDI (produce in DAW).
+
+### VST3/AU plugin export
+
+Compile Sound Cabinet instruments and effect chains into native DAW plugins (VST3 for cross-platform, Audio Unit for Logic/GarageBand). The Rust `nih-plug` framework provides the plugin host wrapper — the core work is packaging a fundsp signal graph as a plugin that accepts MIDI input and produces audio. This would let instruments built in Sound Cabinet run natively inside Logic, Ableton, GarageBand, etc.
 
 ### Watch mode
 

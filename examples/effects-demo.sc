@@ -9,6 +9,10 @@ fx hall = reverb(0.8, 0.4, 0.3)
 fx echo = delay(0.45, 0.4, 0.35)
 fx wide = chorus(0.015, 0.005, 0.3) >> reverb(0.9, 0.6, 0.4)
 
+// --- Instrument: freq-relative filter tracking across all notes ---
+
+instrument keys = (0.4 * saw(freq) >> lowpass(freq * 4, 0.7) >> decay(8)) + (1.5 * saw(freq) + 0.3 * saw(freq * 2)) >> lowpass(freq * 1.2, 0.6) >> chorus(0.016, 0.006, 0.1) >> decay(2.5) >> hall
+
 // --- Voices (using fx chains) ---
 
 // Warm pad with vibrato and hall reverb
@@ -23,7 +27,7 @@ voice dirty_bass = 0.5 * saw(C2) >> lowpass(400, 1.2) >> distort(4.0)
 // Shimmery texture with chorus and reverb
 voice shimmer = 0.2 * triangle(E5) >> wide
 
-// Arp voice: saw with filter and decay — arp substitutes the frequency
+// Arp voice using the instrument — freq gets substituted per note
 voice pluck = 0.3 * saw(0) >> lowpass(2000, 0.8) >> decay(10)
 
 // Simple kick and hat
@@ -42,6 +46,12 @@ pattern beat = 4 beats
 // Arpeggiator with chord shorthand — Cm7 expands to C4, Eb4, G4, Bb4
 pattern arp_pattern = 4 beats
   at 0 play pluck >> arp(Cm7, 4) >> lowpass(1500, 0.6) >> delay(0.3, 0.35, 0.3) for 4 beats
+
+// Instrument used directly — one definition, any note
+pattern keys_phrase = 4 beats
+  at 0 play keys(C4) for 2 beats
+  at 2 play keys(Eb4) for 1 beat
+  at 3 play keys(G4) for 1 beat
 
 pattern lead_phrase = 4 beats
   at 0 play lead >> swell(0.5, 1.0) for 3 beats
@@ -70,7 +80,7 @@ section main = 8 beats
 
 section bridge = 8 beats
   repeat beat every 4 beats
-  repeat arp_pattern every 4 beats
+  repeat keys_phrase every 4 beats
   play shimmer_layer
 
 section outro = 8 beats

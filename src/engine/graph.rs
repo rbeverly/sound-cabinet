@@ -60,7 +60,7 @@ pub fn build_graph(
 fn build_fn_call(
     name: &str,
     args: &[Expr],
-    _voices: &HashMap<String, Expr>,
+    voices: &HashMap<String, Expr>,
     sample_rate: f64,
     _duration_secs: Option<f64>,
 ) -> Result<Net> {
@@ -243,7 +243,16 @@ fn build_fn_call(
             Ok(net)
         }
 
-        _ => Err(anyhow!("Unknown DSP function: {name}")),
+        // Instrument invocation: name(freq) — substitute freq into the template
+        _ => {
+            if let Some(template) = voices.get(name) {
+                let freq = expect_number(args, 0, name)?;
+                let substituted = substitute_var(template, "freq", freq);
+                build_graph(&substituted, voices, sample_rate, _duration_secs)
+            } else {
+                Err(anyhow!("Unknown DSP function: {name}"))
+            }
+        }
     }
 }
 
@@ -378,6 +387,47 @@ pub fn substitute_freq(expr: &Expr, voices: &HashMap<String, Expr>, freq: f64) -
             Box::new(substitute_freq(a, voices, freq)),
             Box::new(substitute_freq(b, voices, freq)),
         ),
+        other => other.clone(),
+    }
+}
+
+/// Walk an expression tree and replace all occurrences of a named variable
+/// (VoiceRef matching `var`) with a numeric value. Unlike `substitute_freq` which
+/// only replaces oscillator first-args, this replaces the variable everywhere —
+/// including inside fn_call arguments like `lowpass(freq * 4, 0.7)`.
+/// This is what makes instruments work: `freq` in the template gets replaced
+/// with the actual Hz value at instantiation time.
+pub fn substitute_var(expr: &Expr, var: &str, value: f64) -> Expr {
+    match expr {
+        Expr::VoiceRef(name) if name == var => Expr::Number(value),
+        Expr::FnCall { name, args } => Expr::FnCall {
+            name: name.clone(),
+            args: args.iter().map(|a| substitute_var(a, var, value)).collect(),
+        },
+        Expr::Pipe(a, b) => Expr::Pipe(
+            Box::new(substitute_var(a, var, value)),
+            Box::new(substitute_var(b, var, value)),
+        ),
+        Expr::Sum(a, b) => {
+            let sa = substitute_var(a, var, value);
+            let sb = substitute_var(b, var, value);
+            // Constant fold: Number + Number → Number
+            if let (Expr::Number(a_val), Expr::Number(b_val)) = (&sa, &sb) {
+                Expr::Number(a_val + b_val)
+            } else {
+                Expr::Sum(Box::new(sa), Box::new(sb))
+            }
+        }
+        Expr::Mul(a, b) => {
+            let sa = substitute_var(a, var, value);
+            let sb = substitute_var(b, var, value);
+            // Constant fold: Number * Number → Number
+            if let (Expr::Number(a_val), Expr::Number(b_val)) = (&sa, &sb) {
+                Expr::Number(a_val * b_val)
+            } else {
+                Expr::Mul(Box::new(sa), Box::new(sb))
+            }
+        }
         other => other.clone(),
     }
 }

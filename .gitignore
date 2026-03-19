@@ -1,7 +1,42 @@
+# Build artifacts
 /target
+
+# Object files / shared libraries
 *.o
 *.so
 *.dylib
 *.dll
 *.exe
+
+# Audio output
 *.wav
+*.mp3
+*.flac
+*.ogg
+*.aif
+*.aiff
+
+# MIDI files
+*.mid
+*.midi
+
+# VST/AU plugin builds
+*.vst3
+*.component
+*.vst
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
