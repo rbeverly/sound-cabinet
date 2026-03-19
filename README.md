@@ -203,7 +203,10 @@ Generate a waveform at a given frequency:
 | `saw(C3)` | Sawtooth — bright, buzzy |
 | `triangle(E4)` | Triangle — softer than saw |
 | `square(G2)` | Square — hollow, woody |
+| `pulse(C3, 0.25)` | Pulse wave — variable width (0.0-1.0). 0.5 = square, 0.1 = thin/nasal, 0.9 = bright. |
 | `noise()` | White noise (no frequency argument) |
+
+Pulse width can be swept over time using parameter automation: `pulse(C3, 0.1 -> 0.9)` — classic PWM synth pad sound.
 
 ### Filters
 
@@ -213,6 +216,18 @@ Process an incoming signal. Chain after a source with `>>`:
 |---|---|
 | `lowpass(freq, q)` | Cuts frequencies above `freq`. `q` controls resonance (0.5 = gentle, 2.0 = sharp peak). |
 | `highpass(freq, q)` | Cuts frequencies below `freq`. Same `q` behavior. |
+
+#### Parameter automation
+
+Filter frequencies (and pulse width) can sweep over time using the `->` operator:
+
+```
+saw(C3) >> lowpass(800 -> 4000, 0.7)     // filter opens over event duration
+saw(C3) >> highpass(200 -> 50, 0.5)      // highpass sweeps down
+pulse(C3, 0.1 -> 0.9)                    // pulse width modulation
+```
+
+The sweep is linear from start to end over the duration of the enclosing `for N beats` event.
 
 ### Envelopes
 
@@ -245,6 +260,7 @@ Effects process a signal in the pipe chain — place them after the source and a
 | `chorus(sep, var, freq)` | Detuned copies for width. `sep`/`var` in seconds, `freq` in Hz. | `triangle(E5) >> chorus(0.015, 0.005, 0.3)` |
 | `delay(time, fb, mix)` | Feedback delay. `time` in seconds, `fb` 0.0-1.0 (recirculation), `mix` 0.0-1.0 (dry/wet). Auto-damped HF in feedback path. | `triangle(G5) >> delay(0.3, 0.5, 0.4)` |
 | `reverb(size, damp, mix)` | Freeverb algorithmic reverb. `size` 0.0-1.0 (room size), `damp` 0.0-1.0 (HF absorption), `mix` 0.0-1.0 (dry/wet). | `saw(C4) >> reverb(0.8, 0.4, 0.3)` |
+| `compress(thresh, ratio, atk, rel)` | Dynamic range compression. `thresh` in dB, `ratio` e.g. 4 = 4:1, `atk`/`rel` in seconds. | `saw(C2) >> compress(-15, 4, 0.01, 0.1)` |
 
 Effects are just pipe stages — you can stack them freely:
 
@@ -315,17 +331,33 @@ at 0 play pluck >> arp(C4, Eb4, G4, Bb4, 4) >> lowpass(1500, 0.6) for 4 beats
 
 If the voice template has a frequency of `0`, that's fine — the arp substitutes it. If the voice already has a real frequency, the arp overrides it.
 
+### Sustain Pedal
+
+The sustain pedal extends notes beyond their key-down duration, simulating piano damper behavior:
+
+```
+pedal down at 4.0
+at 4.0 play piano(C4) for 1 beat    // note rings until pedal up
+at 4.5 play piano(E4) for 1 beat    // also sustained
+pedal up at 8.0                      // both notes released
+```
+
+Notes that end while the pedal is down have their duration extended to the pedal-up point. The MIDI converter (`midi2sc.py`) automatically translates CC64 pedal events into `pedal down/up` instructions.
+
 ### Operators
 
 | Operator | Meaning | Example |
 |---|---|---|
 | `>>` | Chain — output of left feeds into right | `saw(C3) >> lowpass(800, 0.7)` |
 | `+` | Mix — add signals together | `sine(A4) + sine(A5)` |
+| `-` | Subtract signals | `sine(A4) - sine(A5)` |
 | `*` | Scale — multiply by a number | `0.5 * sine(A4)` (half volume) |
+| `/` | Divide — useful in instruments | `200 / freq` (inverse frequency scaling) |
+| `->` | Sweep — linear interpolation over event duration | `lowpass(800 -> 4000, 0.7)` |
 
 Parentheses group sub-expressions: `(saw(C3) + sine(C4)) >> lowpass(1000, 1.0)`
 
-Operator precedence (highest to lowest): `*`, `+`, `>>`.
+Operator precedence (highest to lowest): `*` `/`, `+` `-`, `>>`.
 
 ## Streaming Mode
 
@@ -349,7 +381,7 @@ The `examples/` directory includes several complete compositions:
 | File | Description |
 |---|---|
 | `demo.sc` | Basic features walkthrough |
-| `effects-demo.sc` | Showcases effects, arp, and note names |
+| `effects-demo.sc` | Showcases effects, arp, pulse oscillator, PWM sweep, filter automation, and compression |
 | `concerto2.sc` | Rachmaninoff Piano Concerto No. 2 (converted from MIDI) |
 | `lofi-afternoon.sc` | Lofi hip-hop track with chorus, distortion, and vibrato |
 | `therapy-lofi.sc` | Extended ambient/lofi piece (~4 min) |
@@ -366,15 +398,6 @@ sound-cabinet render examples/lofi-afternoon.sc -o lofi-afternoon.wav
 ## Roadmap
 
 What's coming next, roughly in priority order.
-
-### Pulse oscillator
-
-Variable-width pulse wave — the classic synth waveform that sine/saw/triangle/square can't replicate. Different duty cycles produce dramatically different timbres (thin and nasal at 10%, hollow at 50%, bright at 90%):
-
-```
-pulse(C3, 0.25)                        // 25% duty cycle
-pulse(C3, 0.1) >> lowpass(800, 0.7)    // narrow pulse, filtered
-```
 
 ### Waveshaping modes
 
@@ -469,13 +492,15 @@ at 0 play kick vel 0.9 for 0.5 beats
 at 1 play snare vel 0.6 for 0.25 beats
 ```
 
-### Compressor
+### Sidechain compression
 
-Dynamic range compression — reduces the volume of loud sounds and boosts quiet ones. Fundamental to making mixes sound polished and professional. Used on nearly every track in modern production:
+Compress one signal based on another signal's level — the classic EDM/house "pumping" effect where the bass ducks on every kick hit:
 
 ```
-voice drums = kick + snare >> compress(threshold, ratio, attack, release)
+voice bass = saw(C2) >> lowpass(400, 1.0) >> sidechain(kick, -20, 4, 0.001, 0.1)
 ```
+
+Requires routing one signal's envelope to control another signal's gain — a more complex architecture than the current per-voice compressor.
 
 ### Sostenuto pedal
 
@@ -530,17 +555,6 @@ instrument piano = ... >> loudness(freq)   // auto-compensates based on pitch
 ```
 
 This would replace the manual `200 / freq` approximation with a proper psychoacoustic curve.
-
-### Parameter automation
-
-Sweep any parameter over the duration of an event:
-
-```
-saw(C3) >> lowpass(800 -> 4000, 0.7)   // filter opens over time
-saw(C3) >> lowpass(800, 0.7) >> lfo(2.0 -> 8.0, 0.4)  // LFO speeds up
-```
-
-This is how filter sweeps, risers, and drops work in electronic music.
 
 ### MIDI export (sc2midi)
 

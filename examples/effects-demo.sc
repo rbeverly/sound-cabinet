@@ -21,8 +21,8 @@ voice warm_pad = chord(Cmaj) >> lowpass(1200, 0.7) >> vibrato(4.0, 15.0) >> hall
 // Lead with dotted-eighth delay echoes
 voice lead = 0.4 * triangle(G5) >> lfo(6.0, 0.4) >> echo
 
-// Dirty bass with distortion
-voice dirty_bass = 0.5 * saw(C2) >> lowpass(400, 1.2) >> distort(4.0)
+// Dirty bass with distortion and compression — evens out dynamics
+voice dirty_bass = 0.5 * saw(C2) >> lowpass(400, 1.2) >> distort(4.0) >> compress(-12, 4, 0.005, 0.1)
 
 // Filter sweep: lowpass opens from 200 to 4000 Hz over the event duration
 voice sweep_pad = (0.4 * saw(C3) + 0.3 * saw(G3)) >> lowpass(200 -> 4000, 0.7)

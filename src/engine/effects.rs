@@ -256,3 +256,104 @@ impl AudioNode for Freeverb {
         [out].into()
     }
 }
+
+// ---------------------------------------------------------------------------
+// Compressor
+// ---------------------------------------------------------------------------
+
+/// Dynamic range compressor with envelope follower.
+///
+/// - `threshold`: level in dB above which compression kicks in (e.g., -20.0)
+/// - `ratio`: compression ratio (e.g., 4.0 means 4:1)
+/// - `attack`: how fast the compressor reacts when signal exceeds threshold (seconds)
+/// - `release`: how fast the compressor lets go when signal drops below threshold (seconds)
+///
+/// Uses a peak-detecting envelope follower with separate attack/release smoothing,
+/// then applies gain reduction based on the threshold and ratio.
+#[derive(Clone)]
+pub struct Compressor {
+    threshold: f32,    // dB
+    ratio: f32,        // e.g., 4.0 for 4:1
+    attack_coeff: f32,
+    release_coeff: f32,
+    envelope: f32,     // current envelope level (linear)
+    sample_rate: f64,
+    attack_secs: f64,
+    release_secs: f64,
+}
+
+impl Compressor {
+    pub fn new(threshold_db: f32, ratio: f32, attack_secs: f64, release_secs: f64) -> Self {
+        let ratio = ratio.max(1.0);
+        let mut comp = Compressor {
+            threshold: threshold_db,
+            ratio,
+            attack_coeff: 0.0,
+            release_coeff: 0.0,
+            envelope: 0.0,
+            sample_rate: 0.0,
+            attack_secs,
+            release_secs,
+        };
+        comp.set_sample_rate(DEFAULT_SR);
+        comp
+    }
+
+    fn compute_coeffs(time_secs: f64, sample_rate: f64) -> f32 {
+        if time_secs <= 0.0 || sample_rate <= 0.0 {
+            return 0.0;
+        }
+        (-1.0 / (time_secs * sample_rate)).exp() as f32
+    }
+}
+
+impl AudioNode for Compressor {
+    const ID: u64 = 1002;
+    type Inputs = U1;
+    type Outputs = U1;
+
+    fn reset(&mut self) {
+        self.envelope = 0.0;
+    }
+
+    fn set_sample_rate(&mut self, sample_rate: f64) {
+        if self.sample_rate != sample_rate {
+            self.sample_rate = sample_rate;
+            self.attack_coeff = Self::compute_coeffs(self.attack_secs, sample_rate);
+            self.release_coeff = Self::compute_coeffs(self.release_secs, sample_rate);
+        }
+    }
+
+    #[inline]
+    fn tick(&mut self, input: &Frame<f32, Self::Inputs>) -> Frame<f32, Self::Outputs> {
+        let x = input[0];
+        let abs_x = x.abs();
+
+        // Envelope follower: fast attack, slow release
+        if abs_x > self.envelope {
+            self.envelope = self.attack_coeff * self.envelope + (1.0 - self.attack_coeff) * abs_x;
+        } else {
+            self.envelope = self.release_coeff * self.envelope + (1.0 - self.release_coeff) * abs_x;
+        }
+
+        // Convert envelope to dB
+        let env_db = if self.envelope > 1e-10 {
+            20.0 * self.envelope.log10()
+        } else {
+            -200.0 // effectively silence
+        };
+
+        // Compute gain reduction
+        let gain_db = if env_db > self.threshold {
+            let over = env_db - self.threshold;
+            let compressed_over = over / self.ratio;
+            self.threshold + compressed_over - env_db
+        } else {
+            0.0
+        };
+
+        // Apply gain (convert dB back to linear)
+        let gain = (10.0_f32).powf(gain_db / 20.0);
+        [x * gain].into()
+    }
+}

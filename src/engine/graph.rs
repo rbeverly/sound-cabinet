@@ -5,7 +5,7 @@ use fundsp::hacker::*;
 
 use crate::dsl::ast::Expr;
 use crate::dsl::parser::resolve_chord;
-use crate::engine::effects::{FeedbackDelay, Freeverb};
+use crate::engine::effects::{Compressor, FeedbackDelay, Freeverb};
 
 /// Translate an AST Expr into a fundsp Net (boxed dynamic signal graph).
 ///
@@ -304,6 +304,27 @@ fn build_fn_call(
             let damping = expect_number(args, 1, name)? as f32;
             let mix = expect_number(args, 2, name)? as f32;
             let mut net = Net::wrap(Box::new(An(Freeverb::new(room_size, damping, mix))));
+            net.set_sample_rate(sample_rate);
+            Ok(net)
+        }
+
+        // Compressor: dynamic range compression
+        // compress(threshold_db, ratio, attack_secs, release_secs)
+        // e.g., compress(-20, 4, 0.01, 0.1)
+        "compress" => {
+            let threshold = expect_number(args, 0, name)? as f32;
+            let ratio = expect_number(args, 1, name)? as f32;
+            let attack = if args.len() > 2 {
+                expect_number(args, 2, name)?
+            } else {
+                0.01 // 10ms default attack
+            };
+            let release = if args.len() > 3 {
+                expect_number(args, 3, name)?
+            } else {
+                0.1 // 100ms default release
+            };
+            let mut net = Net::wrap(Box::new(An(Compressor::new(threshold, ratio, attack, release))));
             net.set_sample_rate(sample_rate);
             Ok(net)
         }
