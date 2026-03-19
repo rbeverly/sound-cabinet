@@ -1,4 +1,4 @@
-// lofi-afternoon-v2.sc
+// lofi-afternoon.sc
 // A ~2 minute lo-fi composition with arrangement arc.
 
 import voices/lofi-kit.sc
@@ -37,30 +37,24 @@ pattern hats_push = 4 beats
   at 3   play hat for 0.2 beats
   at 3.5 play hat for 0.1 beats
 
+// Chord progression: Cm7 → Abmaj7 → Fm7 → G7
 pattern chords = 16 beats
-  at 0  play chord1 for 4 beats
-  at 4  play chord2 for 4 beats
-  at 8  play chord3 for 4 beats
-  at 12 play chord4 for 4 beats
+  at 0  play chord_pad(Cm7) for 4 beats
+  at 4  play chord_pad(Abmaj7) for 4 beats
+  at 8  play chord_pad(Fm7) for 4 beats
+  at 12 play chord_pad(Gdom7) for 4 beats
 
-pattern bass = 16 beats
-  at 0  play bass_c  for 4 beats
-  at 4  play bass_ab for 4 beats
-  at 8  play bass_f  for 4 beats
-  at 12 play bass_g  for 4 beats
+// Bass follows chord roots
+pattern bass_line = 16 beats
+  at 0  play bass(C2) for 4 beats
+  at 4  play bass(Ab1) for 4 beats
+  at 8  play bass(F1) for 4 beats
+  at 12 play bass(G1) for 4 beats
 
 // Vinyl texture — constant hiss + surface imperfections cycling with the record
 // 33 RPM = 1.82s per rotation = 2.27 beats at 75 bpm
 // 3 imperfections on the surface: a pop, a click, and a scratch
 // They repeat every 2.27 beats as the record comes around
-//
-// Rotation 1: 0.00  |  Rotation 2: 2.27  |  Rotation 3: 4.54
-// Rotation 4: 6.81  |  Rotation 5: 9.08  |  Rotation 6: 11.35
-// Rotation 7: 13.62
-//
-// Imperfection A (pop):     +0.0 into each rotation
-// Imperfection B (click):   +0.15 into each rotation (close to A — same scuff)
-// Imperfection C (scratch): +1.2 into each rotation (far side of the disc)
 pattern vinyl = 16 beats
   at 0    play hiss for 16 beats
   at 0.0  play pop for 0.1 beats
@@ -86,72 +80,72 @@ pattern vinyl = 16 beats
   at 14.82 play scratch for 0.15 beats
 
 pattern melody_a = 16 beats
-  at 0   play mel_c5  for 1 beat
-  at 1.5 play mel_eb5 for 0.5 beats
-  at 2   play mel_g4  for 2 beats
-  at 4   play mel_bb4 for 1.5 beats
-  at 6   play mel_g4  for 1 beat
-  at 7.5 play mel_eb5 for 0.5 beats
-  at 8   play mel_c5  for 1 beat
-  at 9   play mel_eb5 for 1 beat
-  at 10  play mel_f5  for 1 beat
-  at 11  play mel_eb5 for 1 beat
-  at 12  play mel_g4  for 2 beats
-  at 14  play mel_bb4 for 1 beat
-  at 15  play mel_c5  for 1 beat
+  at 0   play mel(C5)  for 1 beat
+  at 1.5 play mel(Eb5) for 0.5 beats
+  at 2   play mel(G4)  for 2 beats
+  at 4   play mel(Bb4) for 1.5 beats
+  at 6   play mel(G4)  for 1 beat
+  at 7.5 play mel(Eb5) for 0.5 beats
+  at 8   play mel(C5)  for 1 beat
+  at 9   play mel(Eb5) for 1 beat
+  at 10  play mel(F5)  for 1 beat
+  at 11  play mel(Eb5) for 1 beat
+  at 12  play mel(G4)  for 2 beats
+  at 14  play mel(Bb4) for 1 beat
+  at 15  play mel(C5)  for 1 beat
 
 pattern melody_b = 16 beats
-  at 0   play mel_eb5 for 1 beat
-  at 1   play mel_c5  for 1.5 beats
-  at 3   play mel_g4  for 1 beat
-  at 4   play mel_bb4 for 1 beat
-  at 5   play mel_c5  for 1 beat
-  at 6.5 play mel_eb5 for 1.5 beats
-  at 8   play mel_f5  for 1 beat
-  at 9   play mel_eb5 for 0.5 beats
-  at 9.5 play mel_c5  for 1.5 beats
-  at 11  play mel_g4  for 1 beat
-  at 12  play mel_c5  for 1.5 beats
-  at 14  play mel_eb5 for 1 beat
-  at 15  play mel_g4  for 1 beat
+  at 0   play mel(Eb5) for 1 beat
+  at 1   play mel(C5)  for 1.5 beats
+  at 3   play mel(G4)  for 1 beat
+  at 4   play mel(Bb4) for 1 beat
+  at 5   play mel(C5)  for 1 beat
+  at 6.5 play mel(Eb5) for 1.5 beats
+  at 8   play mel(F5)  for 1 beat
+  at 9   play mel(Eb5) for 0.5 beats
+  at 9.5 play mel(C5)  for 1.5 beats
+  at 11  play mel(G4)  for 1 beat
+  at 12  play mel(C5)  for 1.5 beats
+  at 14  play mel(Eb5) for 1 beat
+  at 15  play mel(G4)  for 1 beat
 
 // Climax melody — more active, higher register
 pattern melody_climax = 16 beats
-  at 0   play mel_f5  for 0.5 beats
-  at 0.5 play mel_eb5 for 0.5 beats
-  at 1   play mel_c5  for 1 beat
-  at 2   play mel_eb5 for 1 beat
-  at 3   play mel_f5  for 1 beat
-  at 4   play mel_eb5 for 0.5 beats
-  at 4.5 play mel_c5  for 0.5 beats
-  at 5   play mel_bb4 for 1 beat
-  at 6   play mel_c5  for 1 beat
-  at 7   play mel_eb5 for 1 beat
-  at 8   play mel_f5  for 1.5 beats
-  at 10  play mel_eb5 for 1 beat
-  at 11  play mel_f5  for 0.5 beats
-  at 11.5 play mel_eb5 for 0.5 beats
-  at 12  play mel_c5  for 1.5 beats
-  at 14  play mel_eb5 for 1 beat
-  at 15  play mel_f5  for 1 beat
+  at 0   play mel(F5)  for 0.5 beats
+  at 0.5 play mel(Eb5) for 0.5 beats
+  at 1   play mel(C5)  for 1 beat
+  at 2   play mel(Eb5) for 1 beat
+  at 3   play mel(F5)  for 1 beat
+  at 4   play mel(Eb5) for 0.5 beats
+  at 4.5 play mel(C5)  for 0.5 beats
+  at 5   play mel(Bb4) for 1 beat
+  at 6   play mel(C5)  for 1 beat
+  at 7   play mel(Eb5) for 1 beat
+  at 8   play mel(F5)  for 1.5 beats
+  at 10  play mel(Eb5) for 1 beat
+  at 11  play mel(F5)  for 0.5 beats
+  at 11.5 play mel(Eb5) for 0.5 beats
+  at 12  play mel(C5)  for 1.5 beats
+  at 14  play mel(Eb5) for 1 beat
+  at 15  play mel(F5)  for 1 beat
 
 pattern sparse_melody = 16 beats
-  at 0   play mel_c5  for 2 beats
-  at 4   play mel_eb5 for 2 beats
-  at 8   play mel_g4  for 4 beats
+  at 0   play mel(C5)  for 2 beats
+  at 4   play mel(Eb5) for 2 beats
+  at 8   play mel(G4)  for 4 beats
 
 // -- Sections --
 
 // Just chords, bass, crackle — no drums, no melody
 section intro = 16 beats
   play chords
-  play bass
+  play bass_line
   play vinyl
 
 // Drums enter, no melody yet — lets the beat land
 section drums_only = 16 beats
   play chords
-  play bass
+  play bass_line
   play vinyl
   repeat boom_bap every 4 beats
   repeat hats every 4 beats
@@ -159,7 +153,7 @@ section drums_only = 16 beats
 // Full groove — drums + melody
 section groove_a = 16 beats
   play chords
-  play bass
+  play bass_line
   play vinyl
   repeat boom_bap every 4 beats
   repeat hats every 4 beats
@@ -167,7 +161,7 @@ section groove_a = 16 beats
 
 section groove_b = 16 beats
   play chords
-  play bass
+  play bass_line
   play vinyl
   repeat boom_bap every 4 beats
   repeat hats every 4 beats
@@ -176,7 +170,7 @@ section groove_b = 16 beats
 // Climax — ghost notes and hat pickups add energy without changing tempo
 section climax = 16 beats
   play chords
-  play bass
+  play bass_line
   play vinyl
   repeat boom_bap_busy every 4 beats
   repeat hats_push every 4 beats
@@ -185,7 +179,7 @@ section climax = 16 beats
 // Wind down — back to simple drums, sparse melody
 section wind_down = 16 beats
   play chords
-  play bass
+  play bass_line
   play vinyl
   repeat boom_bap every 4 beats
   play sparse_melody
@@ -193,7 +187,7 @@ section wind_down = 16 beats
 // Outro — no drums
 section outro = 16 beats
   play chords
-  play bass
+  play bass_line
   play vinyl
   play sparse_melody
 

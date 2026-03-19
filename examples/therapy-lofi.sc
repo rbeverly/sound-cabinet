@@ -14,17 +14,17 @@ bpm 68
 
 // 4-bar chord cycle: Dm9 → Bbmaj7 → Gm7 → A7
 pattern chords_cycle = 16 beats
-  at 0 play chord_dm for 4 beats
-  at 4 play chord_bb for 4 beats
-  at 8 play chord_gm for 4 beats
-  at 12 play chord_a7 for 4 beats
+  at 0 play chord_pad(Dm9) for 4 beats
+  at 4 play chord_pad(Bbmaj7) for 4 beats
+  at 8 play chord_pad(Gm7) for 4 beats
+  at 12 play chord_pad(Adom7) for 4 beats
 
 // Bass follows root
 pattern bass_cycle = 16 beats
-  at 0 play bass_d for 3.5 beats
-  at 4 play bass_bb for 3.5 beats
-  at 8 play bass_g for 3.5 beats
-  at 12 play bass_a for 3.5 beats
+  at 0 play bass(D1) for 3.5 beats
+  at 4 play bass(Bb0) for 3.5 beats
+  at 8 play bass(G1) for 3.5 beats
+  at 12 play bass(A1) for 3.5 beats
 
 // Basic boom-bap
 pattern drums_basic = 4 beats
@@ -65,67 +65,67 @@ pattern vinyl_rotation = 2 beats
 // Melody A: rising runs, singable phrases — eighth-note grid
 pattern melody_a = 16 beats
   // Over Dm9: rising run
-  at 0.5 play mel_d4 >> swell(0.05, 0.2) for 0.5 beats
-  at 1.0 play mel_f4 >> swell(0.05, 0.2) for 0.5 beats
-  at 1.5 play mel_a4 >> swell(0.05, 0.3) for 0.5 beats
-  at 2.0 play mel_d5 >> swell(0.05, 0.5) for 1.5 beats
+  at 0.5 play mel_low(D4) >> swell(0.05, 0.2) for 0.5 beats
+  at 1.0 play mel_low(F4) >> swell(0.05, 0.2) for 0.5 beats
+  at 1.5 play mel(A4) >> swell(0.05, 0.3) for 0.5 beats
+  at 2.0 play mel(D5) >> swell(0.05, 0.5) for 1.5 beats
   // Over Bbmaj7: descending answer
-  at 4.5 play mel_d5 >> swell(0.05, 0.3) for 0.5 beats
-  at 5.0 play mel_bb4 >> swell(0.05, 0.4) for 0.5 beats
-  at 5.5 play mel_a4 >> swell(0.05, 0.3) for 0.5 beats
-  at 6.0 play mel_f4 >> swell(0.05, 0.5) for 1.5 beats
+  at 4.5 play mel(D5) >> swell(0.05, 0.3) for 0.5 beats
+  at 5.0 play mel(Bb4) >> swell(0.05, 0.4) for 0.5 beats
+  at 5.5 play mel(A4) >> swell(0.05, 0.3) for 0.5 beats
+  at 6.0 play mel_low(F4) >> swell(0.05, 0.5) for 1.5 beats
   // Over Gm7: rising phrase
-  at 8.0 play mel_g4 >> swell(0.05, 0.2) for 0.5 beats
-  at 8.5 play mel_bb4 >> swell(0.05, 0.2) for 0.5 beats
-  at 9.0 play mel_c5 >> swell(0.05, 0.3) for 0.5 beats
-  at 9.5 play mel_d5 >> swell(0.05, 0.5) for 1.5 beats
+  at 8.0 play mel_low(G4) >> swell(0.05, 0.2) for 0.5 beats
+  at 8.5 play mel(Bb4) >> swell(0.05, 0.2) for 0.5 beats
+  at 9.0 play mel(C5) >> swell(0.05, 0.3) for 0.5 beats
+  at 9.5 play mel(D5) >> swell(0.05, 0.5) for 1.5 beats
   // Over A7: resolve
-  at 13.0 play mel_e5 >> swell(0.08, 0.4) for 0.5 beats
-  at 13.5 play mel_c5 >> swell(0.05, 0.6) for 2.0 beats
+  at 13.0 play mel(E5) >> swell(0.08, 0.4) for 0.5 beats
+  at 13.5 play mel(C5) >> swell(0.05, 0.6) for 2.0 beats
 
 // Melody B: descending, spacious, lyrical
 pattern melody_b = 16 beats
   // Over Dm9: high start, drift down
-  at 0.5 play mel_f5 >> swell(0.08, 0.4) for 1.0 beats
-  at 1.5 play mel_d5 >> swell(0.05, 0.5) for 1.0 beats
-  at 3.0 play mel_a4 >> swell(0.05, 0.4) for 1.0 beats
+  at 0.5 play mel(F5) >> swell(0.08, 0.4) for 1.0 beats
+  at 1.5 play mel(D5) >> swell(0.05, 0.5) for 1.0 beats
+  at 3.0 play mel(A4) >> swell(0.05, 0.4) for 1.0 beats
   // Over Bbmaj7: gentle rising turn
-  at 5.0 play mel_bb4 >> swell(0.05, 0.3) for 0.5 beats
-  at 5.5 play mel_c5 >> swell(0.05, 0.5) for 1.0 beats
-  at 7.0 play mel_d5 >> swell(0.08, 0.4) for 1.0 beats
+  at 5.0 play mel(Bb4) >> swell(0.05, 0.3) for 0.5 beats
+  at 5.5 play mel(C5) >> swell(0.05, 0.5) for 1.0 beats
+  at 7.0 play mel(D5) >> swell(0.08, 0.4) for 1.0 beats
   // Over Gm7: spacious arc
-  at 9.0 play mel_g5 >> swell(0.08, 0.5) for 1.5 beats
-  at 10.5 play mel_d5 >> swell(0.05, 0.4) for 1.0 beats
+  at 9.0 play mel(G5) >> swell(0.08, 0.5) for 1.5 beats
+  at 10.5 play mel(D5) >> swell(0.05, 0.4) for 1.0 beats
   // Over A7: low resolve
-  at 12.5 play mel_c5 >> swell(0.05, 0.3) for 0.5 beats
-  at 13.0 play mel_a4 >> swell(0.05, 0.5) for 1.0 beats
-  at 14.0 play mel_e4 >> swell(0.05, 0.5) for 1.5 beats
+  at 12.5 play mel(C5) >> swell(0.05, 0.3) for 0.5 beats
+  at 13.0 play mel(A4) >> swell(0.05, 0.5) for 1.0 beats
+  at 14.0 play mel_low(E4) >> swell(0.05, 0.5) for 1.5 beats
 
 // Melody C: rhythmic repeating-figure feel
 pattern melody_c = 16 beats
   // Over Dm9: call
-  at 0.0 play mel_a4 >> swell(0.05, 0.2) for 0.5 beats
-  at 0.5 play mel_d5 >> swell(0.05, 0.2) for 0.5 beats
-  at 1.5 play mel_f5 >> swell(0.05, 0.5) for 1.5 beats
-  at 3.5 play mel_d5 >> swell(0.05, 0.3) for 0.5 beats
+  at 0.0 play mel(A4) >> swell(0.05, 0.2) for 0.5 beats
+  at 0.5 play mel(D5) >> swell(0.05, 0.2) for 0.5 beats
+  at 1.5 play mel(F5) >> swell(0.05, 0.5) for 1.5 beats
+  at 3.5 play mel(D5) >> swell(0.05, 0.3) for 0.5 beats
   // Over Bbmaj7: answer
-  at 4.5 play mel_bb4 >> swell(0.05, 0.3) for 0.5 beats
-  at 5.0 play mel_c5 >> swell(0.05, 0.3) for 0.5 beats
-  at 5.5 play mel_d5 >> swell(0.05, 0.5) for 2.0 beats
+  at 4.5 play mel(Bb4) >> swell(0.05, 0.3) for 0.5 beats
+  at 5.0 play mel(C5) >> swell(0.05, 0.3) for 0.5 beats
+  at 5.5 play mel(D5) >> swell(0.05, 0.5) for 2.0 beats
   // Over Gm7: building
-  at 8.0 play mel_g4 >> swell(0.05, 0.2) for 0.5 beats
-  at 8.5 play mel_bb4 >> swell(0.05, 0.2) for 0.5 beats
-  at 9.0 play mel_d5 >> swell(0.05, 0.3) for 0.5 beats
-  at 9.5 play mel_f5 >> swell(0.05, 0.5) for 1.5 beats
+  at 8.0 play mel_low(G4) >> swell(0.05, 0.2) for 0.5 beats
+  at 8.5 play mel(Bb4) >> swell(0.05, 0.2) for 0.5 beats
+  at 9.0 play mel(D5) >> swell(0.05, 0.3) for 0.5 beats
+  at 9.5 play mel(F5) >> swell(0.05, 0.5) for 1.5 beats
   // Over A7: resolution
-  at 12.5 play mel_c5 >> swell(0.05, 0.5) for 1.0 beats
-  at 13.5 play mel_a4 >> swell(0.05, 0.6) for 2.0 beats
+  at 12.5 play mel(C5) >> swell(0.05, 0.5) for 1.0 beats
+  at 13.5 play mel(A4) >> swell(0.05, 0.6) for 2.0 beats
 
 // Light melody — sparse hints, for early sections before full melody enters
 pattern melody_light = 16 beats
-  at 2.0 play mel_d5 >> swell(0.08, 0.5) for 1.5 beats
-  at 5.5 play mel_f5 >> swell(0.08, 0.5) for 1.2 beats
-  at 10.0 play mel_d5 >> swell(0.08, 0.6) for 1.8 beats
+  at 2.0 play mel(D5) >> swell(0.08, 0.5) for 1.5 beats
+  at 5.5 play mel(F5) >> swell(0.08, 0.5) for 1.2 beats
+  at 10.0 play mel(D5) >> swell(0.08, 0.6) for 1.8 beats
 
 // --- Therapeutic tone combos (gamma fades in/out like insect waves) ---
 
@@ -258,24 +258,24 @@ section outro = 8 beats
 
 // --- Arrangement ---
 // 4 + 16*17 + 8 = 284 beats
-// @ 68 BPM ≈ 251s ≈ ~4:11
+// @ 68 BPM = ~4:11
 
 play intro
-play verse_soft                 // pure atmosphere, no melody
-play verse_soft_mel             // light melody hints emerge
-play verse_crisp_mel            // gamma shifts to crisp, melody continues
-play verse_full_crisp           // full melody A kicks in, ghost drums
-play verse_full_wash            // melody B, soft gamma
-play breakdown                  // breathing room
-play climax                     // both gammas, full arrangement
+play verse_soft
+play verse_soft_mel
+play verse_crisp_mel
+play verse_full_crisp
+play verse_full_wash
+play breakdown
+play climax
 repeat 3 {
   pick [verse_full_crisp:2, verse_full_wash:2, verse_full_c:1]
 }
-play breakdown                  // second breathing room
-play climax                     // build back up
+play breakdown
+play climax
 repeat 2 {
   pick [verse_full_wash:2, verse_full_c:2, verse_full_crisp:1]
 }
-play verse_soft_mel             // winding down, light melody
-play verse_soft                 // final calm
+play verse_soft_mel
+play verse_soft
 play outro
