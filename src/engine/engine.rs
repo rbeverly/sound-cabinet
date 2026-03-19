@@ -26,6 +26,8 @@ pub struct Engine {
     voices: HashMap<String, Expr>,
     schedule: Vec<ScheduledEvent>,
     current_sample: u64,
+    pedal_windows: Vec<(u64, u64)>,
+    pedal_pending: Option<u64>,
 }
 
 impl Engine {
@@ -36,6 +38,8 @@ impl Engine {
             voices: HashMap::new(),
             schedule: Vec::new(),
             current_sample: 0,
+            pedal_windows: Vec::new(),
+            pedal_pending: None,
         }
     }
 
@@ -76,6 +80,16 @@ impl Engine {
                         net,
                         swell,
                     });
+                }
+            }
+            Command::PedalDown { beat } => {
+                let sample = self.beats_to_samples(beat);
+                self.pedal_pending = Some(sample);
+            }
+            Command::PedalUp { beat } => {
+                let up_sample = self.beats_to_samples(beat);
+                if let Some(down_sample) = self.pedal_pending.take() {
+                    self.pedal_windows.push((down_sample, up_sample));
                 }
             }
             // These variants are resolved before reaching the engine
@@ -128,6 +142,23 @@ impl Engine {
             other => self.handle_command(other)?,
         }
         Ok(())
+    }
+
+    /// Apply sustain pedal windows to scheduled events.
+    /// Notes whose end_sample falls within a pedal window get extended to the pedal-up sample.
+    /// Call this after all commands have been processed but before rendering.
+    pub fn apply_pedal(&mut self) {
+        if self.pedal_windows.is_empty() {
+            return;
+        }
+        for event in &mut self.schedule {
+            for &(down, up) in &self.pedal_windows {
+                if down <= event.end_sample && event.end_sample <= up {
+                    event.end_sample = up;
+                    break;
+                }
+            }
+        }
     }
 
     /// Render audio samples into the output buffer (mono f32).

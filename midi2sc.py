@@ -70,6 +70,53 @@ def tick_to_beats(target_tick, tpb):
     """Convert MIDI tick to beat number."""
     return target_tick / tpb
 
+def extract_pedal_windows(track):
+    """Extract sustain pedal (CC64) on/off windows as [(down_tick, up_tick), ...]."""
+    windows = []
+    pedal_down_tick = None
+    tick = 0
+
+    for msg in track:
+        tick += msg.time
+        if msg.type == 'control_change' and msg.control == 64:
+            if msg.value >= 64 and pedal_down_tick is None:
+                pedal_down_tick = tick
+            elif msg.value < 64 and pedal_down_tick is not None:
+                windows.append((pedal_down_tick, tick))
+                pedal_down_tick = None
+
+    return windows
+
+
+def apply_sustain_pedal(notes, pedal_windows):
+    """Extend note durations based on sustain pedal windows.
+
+    When a note's key-release falls during a pedal-down window, its duration
+    is extended to the pedal-up moment. This matches real piano behavior where
+    the sustain pedal holds dampers off the strings.
+    """
+    if not pedal_windows:
+        return notes
+
+    sustained = []
+    for start_tick, end_tick, midi_note, vel in notes:
+        new_end = end_tick
+        for pedal_down, pedal_up in pedal_windows:
+            # Note ends while pedal is down — extend to pedal up
+            if pedal_down <= end_tick <= pedal_up:
+                new_end = max(new_end, pedal_up)
+                break
+            # Note starts before pedal and ends after pedal down —
+            # also extend (pedal caught a ringing note)
+            if start_tick < pedal_down < end_tick:
+                new_end = max(new_end, pedal_up)
+                # Don't break — check further windows in case of
+                # overlapping pedal presses
+        sustained.append((start_tick, new_end, midi_note, vel))
+
+    return sorted(sustained)
+
+
 def extract_notes(track):
     """Extract note events as (start_tick, end_tick, midi_note, velocity)."""
     notes = []
@@ -102,6 +149,7 @@ def generate_sc(
     swell_release,
     pattern_size_beats,
     instrument_name=None,
+    pedal_windows=None,
 ):
     """Generate .sc file content from extracted MIDI notes."""
 
@@ -114,11 +162,24 @@ def generate_sc(
     lines.append(f"bpm {bpm}")
     lines.append(f"")
 
+    # Emit sustain pedal commands (engine-level pedal)
+    beats_per_second = bpm / 60.0
+    if pedal_windows:
+        for down_tick, up_tick in pedal_windows:
+            t_down = tick_to_seconds(down_tick, tpb, tempo_map)
+            t_up = tick_to_seconds(up_tick, tpb, tempo_map)
+            if t_down > max_seconds:
+                break
+            beat_down = round(t_down * beats_per_second, 2)
+            beat_up = round(min(t_up, max_seconds) * beats_per_second, 2)
+            lines.append(f"pedal down at {beat_down}")
+            lines.append(f"pedal up at {beat_up}")
+        lines.append(f"")
+
     # Filter notes to time range and convert to beat-based timing.
     # CRITICAL: use the tempo map to get real-time positions, then
     # convert to output beats. This respects tempo changes in the MIDI.
     beat_notes = []  # (beat, voice_name, velocity, duration_beats, note_name)
-    beats_per_second = bpm / 60.0
 
     for start_tick, end_tick, midi_note, vel in notes:
         t_start = tick_to_seconds(start_tick, tpb, tempo_map)
@@ -299,6 +360,7 @@ def main():
     parser.add_argument("--swell-release", type=float, default=0.5, help="Swell release time")
     parser.add_argument("--pattern-size", type=int, default=16, help="Pattern size in beats")
     parser.add_argument("--instrument", default=None, help="Instrument name to use (e.g., 'piano'). Uses instrument(Note) syntax instead of per-note voices.")
+    parser.add_argument("--pedal", action="store_true", help="Apply sustain pedal (CC64) data to extend note durations")
     parser.add_argument("--generate-kit", action="store_true", help="Generate voice kit file instead of composition")
     parser.add_argument("--kit-output", default="voices/auto-kit.sc", help="Output path for generated voice kit")
     parser.add_argument("--list-tracks", action="store_true", help="List tracks and exit")
@@ -322,6 +384,15 @@ def main():
     notes = extract_notes(track)
     print(f"Extracted {len(notes)} notes from track {args.track}: '{track.name}'")
 
+    pedal_windows_for_sc = None
+    if args.pedal:
+        pedal_windows = extract_pedal_windows(track)
+        if pedal_windows:
+            # Pass pedal windows to SC generation (engine handles sustain)
+            # Don't extend note durations — the engine extends events at render time
+            pedal_windows_for_sc = pedal_windows
+            print(f"Found {len(pedal_windows)} sustain pedal windows (engine pedal)")
+
     if args.generate_kit:
         kit_content = generate_voice_kit(notes, mid.ticks_per_beat, tempo_map, args.max_time, args.voice_prefix)
         with open(args.kit_output, 'w') as f:
@@ -344,6 +415,7 @@ def main():
             args.swell_release,
             args.pattern_size,
             instrument_name=args.instrument,
+            pedal_windows=pedal_windows_for_sc,
         )
         with open(args.output, 'w') as f:
             f.write(sc_content)

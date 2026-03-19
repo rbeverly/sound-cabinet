@@ -469,6 +469,34 @@ at 0 play kick vel 0.9 for 0.5 beats
 at 1 play snare vel 0.6 for 0.25 beats
 ```
 
+### Compressor
+
+Dynamic range compression — reduces the volume of loud sounds and boosts quiet ones. Fundamental to making mixes sound polished and professional. Used on nearly every track in modern production:
+
+```
+voice drums = kick + snare >> compress(threshold, ratio, attack, release)
+```
+
+### Sostenuto pedal
+
+Selective sustain — only holds notes that are already pressed when the pedal goes down. New notes played after are damped normally. Used for holding a bass note while playing staccato melody above it:
+
+```
+sostenuto down at 4.0    // captures currently-sounding notes
+sostenuto up at 8.0      // releases only those notes
+```
+
+Requires per-note tracking of which events were active at pedal-down time, unlike the sustain pedal which extends all notes blindly.
+
+### Una corda (soft pedal)
+
+Shifts the piano hammer mechanism to strike fewer strings — quieter and timbrally darker, not just a volume reduction. In the engine this would apply a gain reduction + lowpass filter shift to all notes while the pedal is down:
+
+```
+soft down at 4.0
+soft up at 8.0
+```
+
 ### Parameter automation
 
 Sweep any parameter over the duration of an event:

@@ -61,6 +61,7 @@ fn cmd_render(args: &[String]) -> Result<()> {
     for cmd in script.commands {
         engine.handle_command(cmd)?;
     }
+    engine.apply_pedal();
 
     render_to_wav(&mut engine, &output_path)?;
     eprintln!("Rendered to {}", output_path.display());
@@ -85,6 +86,7 @@ fn cmd_play(args: &[String]) -> Result<()> {
     for cmd in script.commands {
         engine.handle_command(cmd)?;
     }
+    engine.apply_pedal();
 
     eprintln!("Playing... (Ctrl+C to stop)");
     realtime::play_realtime(engine)?;

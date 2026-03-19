@@ -81,6 +81,10 @@ pub enum Command {
         count: u32,
         body: Vec<RepeatBody>,
     },
+    /// Sustain pedal down: `pedal down at 4.0`
+    PedalDown { beat: f64 },
+    /// Sustain pedal up: `pedal up at 8.0`
+    PedalUp { beat: f64 },
 }
 
 /// A complete parsed score file.

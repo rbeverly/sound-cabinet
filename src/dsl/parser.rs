@@ -161,6 +161,18 @@ pub fn parse_line(input: &str) -> Result<Command> {
             return parse_voice_def(pair);
         }
     }
+    if let Ok(pairs) = ScoreParser::parse(Rule::pedal_down_stmt, trimmed) {
+        for pair in pairs {
+            let beat: f64 = pair.into_inner().next().unwrap().as_str().parse().unwrap();
+            return Ok(Command::PedalDown { beat });
+        }
+    }
+    if let Ok(pairs) = ScoreParser::parse(Rule::pedal_up_stmt, trimmed) {
+        for pair in pairs {
+            let beat: f64 = pair.into_inner().next().unwrap().as_str().parse().unwrap();
+            return Ok(Command::PedalUp { beat });
+        }
+    }
     if let Ok(pairs) = ScoreParser::parse(Rule::bpm_stmt, trimmed) {
         for pair in pairs {
             return parse_bpm(pair);
@@ -215,6 +227,18 @@ fn parse_single_line(line: &str) -> Result<Option<Command>> {
     if let Ok(pairs) = ScoreParser::parse(Rule::instrument_def, line) {
         for pair in pairs {
             return Ok(Some(parse_voice_def(pair)?));
+        }
+    }
+    if let Ok(pairs) = ScoreParser::parse(Rule::pedal_down_stmt, line) {
+        for pair in pairs {
+            let beat: f64 = pair.into_inner().next().unwrap().as_str().parse().unwrap();
+            return Ok(Some(Command::PedalDown { beat }));
+        }
+    }
+    if let Ok(pairs) = ScoreParser::parse(Rule::pedal_up_stmt, line) {
+        for pair in pairs {
+            let beat: f64 = pair.into_inner().next().unwrap().as_str().parse().unwrap();
+            return Ok(Some(Command::PedalUp { beat }));
         }
     }
     if let Ok(pairs) = ScoreParser::parse(Rule::bpm_stmt, line) {
