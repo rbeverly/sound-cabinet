@@ -575,13 +575,46 @@ fn parse_binary_expr(pair: Pair<Rule>) -> Result<Expr> {
     let mut left = parse_expr(first)?;
 
     while let Some(next) = inner.next() {
-        let right = parse_expr(next)?;
-        left = match rule {
-            Rule::pipe_expr | Rule::expr => Expr::Pipe(Box::new(left), Box::new(right)),
-            Rule::sum_expr => Expr::Sum(Box::new(left), Box::new(right)),
-            Rule::mul_expr => Expr::Mul(Box::new(left), Box::new(right)),
-            _ => unreachable!(),
-        };
+        match rule {
+            Rule::mul_expr => {
+                // mul_expr has interleaved mul_op and atom tokens
+                if next.as_rule() == Rule::mul_op {
+                    let op = next.as_str();
+                    let operand = inner.next().unwrap();
+                    let right = parse_expr(operand)?;
+                    left = if op == "/" {
+                        Expr::Div(Box::new(left), Box::new(right))
+                    } else {
+                        Expr::Mul(Box::new(left), Box::new(right))
+                    };
+                } else {
+                    let right = parse_expr(next)?;
+                    left = Expr::Mul(Box::new(left), Box::new(right));
+                }
+            }
+            Rule::sum_expr => {
+                if next.as_rule() == Rule::sum_op {
+                    let op = next.as_str();
+                    let operand = inner.next().unwrap();
+                    let right = parse_expr(operand)?;
+                    left = if op == "-" {
+                        Expr::Sub(Box::new(left), Box::new(right))
+                    } else {
+                        Expr::Sum(Box::new(left), Box::new(right))
+                    };
+                } else {
+                    let right = parse_expr(next)?;
+                    left = Expr::Sum(Box::new(left), Box::new(right));
+                }
+            }
+            _ => {
+                let right = parse_expr(next)?;
+                left = match rule {
+                    Rule::pipe_expr | Rule::expr => Expr::Pipe(Box::new(left), Box::new(right)),
+                    _ => unreachable!(),
+                };
+            }
+        }
     }
 
     Ok(left)

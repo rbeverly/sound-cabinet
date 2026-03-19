@@ -13,6 +13,10 @@ pub enum Expr {
     Sum(Box<Expr>, Box<Expr>),
     /// Scale/multiply: a * b (typically number * signal or signal * number)
     Mul(Box<Expr>, Box<Expr>),
+    /// Divide: a / b (for inverse frequency scaling like 1000 / freq)
+    Div(Box<Expr>, Box<Expr>),
+    /// Subtract: a - b
+    Sub(Box<Expr>, Box<Expr>),
 }
 
 /// A single event within a pattern — beat offset is relative to pattern start.

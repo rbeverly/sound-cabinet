@@ -219,6 +219,7 @@ pedal down at 179.22
 pedal up at 180.37
 
 pattern part_0 = 16 beats
+  // Fm
   at 4.0 play 0.28 * piano(Ab3) >> swell(0.0, 0.5) for 4.0 beats
   at 4.0 play 0.34 * piano(Ab4) >> swell(0.0, 0.5) for 4.0 beats
   at 4.0 play 0.23 * piano(C3) >> swell(0.0, 0.5) for 4.0 beats
@@ -227,6 +228,7 @@ pattern part_0 = 16 beats
   at 4.0 play 0.22 * piano(F2) >> swell(0.0, 0.5) for 4.0 beats
   at 4.0 play 0.38 * piano(F4) >> swell(0.0, 0.5) for 4.0 beats
   at 6.0 play 0.24 * piano(F1) >> swell(0.0, 0.5) for 2.0 beats
+  // Dbmaj7
   at 8.0 play 0.25 * piano(Ab3) >> swell(0.0, 0.5) for 4.0 beats
   at 8.0 play 0.35 * piano(Ab4) >> swell(0.0, 0.5) for 4.0 beats
   at 8.0 play 0.21 * piano(C3) >> swell(0.0, 0.5) for 4.0 beats
@@ -247,6 +249,7 @@ pattern part_0 = 16 beats
   at 12.0 play 0.28 * piano(F2) >> swell(0.0, 0.5) for 4.0 beats
   at 12.0 play 0.48 * piano(F4) >> swell(0.0, 0.5) for 4.0 beats
   at 14.0 play 0.37 * piano(F1) >> swell(0.0, 0.5) for 2.0 beats
+  // Fm7
   at 16.0 play 0.43 * piano(Ab3) >> swell(0.0, 0.5) for 4.0 beats
   at 16.0 play 0.51 * piano(Ab4) >> swell(0.0, 0.5) for 4.0 beats
   at 16.0 play 0.42 * piano(C3) >> swell(0.0, 0.5) for 4.0 beats
@@ -259,6 +262,7 @@ pattern part_0 = 16 beats
 
 pattern part_1 = 16 beats
   at 2.0 play 0.46 * piano(F1) >> swell(0.0, 0.5) for 2.0 beats
+  // Fdom7
   at 4.0 play 0.52 * piano(A3) >> swell(0.0, 0.5) for 4.0 beats
   at 4.0 play 0.65 * piano(A4) >> swell(0.0, 0.5) for 4.0 beats
   at 4.0 play 0.48 * piano(C3) >> swell(0.0, 0.5) for 4.0 beats
@@ -269,6 +273,7 @@ pattern part_1 = 16 beats
   at 4.0 play 0.47 * piano(F2) >> swell(0.0, 0.5) for 4.0 beats
   at 4.0 play 0.61 * piano(F4) >> swell(0.0, 0.5) for 4.0 beats
   at 6.0 play 0.56 * piano(F1) >> swell(0.0, 0.5) for 2.0 beats
+  // Fm7
   at 8.0 play 0.56 * piano(Ab3) >> swell(0.0, 0.5) for 4.0 beats
   at 8.0 play 0.76 * piano(Ab4) >> swell(0.0, 0.5) for 4.0 beats
   at 8.0 play 0.57 * piano(C3) >> swell(0.0, 0.5) for 4.0 beats
@@ -289,6 +294,7 @@ pattern part_1 = 16 beats
   at 12.0 play 0.69 * piano(F2) >> swell(0.0, 0.5) for 4.0 beats
   at 12.0 play 0.84 * piano(F4) >> swell(0.0, 0.5) for 4.0 beats
   at 14.0 play 0.81 * piano(F1) >> swell(0.0, 0.5) for 2.0 beats
+  // Dbmaj7
   at 16.0 play 0.94 * piano(Ab4) >> swell(0.0, 0.5) for 4.36 beats
   at 16.0 play 0.74 * piano(C3) >> swell(0.0, 0.5) for 3.86 beats
   at 16.0 play 0.94 * piano(C4) >> swell(0.0, 0.5) for 4.36 beats
@@ -306,6 +312,7 @@ pattern part_2 = 16 beats
   at 2.0 play 0.83 * piano(F3) >> swell(0.0, 0.5) for 1.5 beats
   at 3.0 play 0.88 * piano(G1) >> swell(0.0, 0.5) for 1.5 beats
   at 3.0 play 0.84 * piano(G2) >> swell(0.0, 0.5) for 1.5 beats
+  // Cm
   at 3.85 play 0.83 * piano(C3) >> swell(0.0, 0.5) for 1.5 beats
   at 3.85 play 0.88 * piano(Eb3) >> swell(0.0, 0.5) for 1.5 beats
   at 3.85 play 0.89 * piano(G2) >> swell(0.0, 0.5) for 1.5 beats
@@ -622,6 +629,7 @@ pattern part_5 = 16 beats
   at 3.78 play 0.66 * piano(Gb3) >> swell(0.0, 0.5) for 1.5 beats
   at 4.03 play 0.65 * piano(C4) >> swell(0.0, 0.5) for 1.5 beats
   at 4.28 play 0.62 * piano(D4) >> swell(0.0, 0.5) for 1.5 beats
+  // Gmaj
   at 4.54 play 0.6 * piano(B3) >> swell(0.0, 0.5) for 1.5 beats
   at 4.54 play 0.55 * piano(D3) >> swell(0.0, 0.5) for 1.5 beats
   at 4.54 play 0.56 * piano(G1) >> swell(0.0, 0.5) for 1.5 beats
@@ -630,6 +638,7 @@ pattern part_5 = 16 beats
   at 5.2 play 0.55 * piano(G2) >> swell(0.0, 0.5) for 1.5 beats
   at 5.43 play 0.61 * piano(G3) >> swell(0.0, 0.5) for 1.5 beats
   at 5.65 play 0.57 * piano(B3) >> swell(0.0, 0.5) for 1.5 beats
+  // Fm
   at 5.87 play 0.57 * piano(Ab3) >> swell(0.0, 0.5) for 1.5 beats
   at 5.87 play 0.57 * piano(C4) >> swell(0.0, 0.5) for 1.5 beats
   at 5.87 play 0.56 * piano(F1) >> swell(0.0, 0.5) for 1.5 beats
@@ -747,18 +756,21 @@ pattern part_6 = 16 beats
   at 10.09 play 0.74 * piano(Ab2) >> swell(0.0, 0.5) for 1.5 beats
   at 10.2 play 0.71 * piano(F3) >> swell(0.0, 0.5) for 1.5 beats
   at 10.31 play 0.76 * piano(Db3) >> swell(0.0, 0.5) for 1.5 beats
+  // Fdim
   at 10.53 play 0.69 * piano(Ab3) >> swell(0.0, 0.5) for 1.5 beats
   at 10.53 play 0.71 * piano(B3) >> swell(0.0, 0.5) for 1.5 beats
   at 10.53 play 0.7 * piano(F4) >> swell(0.0, 0.5) for 1.5 beats
   at 10.76 play 0.75 * piano(Ab2) >> swell(0.0, 0.5) for 1.5 beats
   at 10.87 play 0.75 * piano(F3) >> swell(0.0, 0.5) for 1.5 beats
   at 10.98 play 0.7 * piano(Db3) >> swell(0.0, 0.5) for 1.5 beats
+  // Fdim
   at 11.2 play 0.72 * piano(Ab3) >> swell(0.0, 0.5) for 1.5 beats
   at 11.2 play 0.86 * piano(B3) >> swell(0.0, 0.5) for 1.5 beats
   at 11.2 play 0.84 * piano(F4) >> swell(0.0, 0.5) for 1.5 beats
   at 11.42 play 0.71 * piano(Ab3) >> swell(0.0, 0.5) for 1.5 beats
   at 11.53 play 0.91 * piano(F4) >> swell(0.0, 0.5) for 1.5 beats
   at 11.65 play 0.74 * piano(Db4) >> swell(0.0, 0.5) for 1.5 beats
+  // Fdim
   at 11.87 play 0.76 * piano(Ab4) >> swell(0.0, 0.5) for 1.5 beats
   at 11.87 play 0.98 * piano(B4) >> swell(0.0, 0.5) for 1.5 beats
   at 11.87 play 1.0 * piano(F5) >> swell(0.0, 0.5) for 1.5 beats
@@ -794,6 +806,7 @@ pattern part_6 = 16 beats
   at 15.42 play 0.71 * piano(Bb2) >> swell(0.0, 0.5) for 1.5 beats
   at 15.53 play 0.8 * piano(G3) >> swell(0.0, 0.5) for 1.5 beats
   at 15.65 play 0.73 * piano(Eb3) >> swell(0.0, 0.5) for 1.5 beats
+  // Gdim
   at 15.87 play 0.69 * piano(Bb3) >> swell(0.0, 0.5) for 1.5 beats
   at 15.87 play 0.82 * piano(Db4) >> swell(0.0, 0.5) for 1.5 beats
   at 15.87 play 0.8 * piano(G4) >> swell(0.0, 0.5) for 1.5 beats
@@ -802,12 +815,14 @@ pattern part_7 = 16 beats
   at 0.09 play 0.7 * piano(Bb2) >> swell(0.0, 0.5) for 1.5 beats
   at 0.2 play 0.85 * piano(G3) >> swell(0.0, 0.5) for 1.5 beats
   at 0.31 play 0.72 * piano(Eb3) >> swell(0.0, 0.5) for 1.5 beats
+  // Gdim
   at 0.53 play 0.71 * piano(Bb3) >> swell(0.0, 0.5) for 1.5 beats
   at 0.53 play 0.93 * piano(Db4) >> swell(0.0, 0.5) for 1.5 beats
   at 0.53 play 0.87 * piano(G4) >> swell(0.0, 0.5) for 1.5 beats
   at 0.76 play 0.76 * piano(Bb3) >> swell(0.0, 0.5) for 1.5 beats
   at 0.87 play 0.97 * piano(G4) >> swell(0.0, 0.5) for 1.5 beats
   at 0.98 play 0.69 * piano(Eb4) >> swell(0.0, 0.5) for 1.5 beats
+  // Gdim
   at 1.2 play 0.73 * piano(Bb4) >> swell(0.0, 0.5) for 1.5 beats
   at 1.2 play 0.96 * piano(Db5) >> swell(0.0, 0.5) for 1.5 beats
   at 1.2 play 0.98 * piano(G5) >> swell(0.0, 0.5) for 1.5 beats
@@ -843,18 +858,21 @@ pattern part_7 = 16 beats
   at 4.76 play 0.75 * piano(C3) >> swell(0.0, 0.5) for 1.5 beats
   at 4.87 play 0.76 * piano(Ab3) >> swell(0.0, 0.5) for 1.5 beats
   at 4.98 play 0.72 * piano(F3) >> swell(0.0, 0.5) for 1.5 beats
+  // Fm
   at 5.2 play 0.82 * piano(Ab4) >> swell(0.0, 0.5) for 1.5 beats
   at 5.2 play 0.7 * piano(C4) >> swell(0.0, 0.5) for 1.5 beats
   at 5.2 play 0.78 * piano(F4) >> swell(0.0, 0.5) for 1.5 beats
   at 5.42 play 0.71 * piano(C3) >> swell(0.0, 0.5) for 1.5 beats
   at 5.53 play 0.83 * piano(Ab3) >> swell(0.0, 0.5) for 1.5 beats
   at 5.64 play 0.73 * piano(F3) >> swell(0.0, 0.5) for 1.5 beats
+  // Fm
   at 5.87 play 0.94 * piano(Ab4) >> swell(0.0, 0.5) for 1.5 beats
   at 5.87 play 0.72 * piano(C4) >> swell(0.0, 0.5) for 1.5 beats
   at 5.87 play 0.91 * piano(F4) >> swell(0.0, 0.5) for 1.5 beats
   at 6.09 play 0.74 * piano(C4) >> swell(0.0, 0.5) for 1.5 beats
   at 6.2 play 0.95 * piano(Ab4) >> swell(0.0, 0.5) for 1.5 beats
   at 6.31 play 0.75 * piano(F4) >> swell(0.0, 0.5) for 1.5 beats
+  // Fm
   at 6.53 play 0.99 * piano(Ab5) >> swell(0.0, 0.5) for 1.5 beats
   at 6.53 play 0.72 * piano(C5) >> swell(0.0, 0.5) for 1.5 beats
   at 6.53 play 0.98 * piano(F5) >> swell(0.0, 0.5) for 1.5 beats
@@ -877,6 +895,7 @@ pattern part_7 = 16 beats
   at 8.76 play 0.73 * piano(Bb2) >> swell(0.0, 0.5) for 1.5 beats
   at 8.87 play 0.84 * piano(G3) >> swell(0.0, 0.5) for 1.5 beats
   at 8.98 play 0.76 * piano(Eb3) >> swell(0.0, 0.5) for 1.5 beats
+  // Gdim
   at 9.2 play 0.7 * piano(Bb3) >> swell(0.0, 0.5) for 1.5 beats
   at 9.2 play 0.8 * piano(Db4) >> swell(0.0, 0.5) for 1.5 beats
   at 9.2 play 0.74 * piano(G4) >> swell(0.0, 0.5) for 1.5 beats
@@ -1066,11 +1085,13 @@ pattern part_9 = 16 beats
   at 8.6 play 0.56 * piano(Db3) >> swell(0.0, 0.5) for 1.5 beats
   at 8.83 play 0.61 * piano(F3) >> swell(0.0, 0.5) for 1.5 beats
   at 9.05 play 0.55 * piano(C4) >> swell(0.0, 0.5) for 1.5 beats
+  // Ddim
   at 9.29 play 0.56 * piano(Ab3) >> swell(0.0, 0.5) for 1.5 beats
   at 9.29 play 0.43 * piano(D3) >> swell(0.0, 0.5) for 1.5 beats
   at 9.29 play 0.46 * piano(F3) >> swell(0.0, 0.5) for 1.5 beats
   at 9.52 play 0.58 * piano(B3) >> swell(0.0, 0.5) for 1.5 beats
   at 9.77 play 0.57 * piano(F4) >> swell(0.0, 0.5) for 1.5 beats
+  // Cdim
   at 10.02 play 0.6 * piano(C4) >> swell(0.0, 0.5) for 1.5 beats
   at 10.02 play 0.61 * piano(Eb4) >> swell(0.0, 0.5) for 1.5 beats
   at 10.02 play 0.57 * piano(Gb1) >> swell(0.0, 0.5) for 1.5 beats
@@ -1163,6 +1184,7 @@ pattern part_10 = 16 beats
   at 9.85 play 0.73 * piano(Bb4) >> swell(0.0, 0.5) for 1.5 beats
   at 10.04 play 0.5 * piano(Ab3) >> swell(0.0, 0.5) for 1.5 beats
   at 10.23 play 0.5 * piano(G3) >> swell(0.0, 0.5) for 1.5 beats
+  // Fm
   at 10.42 play 0.43 * piano(Ab3) >> swell(0.0, 0.5) for 1.5 beats
   at 10.42 play 0.57 * piano(C4) >> swell(0.0, 0.5) for 1.5 beats
   at 10.42 play 0.55 * piano(C5) >> swell(0.0, 0.5) for 1.5 beats
@@ -1407,6 +1429,7 @@ pattern part_11 = 16 beats
   at 14.83 play 0.21 * piano(G2) >> swell(0.0, 0.5) for 1.5 beats
   at 14.83 play 0.33 * piano(G4) >> swell(0.0, 0.5) for 1.5 beats
   at 14.93 play 0.31 * piano(F4) >> swell(0.0, 0.5) for 1.5 beats
+  // Cm
   at 15.04 play 0.35 * piano(C3) >> swell(0.0, 0.5) for 1.5 beats
   at 15.04 play 0.43 * piano(C5) >> swell(0.0, 0.5) for 1.5 beats
   at 15.04 play 0.39 * piano(Eb3) >> swell(0.0, 0.5) for 1.5 beats
@@ -1421,6 +1444,7 @@ pattern part_11 = 16 beats
   at 15.36 play 0.33 * piano(G2) >> swell(0.0, 0.5) for 1.5 beats
   at 15.36 play 0.32 * piano(G3) >> swell(0.0, 0.5) for 1.5 beats
   at 15.36 play 0.47 * piano(G4) >> swell(0.0, 0.5) for 1.5 beats
+  // Cm
   at 15.68 play 0.34 * piano(C3) >> swell(0.0, 0.5) for 1.5 beats
   at 15.68 play 0.5 * piano(C4) >> swell(0.0, 0.5) for 1.5 beats
   at 15.68 play 0.46 * piano(C5) >> swell(0.0, 0.5) for 1.5 beats
@@ -1438,6 +1462,7 @@ pattern part_12 = 16 beats
   at 0.64 play 0.38 * piano(G2) >> swell(0.0, 0.5) for 1.5 beats
   at 0.64 play 0.35 * piano(G3) >> swell(0.0, 0.5) for 1.5 beats
   at 0.64 play 0.45 * piano(G4) >> swell(0.0, 0.5) for 1.5 beats
+  // Cm
   at 0.96 play 0.4 * piano(C3) >> swell(0.0, 0.5) for 1.5 beats
   at 0.96 play 0.48 * piano(C4) >> swell(0.0, 0.5) for 1.5 beats
   at 0.96 play 0.54 * piano(C5) >> swell(0.0, 0.5) for 1.5 beats
@@ -1453,6 +1478,7 @@ pattern part_12 = 16 beats
   at 1.92 play 0.51 * piano(G2) >> swell(0.0, 0.5) for 1.5 beats
   at 1.92 play 0.51 * piano(G3) >> swell(0.0, 0.5) for 1.5 beats
   at 1.92 play 0.58 * piano(G4) >> swell(0.0, 0.5) for 1.5 beats
+  // Cm
   at 2.24 play 0.5 * piano(C3) >> swell(0.0, 0.5) for 1.5 beats
   at 2.24 play 0.59 * piano(C4) >> swell(0.0, 0.5) for 1.5 beats
   at 2.24 play 0.64 * piano(C5) >> swell(0.0, 0.5) for 1.5 beats
@@ -1468,6 +1494,7 @@ pattern part_12 = 16 beats
   at 2.56 play 0.52 * piano(G2) >> swell(0.0, 0.5) for 1.5 beats
   at 2.56 play 0.58 * piano(G3) >> swell(0.0, 0.5) for 1.5 beats
   at 2.56 play 0.63 * piano(G4) >> swell(0.0, 0.5) for 1.5 beats
+  // Cm
   at 2.88 play 0.6 * piano(C3) >> swell(0.0, 0.5) for 1.5 beats
   at 2.88 play 0.69 * piano(C4) >> swell(0.0, 0.5) for 1.5 beats
   at 2.88 play 0.71 * piano(C5) >> swell(0.0, 0.5) for 1.5 beats
@@ -1483,6 +1510,7 @@ pattern part_12 = 16 beats
   at 3.84 play 0.65 * piano(G2) >> swell(0.0, 0.5) for 1.5 beats
   at 3.84 play 0.69 * piano(G3) >> swell(0.0, 0.5) for 1.5 beats
   at 3.84 play 0.78 * piano(G4) >> swell(0.0, 0.5) for 1.5 beats
+  // Cm
   at 4.16 play 0.69 * piano(C3) >> swell(0.0, 0.5) for 1.5 beats
   at 4.16 play 0.81 * piano(C4) >> swell(0.0, 0.5) for 1.5 beats
   at 4.16 play 0.83 * piano(C5) >> swell(0.0, 0.5) for 1.5 beats

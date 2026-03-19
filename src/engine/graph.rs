@@ -54,6 +54,16 @@ pub fn build_graph(
             let net_b = build_graph(b, voices, sample_rate, duration_secs)?;
             Ok(net_a * net_b)
         }
+
+        Expr::Sub(a, b) => {
+            let net_a = build_graph(a, voices, sample_rate, duration_secs)?;
+            let net_b = build_graph(b, voices, sample_rate, duration_secs)?;
+            Ok(net_a - net_b)
+        }
+
+        Expr::Div(_, _) => {
+            Err(anyhow!("Division of signal graphs is not supported — use in instrument definitions where it constant-folds (e.g., 1000 / freq)"))
+        }
     }
 }
 
@@ -243,9 +253,26 @@ fn build_fn_call(
             Ok(net)
         }
 
-        // Instrument invocation: name(freq) — substitute freq into the template
+        // Instrument invocation: name(freq) or name(ChordName)
         _ => {
             if let Some(template) = voices.get(name) {
+                // Check if the argument is a chord name → sum instrument for each note
+                if let Some(Expr::VoiceRef(chord_name)) = args.first() {
+                    if let Some(chord_notes) = resolve_chord(chord_name) {
+                        let scale = 1.0 / chord_notes.len() as f32;
+                        let mut net = Net::wrap(Box::new(dc(0.0)));
+                        net.set_sample_rate(sample_rate);
+                        for freq in &chord_notes {
+                            let substituted = substitute_var(template, "freq", *freq);
+                            let note_net = build_graph(&substituted, voices, sample_rate, _duration_secs)?;
+                            let mut gain = Net::wrap(Box::new(dc(scale)));
+                            gain.set_sample_rate(sample_rate);
+                            net = net + (note_net * gain);
+                        }
+                        return Ok(net);
+                    }
+                }
+                // Single frequency
                 let freq = expect_number(args, 0, name)?;
                 let substituted = substitute_var(template, "freq", freq);
                 build_graph(&substituted, voices, sample_rate, _duration_secs)
@@ -387,6 +414,14 @@ pub fn substitute_freq(expr: &Expr, voices: &HashMap<String, Expr>, freq: f64) -
             Box::new(substitute_freq(a, voices, freq)),
             Box::new(substitute_freq(b, voices, freq)),
         ),
+        Expr::Div(a, b) => Expr::Div(
+            Box::new(substitute_freq(a, voices, freq)),
+            Box::new(substitute_freq(b, voices, freq)),
+        ),
+        Expr::Sub(a, b) => Expr::Sub(
+            Box::new(substitute_freq(a, voices, freq)),
+            Box::new(substitute_freq(b, voices, freq)),
+        ),
         other => other.clone(),
     }
 }
@@ -426,6 +461,29 @@ pub fn substitute_var(expr: &Expr, var: &str, value: f64) -> Expr {
                 Expr::Number(a_val * b_val)
             } else {
                 Expr::Mul(Box::new(sa), Box::new(sb))
+            }
+        }
+        Expr::Div(a, b) => {
+            let sa = substitute_var(a, var, value);
+            let sb = substitute_var(b, var, value);
+            // Constant fold: Number / Number → Number (with zero protection)
+            if let (Expr::Number(a_val), Expr::Number(b_val)) = (&sa, &sb) {
+                if *b_val == 0.0 {
+                    Expr::Number(0.0) // division by zero → 0 (safe default)
+                } else {
+                    Expr::Number(a_val / b_val)
+                }
+            } else {
+                Expr::Div(Box::new(sa), Box::new(sb))
+            }
+        }
+        Expr::Sub(a, b) => {
+            let sa = substitute_var(a, var, value);
+            let sb = substitute_var(b, var, value);
+            if let (Expr::Number(a_val), Expr::Number(b_val)) = (&sa, &sb) {
+                Expr::Number(a_val - b_val)
+            } else {
+                Expr::Sub(Box::new(sa), Box::new(sb))
             }
         }
         other => other.clone(),

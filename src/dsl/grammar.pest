@@ -54,11 +54,13 @@ shuffle_stmt = { "shuffle" ~ "[" ~ ident ~ ("," ~ ident)* ~ "]" }
 // Top-level play: play intro
 play_stmt = { "play" ~ ident }
 
-// Expressions — operator precedence: pipe (lowest) > sum > mul (highest)
+// Expressions — operator precedence: pipe (lowest) > sum > mul/div (highest)
 expr      = { pipe_expr }
 pipe_expr = { sum_expr ~ (">>" ~ sum_expr)* }
-sum_expr  = { mul_expr ~ ("+" ~ mul_expr)* }
-mul_expr  = { atom ~ ("*" ~ atom)* }
+sum_expr  = { mul_expr ~ (sum_op ~ mul_expr)* }
+sum_op    = { "+" | "-" }
+mul_expr  = { atom ~ (mul_op ~ atom)* }
+mul_op    = { "*" | "/" }
 
 atom = {
     fn_call

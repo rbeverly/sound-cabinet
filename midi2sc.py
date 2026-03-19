@@ -135,6 +135,114 @@ def extract_notes(track):
     return sorted(notes)
 
 
+# ── Chord detection ───────────────────────────────────────────────
+
+# Chord formulas: pitch class intervals from root → chord name
+# Ordered longest first for matching priority
+CHORD_FORMULAS = [
+    (frozenset([0, 4, 7, 11, 14]), "maj9"),
+    (frozenset([0, 3, 7, 10, 14]), "m9"),
+    (frozenset([0, 4, 7, 10, 14]), "dom9"),
+    (frozenset([0, 4, 7, 11]),     "maj7"),
+    (frozenset([0, 3, 7, 10]),     "m7"),
+    (frozenset([0, 4, 7, 10]),     "dom7"),
+    (frozenset([0, 3, 6, 9]),      "dim7"),
+    (frozenset([0, 4, 8, 10]),     "aug7"),
+    (frozenset([0, 2, 7]),         "sus2"),
+    (frozenset([0, 5, 7]),         "sus4"),
+    (frozenset([0, 4, 7]),         "maj"),
+    (frozenset([0, 3, 7]),         "m"),
+    (frozenset([0, 3, 6]),         "dim"),
+    (frozenset([0, 4, 8]),         "aug"),
+]
+
+PITCH_CLASS_NAMES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B']
+
+
+def identify_chord(midi_notes):
+    """Try to identify a chord from a set of MIDI note numbers.
+
+    Returns a chord name string (e.g., "Fm", "Cmaj7") or None if no match.
+    Only matches if 3+ unique pitch classes are present.
+    """
+    if len(midi_notes) < 3:
+        return None
+
+    pitch_classes = sorted(set(n % 12 for n in midi_notes))
+    if len(pitch_classes) < 3:
+        return None
+
+    # Try each pitch class as the potential root
+    for root_pc in pitch_classes:
+        intervals = frozenset((pc - root_pc) % 12 for pc in pitch_classes)
+        for formula, quality in CHORD_FORMULAS:
+            if intervals == formula:
+                root_name = PITCH_CLASS_NAMES[root_pc]
+                return f"{root_name}{quality}"
+
+    return None
+
+
+def detect_chords_in_pattern(pattern_notes, beat_tolerance=0.05, dur_tolerance=0.2):
+    """Group simultaneous notes and detect chords. Returns list of (beat, chord_name) tuples."""
+    if not pattern_notes:
+        return []
+
+    # Group notes by beat (within tolerance)
+    groups = []
+    current_group = [pattern_notes[0]]
+
+    for note in pattern_notes[1:]:
+        if abs(note[0] - current_group[0][0]) <= beat_tolerance:
+            current_group.append(note)
+        else:
+            groups.append(current_group)
+            current_group = [note]
+    groups.append(current_group)
+
+    chords = []
+    for group in groups:
+        if len(group) < 3:
+            continue
+
+        # Extract MIDI note numbers from note names
+        midi_notes = []
+        for _, _, _, _, note_name in group:
+            midi = note_name_to_midi(note_name)
+            if midi is not None:
+                midi_notes.append(midi)
+
+        if len(midi_notes) < 3:
+            continue
+
+        chord_name = identify_chord(midi_notes)
+        if chord_name:
+            beat = round(group[0][0], 2)
+            chords.append((beat, chord_name, len(group)))
+
+    return chords
+
+
+def note_name_to_midi(name):
+    """Convert a note name like 'C4', 'Ab3' to a MIDI number."""
+    pc_map = {'C': 0, 'D': 2, 'E': 4, 'F': 5, 'G': 7, 'A': 9, 'B': 11}
+    if not name or name[0] not in pc_map:
+        return None
+    pc = pc_map[name[0]]
+    rest = name[1:]
+    if rest.startswith('b'):
+        pc -= 1
+        rest = rest[1:]
+    elif rest.startswith('#') or rest.startswith('s'):
+        pc += 1
+        rest = rest[1:]
+    try:
+        octave = int(rest)
+    except ValueError:
+        return None
+    return (octave + 1) * 12 + pc
+
+
 # ── SC generation ──────────────────────────────────────────────────
 def generate_sc(
     notes,
@@ -150,6 +258,7 @@ def generate_sc(
     pattern_size_beats,
     instrument_name=None,
     pedal_windows=None,
+    simplify_chords=False,
 ):
     """Generate .sc file content from extracted MIDI notes."""
 
@@ -231,23 +340,62 @@ def generate_sc(
 
         lines.append(f"pattern part_{idx} = {pattern_size_beats} beats")
 
+        # Detect chords for annotation/simplification
+        chord_annotations = detect_chords_in_pattern(pattern_notes)
+        chord_beats = {c[0]: (c[1], c[2]) for c in chord_annotations}  # beat -> (name, note_count)
+
+        # Build set of beats that are fully collapsed (all notes in chord)
+        collapsed_beats = set()
+        if simplify_chords:
+            for ann_beat, (chord_name, note_count) in chord_beats.items():
+                # Count notes at this beat
+                group = [n for n in pattern_notes if abs(round(n[0], 2) - ann_beat) < 0.01]
+                if len(group) == note_count:
+                    # Check velocity uniformity (max 30% range)
+                    vels = [n[2] for n in group]
+                    vel_range = (max(vels) - min(vels)) / 127.0
+                    # Check duration uniformity (within 20%)
+                    durs = [n[3] for n in group]
+                    dur_range = (max(durs) - min(durs)) / max(durs) if max(durs) > 0 else 0
+                    if vel_range <= 0.3 and dur_range <= 0.2:
+                        collapsed_beats.add(ann_beat)
+
+        prev_beat = None
         for local_beat, voice, vel, dur, note in pattern_notes:
-            # Round beat to 2 decimal places for readability
             b = round(local_beat, 2)
             d = round(dur, 2)
             sr = swell_release
 
-            # Velocity as a gain multiplier (0.0-1.0)
+            # If this beat is collapsed into a chord, emit one line and skip the rest
+            if b in collapsed_beats:
+                if b != prev_beat:
+                    chord_name = chord_beats[b][0]
+                    # Average velocity of the group
+                    group = [n for n in pattern_notes if abs(round(n[0], 2) - b) < 0.01]
+                    avg_vel = round(sum(n[2] for n in group) / (len(group) * 127.0), 2)
+                    if instrument_name:
+                        play_expr = f"{instrument_name}({chord_name})"
+                    else:
+                        play_expr = f"chord({chord_name})"
+                    lines.append(f"  // {chord_name}")
+                    lines.append(
+                        f"  at {b} play {avg_vel} * {play_expr} >> swell(0.0, {sr}) for {d} beats"
+                    )
+                prev_beat = b
+                continue
+
+            # Non-collapsed: emit individual note with chord comment
+            if b in chord_beats and b != prev_beat:
+                lines.append(f"  // {chord_beats[b][0]}")
+            prev_beat = b
+
             vel_gain = round(vel / 127.0, 2)
 
             if instrument_name:
-                # Use instrument syntax: piano(C4)
                 play_expr = f"{instrument_name}({note})"
             else:
-                # Legacy voice syntax: p_c4
                 play_expr = voice
 
-            # Apply velocity as gain and swell for release
             lines.append(
                 f"  at {b} play {vel_gain} * {play_expr} >> swell(0.0, {sr}) for {d} beats"
             )
@@ -361,6 +509,7 @@ def main():
     parser.add_argument("--pattern-size", type=int, default=16, help="Pattern size in beats")
     parser.add_argument("--instrument", default=None, help="Instrument name to use (e.g., 'piano'). Uses instrument(Note) syntax instead of per-note voices.")
     parser.add_argument("--pedal", action="store_true", help="Apply sustain pedal (CC64) data to extend note durations")
+    parser.add_argument("--simplify-chords", action="store_true", help="Collapse simultaneous notes into chord notation where lossless")
     parser.add_argument("--generate-kit", action="store_true", help="Generate voice kit file instead of composition")
     parser.add_argument("--kit-output", default="voices/auto-kit.sc", help="Output path for generated voice kit")
     parser.add_argument("--list-tracks", action="store_true", help="List tracks and exit")
@@ -416,6 +565,7 @@ def main():
             args.pattern_size,
             instrument_name=args.instrument,
             pedal_windows=pedal_windows_for_sc,
+            simplify_chords=args.simplify_chords,
         )
         with open(args.output, 'w') as f:
             f.write(sc_content)
