@@ -98,7 +98,7 @@ fn cmd_render(args: &[String]) -> Result<()> {
     let mut score_path: Option<&str> = None;
     let mut output_path: Option<PathBuf> = None;
     let mut target_lufs: Option<f64> = None;
-    let mut compress: Option<f32> = None;
+    let mut compress: Option<Vec<f64>> = None;
     let mut ceiling: Option<f32> = None;
 
     let mut i = 0;
@@ -121,9 +121,10 @@ fn cmd_render(args: &[String]) -> Result<()> {
             "--compress" => {
                 i += 1;
                 if i < args.len() {
-                    compress = Some(args[i].parse().map_err(|_| {
-                        anyhow!("--compress requires a number (0.0 = off, 1.0 = default, 2.0 = heavy)")
-                    })?);
+                    compress = Some(args[i].split(',')
+                        .map(|s| s.parse::<f64>())
+                        .collect::<std::result::Result<Vec<_>, _>>()
+                        .map_err(|_| anyhow!("--compress: invalid numbers (e.g. --compress 1.0 or --compress -18,2,0.05,0.2)"))?);
                 }
             }
             "--ceiling" => {
@@ -149,8 +150,13 @@ fn cmd_render(args: &[String]) -> Result<()> {
 
     let mut engine = build_engine(score_path)?;
     // CLI overrides for master bus
-    if let Some(amount) = compress {
-        engine.set_master_compress(amount);
+    if let Some(params) = compress {
+        match params.len() {
+            1 => engine.set_master_compress(params[0] as f32),
+            2 => engine.set_master_compress_params(params[0] as f32, params[1] as f32, 0.010, 0.200),
+            4 => engine.set_master_compress_params(params[0] as f32, params[1] as f32, params[2], params[3]),
+            _ => return Err(anyhow!("--compress: expected 1, 2, or 4 values")),
+        }
     }
     if let Some(db) = ceiling {
         engine.set_master_ceiling(db);
@@ -164,11 +170,20 @@ fn cmd_render(args: &[String]) -> Result<()> {
 /// Play a score file through speakers.
 fn cmd_play(args: &[String]) -> Result<()> {
     if args.is_empty() {
-        return Err(anyhow!("Usage: sound-cabinet play <score.sc>"));
+        return Err(anyhow!("Usage: sound-cabinet play <score.sc> [-v]"));
     }
 
-    let engine = build_engine(&args[0])?;
-    eprintln!("Playing... (Ctrl+C to stop)");
+    let verbose = args.iter().any(|a| a == "-v" || a == "--verbose");
+    let score_path = args.iter().find(|a| !a.starts_with('-'))
+        .ok_or_else(|| anyhow!("Usage: sound-cabinet play <score.sc> [-v]"))?;
+
+    let mut engine = build_engine(score_path)?;
+    engine.verbose = verbose;
+    if verbose {
+        eprintln!("Playing (verbose)... (Ctrl+C to stop)");
+    } else {
+        eprintln!("Playing... (Ctrl+C to stop)");
+    }
     realtime::play_realtime(engine)?;
 
     Ok(())
@@ -179,17 +194,21 @@ fn cmd_watch(args: &[String]) -> Result<()> {
     use notify::{RecursiveMode, Watcher};
 
     if args.is_empty() {
-        return Err(anyhow!("Usage: sound-cabinet watch <score.sc>"));
+        return Err(anyhow!("Usage: sound-cabinet watch <score.sc> [-v]"));
     }
 
-    let score_path = args[0].clone();
+    let verbose = args.iter().any(|a| a == "-v" || a == "--verbose");
+    let score_path = args.iter().find(|a| !a.starts_with('-'))
+        .ok_or_else(|| anyhow!("Usage: sound-cabinet watch <score.sc> [-v]"))?
+        .clone();
     let watch_dir = Path::new(&score_path)
         .parent()
         .unwrap_or(Path::new("."))
         .to_path_buf();
 
     // Initial build
-    let engine = build_engine(&score_path)?;
+    let mut engine = build_engine(&score_path)?;
+    engine.verbose = verbose;
     let engine = Arc::new(Mutex::new(engine));
 
     // Start audio stream using play_streaming
@@ -228,7 +247,8 @@ fn cmd_watch(args: &[String]) -> Result<()> {
                 // Rebuild engine
                 eprintln!("\nFile changed, rebuilding...");
                 match build_engine(&score_path) {
-                    Ok(new_engine) => {
+                    Ok(mut new_engine) => {
+                        new_engine.verbose = verbose;
                         let mut eng = engine.lock().unwrap();
                         *eng = new_engine;
                         eprintln!("Playing...");
@@ -395,6 +415,7 @@ fn cmd_piano(args: &[String]) -> Result<()> {
                                 beat: 0.0,
                                 expr,
                                 duration_beats: note_duration_beats,
+                                source: None,
                             })
                             .unwrap_or_else(|e| {
                                 // Can't easily print in raw mode, just ignore
@@ -475,6 +496,7 @@ fn cmd_stream() -> Result<()> {
                         beat: beat_offset,
                         expr,
                         duration_beats,
+                        source: None,
                     })
                     .unwrap_or_else(|e| eprintln!("Engine error: {e}"));
                 }

@@ -33,6 +33,7 @@ fn command_to_msg(cmd: Command) -> EngineMsg {
             beat,
             expr,
             duration_beats,
+            ..
         } => EngineMsg::PlayNow {
             beat_offset: beat,
             expr,

@@ -6,7 +6,7 @@ use fundsp::hacker::*;
 use crate::dsl::ast::{Command, DefKind, Expr};
 use crate::dsl::parser::resolve_chord;
 use crate::engine::effects::MasterBus;
-use crate::engine::graph::{build_graph, extract_arp, extract_swell, strip_swell, substitute_freq, substitute_var};
+use crate::engine::graph::{build_graph, extract_arp, extract_bus, extract_sidechain, extract_swell, strip_bus, strip_sidechain, strip_swell, substitute_freq, substitute_var, SidechainConfig};
 
 /// A scheduled playback event with absolute sample positions.
 struct ScheduledEvent {
@@ -20,6 +20,14 @@ struct ScheduledEvent {
     /// Per-event gain multiplier (used by arp for swell-based per-step dynamics).
     /// Applied multiplicatively with the swell envelope.
     gain: f32,
+    /// Provenance: pattern/voice name that produced this event (for verbose output).
+    source: Option<String>,
+    /// Whether this event has been logged in verbose mode.
+    logged: bool,
+    /// Bus tag: this event contributes to the named bus envelope.
+    bus_name: Option<String>,
+    /// Sidechain config: duck this event's output based on a bus envelope.
+    sidechain: Option<SidechainConfig>,
 }
 
 /// The central audio engine. Manages voice definitions, scheduled events,
@@ -39,6 +47,10 @@ pub struct Engine {
     tempo_map: Vec<(f64, f64)>,
     /// Master bus: bandpass filter (30Hz HP + 18kHz LP) + brick-wall limiter.
     master_bus: MasterBus,
+    /// Verbose mode: log event starts during rendering.
+    pub verbose: bool,
+    /// Bus envelopes for sidechain compression (bus_name -> current envelope level).
+    bus_envelopes: HashMap<String, f32>,
 }
 
 impl Engine {
@@ -55,6 +67,8 @@ impl Engine {
             pedal_pending: None,
             tempo_map: vec![(0.0, 120.0)],
             master_bus: MasterBus::new(sample_rate),
+            verbose: false,
+            bus_envelopes: HashMap::new(),
         }
     }
 
@@ -83,6 +97,7 @@ impl Engine {
                 beat,
                 expr,
                 duration_beats,
+                source,
             } => {
                 let start_sample = self.beats_to_samples(beat);
 
@@ -94,7 +109,9 @@ impl Engine {
                     let end_sample = start_sample + duration_samples;
                     let duration_secs = duration_beats * 60.0 / self.bpm;
                     let swell = extract_swell(&expr);
-                    let clean_expr = strip_swell(&expr);
+                    let bus_name = extract_bus(&expr);
+                    let sidechain = extract_sidechain(&expr);
+                    let clean_expr = strip_sidechain(&strip_bus(&strip_swell(&expr)));
 
                     let net =
                         build_graph(&clean_expr, &self.voices, &self.wavetables, self.sample_rate, Some(duration_secs))?;
@@ -106,6 +123,10 @@ impl Engine {
                         net,
                         swell,
                         gain: 1.0,
+                        source,
+                        logged: false,
+                        bus_name,
+                        sidechain,
                     });
                 }
             }
@@ -119,8 +140,19 @@ impl Engine {
                     self.pedal_windows.push((down_sample, up_sample));
                 }
             }
-            Command::MasterCompress(amount) => {
-                self.master_bus.set_compress(amount as f32, self.sample_rate);
+            Command::MasterCompress(params) => {
+                match params.len() {
+                    1 => self.master_bus.set_compress(params[0] as f32, self.sample_rate),
+                    2 => self.master_bus.set_compress_params(
+                        params[0] as f32, params[1] as f32, 0.010, 0.200, self.sample_rate,
+                    ),
+                    4 => self.master_bus.set_compress_params(
+                        params[0] as f32, params[1] as f32, params[2], params[3], self.sample_rate,
+                    ),
+                    _ => return Err(anyhow::anyhow!(
+                        "master compress: expected 1, 2, or 4 arguments"
+                    )),
+                }
             }
             Command::MasterCeiling(db) => {
                 self.master_bus.set_ceiling(db as f32, self.sample_rate);
@@ -149,6 +181,7 @@ impl Engine {
                 beat,
                 expr,
                 duration_beats,
+                source,
             } => {
                 let offset = self.beats_to_samples(beat);
                 let start_sample = self.current_sample + offset;
@@ -160,7 +193,9 @@ impl Engine {
                     let end_sample = start_sample + duration_samples;
                     let duration_secs = duration_beats * 60.0 / self.bpm;
                     let swell = extract_swell(&expr);
-                    let clean_expr = strip_swell(&expr);
+                    let bus_name = extract_bus(&expr);
+                    let sidechain = extract_sidechain(&expr);
+                    let clean_expr = strip_sidechain(&strip_bus(&strip_swell(&expr)));
 
                     let net =
                         build_graph(&clean_expr, &self.voices, &self.wavetables, self.sample_rate, Some(duration_secs))?;
@@ -172,6 +207,10 @@ impl Engine {
                         net,
                         swell,
                         gain: 1.0,
+                        source,
+                        logged: false,
+                        bus_name,
+                        sidechain,
                     });
                 }
             }
@@ -208,6 +247,24 @@ impl Engine {
         let buf_start = self.current_sample;
         let buf_end = buf_start + buffer.len() as u64;
 
+        // Verbose logging: print events that start in this buffer
+        if self.verbose {
+            let sr = self.sample_rate;
+            let tempo_map = &self.tempo_map;
+            for event in self.schedule.iter_mut() {
+                if !event.logged && event.start_sample >= buf_start && event.start_sample < buf_end {
+                    if let Some(ref src) = event.source {
+                        let beat = samples_to_beats_static(event.start_sample, sr, tempo_map);
+                        eprintln!("  [{:.1}] {}", beat, src);
+                    }
+                    event.logged = true;
+                }
+            }
+        }
+
+        // Accumulate per-bus peak levels for this buffer (for sidechain in next buffer)
+        let mut bus_peaks: HashMap<String, f32> = HashMap::new();
+
         for event in &mut self.schedule {
             // Skip events entirely outside this buffer window
             if event.start_sample >= buf_end || event.end_sample <= buf_start {
@@ -227,6 +284,20 @@ impl Engine {
             };
 
             let fade_samples = 256u64;
+
+            // Compute sidechain gain reduction (uses bus envelope from previous buffer)
+            let sc_gain = if let Some(ref sc) = event.sidechain {
+                let env_db = *self.bus_envelopes.get(&sc.bus_name).unwrap_or(&-100.0);
+                if env_db > sc.threshold_db {
+                    let over = env_db - sc.threshold_db;
+                    let reduced = over * (1.0 - 1.0 / sc.ratio);
+                    10.0_f32.powf(-reduced / 20.0)
+                } else {
+                    1.0
+                }
+            } else {
+                1.0
+            };
 
             for i in active_start..active_end {
                 let pos = buf_start + i as u64;
@@ -259,8 +330,24 @@ impl Engine {
                 };
 
                 let out = event.net.get_mono();
-                buffer[i] += out * anti_click * swell_env * event.gain;
+                let sample = out * anti_click * swell_env * event.gain * sc_gain;
+                buffer[i] += sample;
+
+                // Track bus peak level
+                if let Some(ref bus) = event.bus_name {
+                    let abs = sample.abs();
+                    let peak = bus_peaks.entry(bus.clone()).or_insert(0.0);
+                    if abs > *peak {
+                        *peak = abs;
+                    }
+                }
             }
+        }
+
+        // Update bus envelopes for next buffer (convert peak to dB)
+        for (name, peak) in bus_peaks {
+            let db = if peak > 0.0 { 20.0 * peak.log10() } else { -100.0 };
+            self.bus_envelopes.insert(name, db);
         }
 
         // Master bus: bandpass + limiter
@@ -280,6 +367,11 @@ impl Engine {
     /// Set master bus compression amount (0.0 = off, 1.0 = default, 2.0 = heavy).
     pub fn set_master_compress(&mut self, amount: f32) {
         self.master_bus.set_compress(amount, self.sample_rate);
+    }
+
+    /// Set master bus compression with explicit parameters.
+    pub fn set_master_compress_params(&mut self, threshold: f32, ratio: f32, attack: f64, release: f64) {
+        self.master_bus.set_compress_params(threshold, ratio, attack, release, self.sample_rate);
     }
 
     /// Set limiter ceiling in dBFS (e.g., -0.3, -1.0).
@@ -439,6 +531,10 @@ impl Engine {
                 net,
                 swell: None,
                 gain: step_gain,
+                source: None, // arp sub-events don't carry individual provenance
+                logged: false,
+                bus_name: None,
+                sidechain: None,
             });
         }
 
@@ -547,6 +643,30 @@ mod tests {
         // Beat 12: 4 at 60 + 4 at 120 + 4 at 240 = 4 + 2 + 1 = 7 seconds
         assert_eq!(engine.beats_to_samples(12.0), 44100 * 7);
     }
+}
+
+/// Convert a sample position back to beats using a tempo map.
+/// Free function to avoid borrow conflicts when iterating schedule.
+fn samples_to_beats_static(sample: u64, sample_rate: f64, tempo_map: &[(f64, f64)]) -> f64 {
+    let mut remaining_secs = sample as f64 / sample_rate;
+    let mut beat = 0.0;
+    for i in 0..tempo_map.len() {
+        let (seg_start, seg_bpm) = tempo_map[i];
+        let seg_end = if i + 1 < tempo_map.len() {
+            tempo_map[i + 1].0
+        } else {
+            f64::INFINITY
+        };
+        let seg_duration_beats = seg_end - seg_start;
+        let seg_duration_secs = seg_duration_beats * 60.0 / seg_bpm;
+        if remaining_secs <= seg_duration_secs {
+            beat = seg_start + remaining_secs * seg_bpm / 60.0;
+            break;
+        }
+        remaining_secs -= seg_duration_secs;
+        beat = seg_end;
+    }
+    beat
 }
 
 /// Check if an expression tree contains VoiceRef("freq"), either directly

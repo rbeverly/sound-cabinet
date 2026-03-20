@@ -22,6 +22,8 @@ curl -L https://github.com/rbeverly/sound-cabinet/releases/latest/download/sound
 sudo mv sound-cabinet /usr/local/bin/
 ```
 
+On Windows, download `sound-cabinet-x86_64-pc-windows-msvc.zip` from [Releases](https://github.com/rbeverly/sound-cabinet/releases), extract it, and add the folder to your PATH (or move `sound-cabinet.exe` to a directory already in your PATH).
+
 ### Build from source
 
 Requires [Rust](https://www.rust-lang.org/tools/install) (1.70+):
@@ -33,10 +35,10 @@ cd sound-cabinet
 cargo build --release
 ```
 
-The binary will be at `target/release/sound-cabinet`. Either copy it to a system directory or add the build output to your shell's PATH:
+The binary will be at `target/release/sound-cabinet` (or `target\release\sound-cabinet.exe` on Windows). Either copy it to a system directory or add the build output to your PATH:
 
 ```bash
-# Option A: copy to a system directory
+# Option A: copy to a system directory (macOS/Linux)
 cp target/release/sound-cabinet /usr/local/bin/
 
 # Option B: add to your PATH (run from the sound-cabinet directory)
@@ -51,9 +53,19 @@ echo 'export PATH="$PATH:'$(pwd)'/target/release"' >> ~/.zshrc && source ~/.zshr
 echo 'fish_add_path '(pwd)'/target/release' >> ~/.config/fish/config.fish && source ~/.config/fish/config.fish
 ```
 
-#### Linux dependencies
+On Windows (PowerShell):
 
-On Linux you may need ALSA development libraries for audio output:
+```powershell
+# Add to your user PATH permanently
+$env:PATH += ";$PWD\target\release"
+[Environment]::SetEnvironmentVariable("PATH", $env:PATH, "User")
+```
+
+#### Platform dependencies
+
+**macOS** — audio support is built in, no extra dependencies needed.
+
+**Linux** — you may need ALSA development libraries for audio output:
 
 ```bash
 # Debian/Ubuntu
@@ -63,7 +75,7 @@ sudo apt install libasound2-dev
 sudo dnf install alsa-lib-devel
 ```
 
-macOS has audio support built in — no extra dependencies needed.
+**Windows** — no extra dependencies needed. Audio uses WASAPI (built into Windows).
 
 ## Usage
 
@@ -76,6 +88,9 @@ sound-cabinet render examples/demo.sc -o output.wav --lufs -14
 
 # Play a score through your speakers
 sound-cabinet play examples/demo.sc
+
+# Play with verbose output — shows beat positions and pattern names
+sound-cabinet play examples/demo.sc -v
 
 # Watch mode — live reload on file save
 sound-cabinet watch examples/demo.sc
@@ -295,6 +310,8 @@ Effects process a signal in the pipe chain — place them after the source and a
 | `eq(freq, gain, q)` | Parametric EQ — peak (bell) filter. Boost or cut `gain` dB at `freq` Hz with bandwidth `q`. | `saw(C3) >> eq(400, -3, 1.5)` |
 | `eq(freq, gain, low)` | Low shelf — boost or cut everything below `freq`. | `saw(C3) >> eq(80, 4, low)` |
 | `eq(freq, gain, high)` | High shelf — boost or cut everything above `freq`. | `sine(A4) >> eq(10000, 2, high)` |
+| `bus(name)` | Tag this event's output for sidechain detection. | `kick >> bus(drums)` |
+| `sidechain(bus, thresh, ratio, atk, rel)` | Duck signal based on a bus level. Classic pumping effect. | `pad >> sidechain(drums, -20, 4, 0.01, 0.1)` |
 
 `loudness(freq)` is most useful inside instrument definitions where `freq` is automatically substituted with the note's Hz value. A C2 (65 Hz) gets ~+8 dB, a C4 (262 Hz) gets ~+1.5 dB, and A4 (440 Hz) gets ~+0.3 dB. This replaces manual hacks like `200/freq` with a proper psychoacoustic curve.
 
@@ -324,6 +341,35 @@ fx radio = highpass(300, 0.5) >> lowpass(3000, 0.3) >> eq(1000, 4, 0.6)
 ```
 
 Q values for peak bands: 0.5 = very wide (gentle, broad), 1.0 = moderate (default), 3.0+ = narrow/surgical. Shelves use a fixed Q of 0.707 (Butterworth, maximally flat).
+
+#### Sidechain Compression
+
+Duck one signal based on another signal's level — the classic EDM/house "pumping" effect where pads or bass duck on every kick hit:
+
+```
+voice kick = sine(55) >> decay(15)
+voice pad = chord(Cm7) >> lowpass(800, 0.6)
+
+// Tag the kick's output to the "drums" bus
+at 0 play kick >> bus(drums) for 0.5 beats
+
+// The pad ducks whenever the "drums" bus is loud
+at 0 play pad >> sidechain(drums, -20, 4, 0.01, 0.1) for 8 beats
+```
+
+`bus(name)` tags an event's audio output so other events can react to it. `sidechain(bus, threshold, ratio, attack, release)` applies gain reduction when the named bus exceeds the threshold. Parameters:
+
+- `threshold` — dB level above which compression kicks in (e.g. -20)
+- `ratio` — compression ratio (e.g. 4 = 4:1 reduction)
+- `attack` — how fast the ducker responds (seconds, e.g. 0.01)
+- `release` — how fast it recovers (seconds, e.g. 0.1)
+
+Only `bus` is required — `sidechain` defaults to `-20 dB, 4:1, 10ms attack, 100ms release` if parameters are omitted:
+
+```
+pad >> sidechain(drums)                     // defaults
+pad >> sidechain(drums, -20, 4, 0.01, 0.1) // explicit
+```
 
 Effects are just pipe stages — you can stack them freely:
 
@@ -532,22 +578,27 @@ This runs on all output — `render`, `play`, `watch`, `piano`, and `stream`. Th
 Control the compressor and limiter from within a score:
 
 ```
-master compress 0.5      // gentle — subtle dynamic tightening
-master compress 1.0      // default — standard mastering compression
-master compress 2.0      // heavy — loud, punchy, reduced dynamic range
-master compress 0        // off — bypass compressor entirely
-master ceiling -1.0      // set limiter ceiling to -1.0 dBFS (default: -0.3)
+master compress 0.5                // gentle — subtle dynamic tightening
+master compress 1.0                // default — standard mastering compression
+master compress 2.0                // heavy — loud, punchy, reduced dynamic range
+master compress 0                  // off — bypass compressor entirely
+master compress -18 2              // explicit threshold (dB) and ratio
+master compress -18 2 0.05 0.2     // threshold, ratio, attack (s), release (s)
+master ceiling -1.0                // set limiter ceiling to -1.0 dBFS (default: -0.3)
 ```
 
 Or from the CLI (overrides score settings):
 
 ```bash
 sound-cabinet render track.sc -o track.wav --compress 2.0
+sound-cabinet render track.sc -o track.wav --compress -18,2,0.05,0.2
 sound-cabinet render track.sc -o track.wav --ceiling -1.0
 sound-cabinet render track.sc -o track.wav --compress 0 --lufs -14  # no compression, LUFS normalization only
 ```
 
 The compression `amount` maps to threshold/ratio internally: 0.5 = gentle (-36 dB, 1.5:1), 1.0 = standard (-18 dB, 2:1), 2.0 = heavy (-9 dB, 3:1). Higher values produce louder, more compressed output at the cost of dynamic range.
+
+For full control, specify threshold (dB), ratio, and optionally attack/release (seconds): `master compress -18 2 0.05 0.2`. A slow attack (50–100ms) lets transients punch through before compression engages.
 
 ### Loudness measurement
 
@@ -601,7 +652,7 @@ This requires extending `Expr::Range` from `Range(f64, f64)` to `Range(Box<Expr>
 
 ### Parallel signal routing
 
-Named internal buses inside `fx` definitions that allow splitting, processing, and recombining signals. Essential for effects that need to reference the input from multiple processing paths (e.g., replacing high frequencies with noise, sidechain ducking, wet/dry processing):
+Named internal buses inside `fx` definitions that allow splitting, processing, and recombining signals. Essential for effects that need to reference the input from multiple processing paths (e.g., replacing high frequencies with noise, wet/dry processing):
 
 ```
 fx worn_tape = {
@@ -609,15 +660,9 @@ fx worn_tape = {
   noise: 0.03 * pink() >> highpass(1000, 0.5)
   out: dry + noise
 }
-
-fx sidechain_duck = {
-  signal: pass()
-  envelope: envelope_follow(0.001, 0.1)
-  out: signal * (1.0 - envelope)
-}
 ```
 
-This is the foundation for sidechain compression, frequency-dependent noise replacement, and any effect where one signal controls another. Can be built incrementally — start with simple named buses, extend to envelope followers and cross-modulation later.
+This enables frequency-dependent noise replacement and any effect where one signal controls another within a single fx chain.
 
 ### Import namespacing
 
@@ -713,16 +758,6 @@ Per-note velocity so drum patterns and melodies feel human instead of mechanical
 at 0 play kick vel 0.9 for 0.5 beats
 at 1 play snare vel 0.6 for 0.25 beats
 ```
-
-### Sidechain compression
-
-Compress one signal based on another signal's level — the classic EDM/house "pumping" effect where the bass ducks on every kick hit:
-
-```
-voice bass = saw(C2) >> lowpass(400, 1.0) >> sidechain(kick, -20, 4, 0.001, 0.1)
-```
-
-Requires routing one signal's envelope to control another signal's gain — a more complex architecture than the current per-voice compressor.
 
 ### Sostenuto pedal
 

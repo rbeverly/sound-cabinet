@@ -950,6 +950,11 @@ impl MasterBus {
         self.compressor = MasterCompressor::from_amount(amount, sample_rate);
     }
 
+    /// Set compression with explicit parameters.
+    pub fn set_compress_params(&mut self, threshold: f32, ratio: f32, attack: f64, release: f64, sample_rate: f64) {
+        self.compressor = MasterCompressor::new(threshold, ratio, attack, release, sample_rate);
+    }
+
     /// Set the limiter ceiling in dBFS (e.g., -0.3 for default, -1.0 for broadcast).
     pub fn set_ceiling(&mut self, db: f32, sample_rate: f64) {
         let ceiling = 10.0_f32.powf(db / 20.0);

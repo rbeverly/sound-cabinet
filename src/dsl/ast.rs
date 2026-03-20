@@ -92,6 +92,8 @@ pub enum Command {
         beat: f64,
         expr: Expr,
         duration_beats: f64,
+        /// Provenance: which pattern/section/voice produced this event (for verbose output).
+        source: Option<String>,
     },
     /// Import another .sc file: `import voices/kick.sc`
     Import { path: String },
@@ -129,8 +131,11 @@ pub enum Command {
     SetHumanize(f64),
     /// Set global voice bindings: `with kick = analog_kick, snare = tight_snare`
     SetWith(WithMap),
-    /// Master bus compression amount: `master compress 0.5` (0.0 = off, 1.0 = default, 2.0 = heavy)
-    MasterCompress(f64),
+    /// Master bus compression:
+    /// - `master compress 0.5` — amount (0.0 = off, 1.0 = default, 2.0 = heavy)
+    /// - `master compress -18 2` — threshold (dB), ratio
+    /// - `master compress -18 2 0.05 0.2` — threshold, ratio, attack (s), release (s)
+    MasterCompress(Vec<f64>),
     /// Master bus limiter ceiling: `master ceiling -1.0` (dBFS)
     MasterCeiling(f64),
 }

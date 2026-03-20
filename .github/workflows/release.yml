@@ -19,6 +19,8 @@ jobs:
             os: macos-latest
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
 
     runs-on: ${{ matrix.os }}
 
@@ -37,17 +39,24 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
           tar czf ../../../sound-cabinet-${{ matrix.target }}.tar.gz sound-cabinet
           cd ../../..
 
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path target/${{ matrix.target }}/release/sound-cabinet.exe -DestinationPath sound-cabinet-${{ matrix.target }}.zip
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: sound-cabinet-${{ matrix.target }}
-          path: sound-cabinet-${{ matrix.target }}.tar.gz
+          path: sound-cabinet-${{ matrix.target }}.*
 
   release:
     needs: build
@@ -67,3 +76,4 @@ jobs:
             sound-cabinet-aarch64-apple-darwin.tar.gz
             sound-cabinet-x86_64-apple-darwin.tar.gz
             sound-cabinet-x86_64-unknown-linux-gnu.tar.gz
+            sound-cabinet-x86_64-pc-windows-msvc.zip

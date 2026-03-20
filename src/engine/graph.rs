@@ -558,6 +558,92 @@ pub fn strip_swell(expr: &Expr) -> Expr {
     }
 }
 
+/// Extract `bus(name)` from a pipe chain. Returns the bus name if found.
+/// Usage: `kick >> bus(drums)` tags the event to contribute to the "drums" bus envelope.
+pub fn extract_bus(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::FnCall { name, args } if name == "bus" => {
+            if let Some(Expr::VoiceRef(bus_name)) = args.first() {
+                Some(bus_name.clone())
+            } else {
+                None
+            }
+        }
+        Expr::Pipe(_, b) => extract_bus(b),
+        _ => None,
+    }
+}
+
+/// Strip `bus(name)` from an expression tree.
+pub fn strip_bus(expr: &Expr) -> Expr {
+    match expr {
+        Expr::Pipe(a, b) => {
+            if matches!(b.as_ref(), Expr::FnCall { name, .. } if name == "bus") {
+                strip_bus(a)
+            } else {
+                Expr::Pipe(Box::new(strip_bus(a)), Box::new(strip_bus(b)))
+            }
+        }
+        other => other.clone(),
+    }
+}
+
+/// Sidechain compression config extracted from the expression tree.
+#[derive(Debug, Clone)]
+pub struct SidechainConfig {
+    pub bus_name: String,
+    pub threshold_db: f32,
+    pub ratio: f32,
+    pub attack_secs: f64,
+    pub release_secs: f64,
+}
+
+/// Extract `sidechain(bus, threshold, ratio, attack, release)` from a pipe chain.
+/// Usage: `pad >> sidechain(drums, -20, 4, 0.01, 0.1)` ducks the pad when drums are loud.
+pub fn extract_sidechain(expr: &Expr) -> Option<SidechainConfig> {
+    match expr {
+        Expr::FnCall { name, args } if name == "sidechain" => {
+            let bus_name = match args.first() {
+                Some(Expr::VoiceRef(n)) => n.clone(),
+                _ => return None,
+            };
+            let threshold_db = match args.get(1) {
+                Some(Expr::Number(v)) => *v as f32,
+                _ => -20.0,
+            };
+            let ratio = match args.get(2) {
+                Some(Expr::Number(v)) => *v as f32,
+                _ => 4.0,
+            };
+            let attack_secs = match args.get(3) {
+                Some(Expr::Number(v)) => *v,
+                _ => 0.01,
+            };
+            let release_secs = match args.get(4) {
+                Some(Expr::Number(v)) => *v,
+                _ => 0.1,
+            };
+            Some(SidechainConfig { bus_name, threshold_db, ratio, attack_secs, release_secs })
+        }
+        Expr::Pipe(_, b) => extract_sidechain(b),
+        _ => None,
+    }
+}
+
+/// Strip `sidechain(...)` from an expression tree.
+pub fn strip_sidechain(expr: &Expr) -> Expr {
+    match expr {
+        Expr::Pipe(a, b) => {
+            if matches!(b.as_ref(), Expr::FnCall { name, .. } if name == "sidechain") {
+                strip_sidechain(a)
+            } else {
+                Expr::Pipe(Box::new(strip_sidechain(a)), Box::new(strip_sidechain(b)))
+            }
+        }
+        other => other.clone(),
+    }
+}
+
 /// Flatten a left-associative pipe chain into a vec of segments.
 /// `a >> b >> c` (parsed as `Pipe(Pipe(a, b), c)`) becomes `[a, b, c]`.
 fn flatten_pipe_chain(expr: &Expr) -> Vec<Expr> {

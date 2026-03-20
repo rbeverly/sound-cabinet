@@ -97,15 +97,15 @@ impl ExpansionContext {
         if let Some(p) = self.patterns.get(name) {
             let swing = p.swing.unwrap_or(global_swing);
             let humanize = p.humanize.unwrap_or(global_humanize);
-            Ok(expand_pattern_events(&p.events, base_beat, swing, humanize, bpm, with_map, rng))
+            Ok(expand_pattern_events(&p.events, base_beat, swing, humanize, bpm, with_map, Some(name.to_string()), rng))
         } else if let Some(s) = self.sections.get(name) {
-            self.expand_section(s, base_beat, global_swing, global_humanize, bpm, with_map, rng)
+            self.expand_section(name, s, base_beat, global_swing, global_humanize, bpm, with_map, rng)
         } else {
             Err(anyhow!("Unknown pattern or section: '{name}'"))
         }
     }
 
-    fn expand_section(&self, section: &SectionInfo, base_beat: f64, global_swing: f64, global_humanize: f64, bpm: f64, inherited_with: &WithMap, rng: &mut impl Rng) -> Result<Vec<Command>> {
+    fn expand_section(&self, section_name: &str, section: &SectionInfo, base_beat: f64, global_swing: f64, global_humanize: f64, bpm: f64, inherited_with: &WithMap, rng: &mut impl Rng) -> Result<Vec<Command>> {
         let mut output = Vec::new();
 
         // Merge inherited with_map with section-level with_map
@@ -147,7 +147,7 @@ impl ExpansionContext {
     }
 }
 
-fn expand_pattern_events(events: &[PatternEvent], base_beat: f64, swing: f64, humanize_ms: f64, bpm: f64, with_map: &WithMap, rng: &mut impl Rng) -> Vec<Command> {
+fn expand_pattern_events(events: &[PatternEvent], base_beat: f64, swing: f64, humanize_ms: f64, bpm: f64, with_map: &WithMap, source: Option<String>, rng: &mut impl Rng) -> Vec<Command> {
     events
         .iter()
         .map(|e| {
@@ -183,6 +183,7 @@ fn expand_pattern_events(events: &[PatternEvent], base_beat: f64, swing: f64, hu
                 beat,
                 expr,
                 duration_beats: e.duration_beats,
+                source: source.clone(),
             }
         })
         .collect()
@@ -448,6 +449,7 @@ mod tests {
                 beat: 10.0,
                 expr: Expr::VoiceRef("x".into()),
                 duration_beats: 2.0,
+                source: None,
             }],
         };
 

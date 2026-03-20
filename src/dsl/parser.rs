@@ -221,11 +221,14 @@ fn try_parse_command(line: &str) -> Result<Option<Command>> {
                 .ok_or_else(|| anyhow!("Expected master sub-command"))?;
             match inner.as_rule() {
                 Rule::master_compress => {
-                    let val: f64 = inner.into_inner().next()
-                        .ok_or_else(|| anyhow!("Expected value in master compress"))?
-                        .as_str().parse()
+                    let vals: Vec<f64> = inner.into_inner()
+                        .map(|p| p.as_str().parse::<f64>())
+                        .collect::<std::result::Result<Vec<_>, _>>()
                         .map_err(|_| anyhow!("Invalid number in master compress"))?;
-                    return Ok(Some(Command::MasterCompress(val)));
+                    if vals.is_empty() {
+                        return Err(anyhow!("master compress requires at least one argument"));
+                    }
+                    return Ok(Some(Command::MasterCompress(vals)));
                 }
                 Rule::master_ceiling => {
                     let val: f64 = inner.into_inner().next()
@@ -519,6 +522,7 @@ fn parse_at(pair: Pair<Rule>) -> Result<Command> {
         beat,
         expr,
         duration_beats,
+        source: None,
     })
 }
 
