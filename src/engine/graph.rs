@@ -414,6 +414,20 @@ fn build_fn_call(
             Ok(net)
         }
 
+        // Loudness: ISO 226 equal-loudness compensation.
+        // loudness(freq) — applies frequency-dependent gain so that all pitches
+        // are perceived at roughly equal loudness. Reference point: 1 kHz = 0 dB.
+        "loudness" => {
+            let freq = expect_number(args, 0, name)?;
+            let gain_db = iso226_gain(freq);
+            let gain_linear = 10.0_f64.powf(gain_db / 20.0) as f32;
+            let mut gain_node = Net::wrap(Box::new(dc(gain_linear)));
+            gain_node.set_sample_rate(sample_rate);
+            let mut pass_node = Net::wrap(Box::new(pass()));
+            pass_node.set_sample_rate(sample_rate);
+            Ok(pass_node * gain_node)
+        }
+
         // Chord: play all notes of a named chord simultaneously.
         // chord(Cm7) — generates summed saw oscillators scaled by 1/N.
         "chord" => {
@@ -697,5 +711,99 @@ fn expect_number(args: &[Expr], index: usize, fn_name: &str) -> Result<f64> {
             "{fn_name}: expected at least {} arguments",
             index + 1
         )),
+    }
+}
+
+/// ISO 226 equal-loudness compensation gain (dB) for a given frequency.
+///
+/// Returns the gain in dB needed to make `freq` sound as loud as 1 kHz at
+/// the same SPL. Based on the ~60 phon equal-loudness contour.
+///
+/// Key points from ISO 226:2003 at 60 phon:
+///   20 Hz: +22 dB,  50 Hz: +12 dB, 100 Hz: +6 dB, 200 Hz: +2 dB,
+///  500 Hz: +0.5 dB, 1000 Hz: 0 dB, 2000 Hz: -2 dB, 3500 Hz: -4 dB,
+/// 5000 Hz: -1 dB, 8000 Hz: +2 dB, 12000 Hz: +6 dB, 16000 Hz: +14 dB
+///
+/// Uses log-linear interpolation between these anchor points.
+fn iso226_gain(freq: f64) -> f64 {
+    // (frequency_hz, gain_db) — anchor points from ISO 226 at ~60 phon
+    const CURVE: &[(f64, f64)] = &[
+        (20.0, 22.0),
+        (30.0, 17.0),
+        (50.0, 12.0),
+        (80.0, 8.0),
+        (100.0, 6.0),
+        (150.0, 3.5),
+        (200.0, 2.0),
+        (300.0, 1.0),
+        (500.0, 0.5),
+        (700.0, 0.2),
+        (1000.0, 0.0),
+        (1500.0, -1.0),
+        (2000.0, -2.0),
+        (2500.0, -3.0),
+        (3500.0, -4.0),
+        (5000.0, -1.0),
+        (6000.0, 0.0),
+        (8000.0, 2.0),
+        (10000.0, 4.0),
+        (12000.0, 6.0),
+        (16000.0, 14.0),
+        (20000.0, 20.0),
+    ];
+
+    let freq = freq.clamp(20.0, 20000.0);
+    let log_freq = freq.ln();
+
+    // Find the two anchor points that bracket this frequency
+    for i in 0..CURVE.len() - 1 {
+        let (f0, g0) = CURVE[i];
+        let (f1, g1) = CURVE[i + 1];
+        if freq <= f1 {
+            // Log-linear interpolation
+            let t = (log_freq - f0.ln()) / (f1.ln() - f0.ln());
+            return g0 + (g1 - g0) * t;
+        }
+    }
+
+    // Beyond last point
+    CURVE.last().unwrap().1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_iso226_gain_at_1khz() {
+        let gain = iso226_gain(1000.0);
+        assert!((gain - 0.0).abs() < 0.01, "1kHz should be ~0 dB, got {gain}");
+    }
+
+    #[test]
+    fn test_iso226_gain_bass_boost() {
+        // Low frequencies need a boost to sound equally loud
+        let gain_50 = iso226_gain(50.0);
+        let gain_100 = iso226_gain(100.0);
+        assert!(gain_50 > 10.0, "50Hz should need >10 dB boost, got {gain_50}");
+        assert!(gain_100 > 4.0, "100Hz should need >4 dB boost, got {gain_100}");
+        assert!(gain_50 > gain_100, "50Hz needs more boost than 100Hz");
+    }
+
+    #[test]
+    fn test_iso226_gain_ear_sensitivity_dip() {
+        // 2-4 kHz region: ear is more sensitive (ear canal resonance)
+        let gain_3k = iso226_gain(3500.0);
+        assert!(gain_3k < -2.0, "3.5kHz should be cut (ear is sensitive here), got {gain_3k}");
+    }
+
+    #[test]
+    fn test_iso226_gain_monotonic_bass() {
+        // Lower frequencies should need more boost
+        let g200 = iso226_gain(200.0);
+        let g100 = iso226_gain(100.0);
+        let g50 = iso226_gain(50.0);
+        assert!(g50 > g100, "50Hz > 100Hz boost");
+        assert!(g100 > g200, "100Hz > 200Hz boost");
     }
 }

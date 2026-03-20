@@ -92,15 +92,42 @@ fn build_engine(score_path: &str) -> Result<Engine> {
 
 /// Render a score file to WAV.
 fn cmd_render(args: &[String]) -> Result<()> {
-    if args.len() < 3 || args[1] != "-o" {
-        return Err(anyhow!("Usage: sound-cabinet render <score.sc> -o <output.wav>"));
+    // Parse args: <score.sc> -o <output.wav> [--lufs <target>]
+    let mut score_path: Option<&str> = None;
+    let mut output_path: Option<PathBuf> = None;
+    let mut target_lufs: Option<f64> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-o" => {
+                i += 1;
+                if i < args.len() {
+                    output_path = Some(PathBuf::from(&args[i]));
+                }
+            }
+            "--lufs" => {
+                i += 1;
+                if i < args.len() {
+                    target_lufs = Some(args[i].parse().map_err(|_| {
+                        anyhow!("--lufs requires a number (e.g. --lufs -14)")
+                    })?);
+                }
+            }
+            _ => {
+                if score_path.is_none() {
+                    score_path = Some(&args[i]);
+                }
+            }
+        }
+        i += 1;
     }
 
-    let score_path = &args[0];
-    let output_path = PathBuf::from(&args[2]);
+    let score_path = score_path.ok_or_else(|| anyhow!("Usage: sound-cabinet render <score.sc> -o <output.wav> [--lufs <target>]"))?;
+    let output_path = output_path.ok_or_else(|| anyhow!("Usage: sound-cabinet render <score.sc> -o <output.wav> [--lufs <target>]"))?;
 
     let mut engine = build_engine(score_path)?;
-    render_to_wav(&mut engine, &output_path)?;
+    render_to_wav(&mut engine, &output_path, target_lufs)?;
     eprintln!("Rendered to {}", output_path.display());
 
     Ok(())

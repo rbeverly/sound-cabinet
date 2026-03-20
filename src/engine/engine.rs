@@ -5,6 +5,7 @@ use fundsp::hacker::*;
 
 use crate::dsl::ast::{Command, DefKind, Expr};
 use crate::dsl::parser::resolve_chord;
+use crate::engine::effects::MasterBus;
 use crate::engine::graph::{build_graph, extract_arp, extract_swell, strip_swell, substitute_freq, substitute_var};
 
 /// A scheduled playback event with absolute sample positions.
@@ -36,6 +37,8 @@ pub struct Engine {
     /// Tempo map: list of (beat, bpm) pairs for mid-score tempo changes.
     /// Used by beats_to_samples to integrate over tempo segments.
     tempo_map: Vec<(f64, f64)>,
+    /// Master bus: bandpass filter (30Hz HP + 18kHz LP) + brick-wall limiter.
+    master_bus: MasterBus,
 }
 
 impl Engine {
@@ -51,6 +54,7 @@ impl Engine {
             pedal_windows: Vec::new(),
             pedal_pending: None,
             tempo_map: vec![(0.0, 120.0)],
+            master_bus: MasterBus::new(sample_rate),
         }
     }
 
@@ -253,6 +257,9 @@ impl Engine {
             }
         }
 
+        // Master bus: bandpass + limiter
+        self.master_bus.process(buffer);
+
         self.current_sample = buf_end;
 
         // Remove finished events
@@ -262,6 +269,14 @@ impl Engine {
     /// Returns true when all scheduled events have finished playing.
     pub fn is_finished(&self) -> bool {
         self.schedule.is_empty()
+    }
+
+    /// Flush the master bus limiter lookahead buffer.
+    /// Call after all render_samples() calls to get the final tail samples.
+    pub fn flush_master(&mut self) -> Vec<f32> {
+        let mut tail = Vec::new();
+        self.master_bus.flush(&mut tail);
+        tail
     }
 
     /// Get the current playback position in samples.

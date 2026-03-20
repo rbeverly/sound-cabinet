@@ -68,8 +68,11 @@ macOS has audio support built in — no extra dependencies needed.
 ## Usage
 
 ```bash
-# Render a score to a WAV file
+# Render a score to a WAV file (prints loudness + peak info)
 sound-cabinet render examples/demo.sc -o output.wav
+
+# Render and normalize to a loudness target (e.g. Spotify = -14 LUFS)
+sound-cabinet render examples/demo.sc -o output.wav --lufs -14
 
 # Play a score through your speakers
 sound-cabinet play examples/demo.sc
@@ -288,6 +291,9 @@ Effects process a signal in the pipe chain — place them after the source and a
 | `crush(bits)` | Bit depth reduction. 8 = retro, 10 = subtle grit, 4 = destroyed. | `saw(C3) >> crush(8)` |
 | `decimate(factor)` | Sample rate reduction. 2 = half rate, 8 = heavy digital dirt. | `sine(A4) >> decimate(4)` |
 | `degrade(amount)` | Combined tape/medium degradation (lowpass + decimate + crush + noise). 0.3 = warm, 0.6 = worn tape, 1.0 = destroyed. | `triangle(C4) >> degrade(0.5)` |
+| `loudness(freq)` | ISO 226 equal-loudness compensation. Applies frequency-dependent gain so all pitches are perceived at roughly equal loudness. Reference: 1 kHz = 0 dB. | `saw(freq) >> loudness(freq)` |
+
+`loudness(freq)` is most useful inside instrument definitions where `freq` is automatically substituted with the note's Hz value. A C2 (65 Hz) gets ~+8 dB, a C4 (262 Hz) gets ~+1.5 dB, and A4 (440 Hz) gets ~+0.3 dB. This replaces manual hacks like `200/freq` with a proper psychoacoustic curve.
 
 Effects are just pipe stages — you can stack them freely:
 
@@ -480,6 +486,44 @@ The `examples/` directory includes several complete compositions:
 
 Voice kits in `examples/voices/` define reusable instrument sets that compositions import. The **default instrument library** (`voices/instruments.sc`) includes 20+ instruments across 5 families (keys, plucked strings, pads, bass, mallets) plus texture voices (vinyl crackle, tape hiss, room tone) and effect chains (lofi, hall, radio).
 
+## Master Bus
+
+Every render passes through an automatic master bus chain:
+
+1. **Highpass at 30 Hz** — removes inaudible sub-bass that eats headroom (Butterworth 2nd-order)
+2. **Lowpass at 18 kHz** — removes ultrasonic content from aliasing and filter resonance (Butterworth 2nd-order)
+3. **Brick-wall limiter at -0.3 dBFS** — prevents peaks from hitting 0 dBFS, with 5ms lookahead for clean transient handling
+
+This runs on all output — `render`, `play`, `watch`, `piano`, and `stream`. The master bandpass reclaims headroom stolen by inaudible frequencies, and the limiter catches peaks that would otherwise clip.
+
+### Loudness measurement
+
+Every `render` prints integrated loudness (LUFS, ITU-R BS.1770) and true peak:
+
+```
+$ sound-cabinet render examples/lofi-afternoon.sc -o lofi.wav
+  Integrated loudness: -15.6 LUFS
+  True peak: -0.2 dBFS
+Rendered to lofi.wav
+```
+
+### Loudness normalization
+
+Use `--lufs` to auto-normalize to a target loudness. Common targets:
+
+| Platform | Target |
+|---|---|
+| Spotify | -14 LUFS |
+| Apple Music | -16 LUFS |
+| YouTube | -14 LUFS |
+| Broadcast (EBU R128) | -23 LUFS |
+
+```bash
+sound-cabinet render track.sc -o track.wav --lufs -14
+```
+
+The normalizer applies gain after rendering to hit the target. If the resulting peak would exceed -0.1 dBFS, it warns about clipping risk.
+
 Render any example:
 
 ```bash
@@ -661,25 +705,17 @@ instrument piano = ... >> eq(80, 8, "shelf") >> eq(200, 4, 1.0)
 
 Also useful for shaping individual voices, creating telephone/radio effects, or matching the tonal character of reference tracks.
 
-### Master output / distribution-ready export
+### Format export (MP3, FLAC, AAC)
 
-Post-processing pipeline for the final mix: peak normalization, loudness targeting (LUFS), optional limiting, and export to distribution-ready formats. The goal is to go from `.sc` to DistroKid-ready without leaving Sound Cabinet:
+The master bus, LUFS measurement, and normalization are implemented. What remains is format conversion for direct upload to streaming platforms:
 
 ```bash
-sound-cabinet render track.sc -o track.wav --normalize --lufs -14 --format mp3
+sound-cabinet render track.sc -o track.mp3 --lufs -14
 ```
 
-This includes: peak/RMS normalization, loudness metering (integrated LUFS per streaming platform targets), a brickwall limiter to prevent clipping, and format conversion (MP3, AAC, FLAC).
+### Automatic equal-loudness compensation
 
-### Fletcher-Munson equal-loudness compensation
-
-Built-in frequency-dependent gain compensation that models human hearing sensitivity. Low frequencies need significantly more energy to sound equally loud as midrange — this curve is logarithmic, not linear. A dedicated `loudness()` function in instruments would apply the ISO 226 equal-loudness contour automatically:
-
-```
-instrument piano = ... >> loudness(freq)   // auto-compensates based on pitch
-```
-
-This would replace the manual `200 / freq` approximation with a proper psychoacoustic curve.
+The `loudness(freq)` function is implemented as an explicit pipe-chain effect. A future enhancement could apply it automatically to all instruments via a global `loudness on` directive or instrument defaults, removing the need to add `>> loudness(freq)` to every instrument definition manually.
 
 ### MIDI export (sc2midi)
 

@@ -706,6 +706,199 @@ impl AudioNode for Degrade {
 }
 
 // ---------------------------------------------------------------------------
+// Brick-Wall Limiter
+// ---------------------------------------------------------------------------
+
+/// Brick-wall peak limiter with lookahead and release smoothing.
+///
+/// Prevents signal from exceeding `ceiling` (linear). Uses a short lookahead
+/// to catch transients cleanly without harsh clipping artifacts.
+///
+/// - `ceiling`: maximum output level (linear, e.g. 0.97 for -0.3 dBFS)
+/// - `release`: how fast gain recovers after limiting (seconds)
+///
+/// Not an AudioNode — operates on buffers directly for use on the master bus.
+#[derive(Clone)]
+pub struct BrickwallLimiter {
+    ceiling: f32,
+    release_coeff: f32,
+    gain_reduction: f32, // current gain reduction (0.0 = no reduction, higher = more)
+    lookahead_buf: Vec<f32>,
+    lookahead_pos: usize,
+    lookahead_len: usize,
+}
+
+impl BrickwallLimiter {
+    pub fn new(ceiling: f32, release_secs: f64, sample_rate: f64) -> Self {
+        // 5ms lookahead — enough to catch transients cleanly
+        let lookahead_len = (0.005 * sample_rate) as usize;
+        let release_coeff = (-1.0 / (release_secs * sample_rate)).exp() as f32;
+        BrickwallLimiter {
+            ceiling,
+            release_coeff,
+            gain_reduction: 0.0,
+            lookahead_buf: vec![0.0; lookahead_len],
+            lookahead_pos: 0,
+            lookahead_len,
+        }
+    }
+
+    /// Process a buffer of samples in-place.
+    pub fn process(&mut self, buffer: &mut [f32]) {
+        for sample in buffer.iter_mut() {
+            // Write current sample into lookahead buffer, read delayed sample
+            let delayed = self.lookahead_buf[self.lookahead_pos];
+            self.lookahead_buf[self.lookahead_pos] = *sample;
+            self.lookahead_pos = (self.lookahead_pos + 1) % self.lookahead_len;
+
+            // Compute required gain reduction from current (pre-delay) sample
+            let abs_val = sample.abs();
+            let needed = if abs_val > self.ceiling {
+                1.0 - self.ceiling / abs_val
+            } else {
+                0.0
+            };
+
+            // Attack is instant (lookahead handles smoothing), release is gradual
+            if needed > self.gain_reduction {
+                self.gain_reduction = needed;
+            } else {
+                self.gain_reduction =
+                    self.release_coeff * self.gain_reduction + (1.0 - self.release_coeff) * needed;
+            }
+
+            // Apply gain to the delayed sample
+            let gain = 1.0 - self.gain_reduction;
+            *sample = delayed * gain;
+        }
+    }
+
+    /// Flush the lookahead buffer (call after all audio is processed).
+    pub fn flush(&mut self, output: &mut Vec<f32>) {
+        for _ in 0..self.lookahead_len {
+            let delayed = self.lookahead_buf[self.lookahead_pos];
+            self.lookahead_buf[self.lookahead_pos] = 0.0;
+            self.lookahead_pos = (self.lookahead_pos + 1) % self.lookahead_len;
+
+            let gain = 1.0 - self.gain_reduction;
+            self.gain_reduction =
+                self.release_coeff * self.gain_reduction;
+            output.push(delayed * gain);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Master Bus (highpass + lowpass + limiter)
+// ---------------------------------------------------------------------------
+
+/// Master bus processing chain: bandpass filter (HP + LP) followed by a
+/// brick-wall limiter. Operates on buffers, not the AudioNode trait.
+///
+/// - Highpass at 30 Hz: removes inaudible sub-bass that eats headroom
+/// - Lowpass at 18 kHz: removes ultrasonic content from aliasing/resonance
+/// - Limiter at -0.3 dBFS: prevents peaks from hitting 0 dBFS
+pub struct MasterBus {
+    // Highpass state (2nd-order Butterworth via biquad)
+    hp_a1: f32,
+    hp_a2: f32,
+    hp_b0: f32,
+    hp_b1: f32,
+    hp_b2: f32,
+    hp_x1: f32,
+    hp_x2: f32,
+    hp_y1: f32,
+    hp_y2: f32,
+    // Lowpass state (2nd-order Butterworth via biquad)
+    lp_a1: f32,
+    lp_a2: f32,
+    lp_b0: f32,
+    lp_b1: f32,
+    lp_b2: f32,
+    lp_x1: f32,
+    lp_x2: f32,
+    lp_y1: f32,
+    lp_y2: f32,
+    // Limiter
+    limiter: BrickwallLimiter,
+}
+
+impl MasterBus {
+    pub fn new(sample_rate: f64) -> Self {
+        let (hp_b0, hp_b1, hp_b2, hp_a1, hp_a2) = Self::highpass_coeffs(30.0, sample_rate);
+        let (lp_b0, lp_b1, lp_b2, lp_a1, lp_a2) = Self::lowpass_coeffs(18000.0, sample_rate);
+        // -0.3 dBFS ceiling ≈ 0.966
+        let ceiling = 10.0_f32.powf(-0.3 / 20.0);
+        MasterBus {
+            hp_a1, hp_a2, hp_b0, hp_b1, hp_b2,
+            hp_x1: 0.0, hp_x2: 0.0, hp_y1: 0.0, hp_y2: 0.0,
+            lp_a1, lp_a2, lp_b0, lp_b1, lp_b2,
+            lp_x1: 0.0, lp_x2: 0.0, lp_y1: 0.0, lp_y2: 0.0,
+            limiter: BrickwallLimiter::new(ceiling, 0.1, sample_rate),
+        }
+    }
+
+    /// 2nd-order Butterworth highpass biquad coefficients.
+    fn highpass_coeffs(freq: f64, sr: f64) -> (f32, f32, f32, f32, f32) {
+        let w0 = 2.0 * std::f64::consts::PI * freq / sr;
+        let cos_w0 = w0.cos();
+        let alpha = w0.sin() / (2.0 * std::f64::consts::SQRT_2); // Q = sqrt(2)/2 for Butterworth
+        let a0 = 1.0 + alpha;
+        let b0 = ((1.0 + cos_w0) / 2.0 / a0) as f32;
+        let b1 = (-(1.0 + cos_w0) / a0) as f32;
+        let b2 = b0;
+        let a1 = (-2.0 * cos_w0 / a0) as f32;
+        let a2 = ((1.0 - alpha) / a0) as f32;
+        (b0, b1, b2, a1, a2)
+    }
+
+    /// 2nd-order Butterworth lowpass biquad coefficients.
+    fn lowpass_coeffs(freq: f64, sr: f64) -> (f32, f32, f32, f32, f32) {
+        let w0 = 2.0 * std::f64::consts::PI * freq / sr;
+        let cos_w0 = w0.cos();
+        let alpha = w0.sin() / (2.0 * std::f64::consts::SQRT_2);
+        let a0 = 1.0 + alpha;
+        let b0 = ((1.0 - cos_w0) / 2.0 / a0) as f32;
+        let b1 = ((1.0 - cos_w0) / a0) as f32;
+        let b2 = b0;
+        let a1 = (-2.0 * cos_w0 / a0) as f32;
+        let a2 = ((1.0 - alpha) / a0) as f32;
+        (b0, b1, b2, a1, a2)
+    }
+
+    /// Process a buffer in-place: highpass → lowpass → limiter.
+    pub fn process(&mut self, buffer: &mut [f32]) {
+        for sample in buffer.iter_mut() {
+            // Highpass
+            let hp_out = self.hp_b0 * *sample + self.hp_b1 * self.hp_x1 + self.hp_b2 * self.hp_x2
+                - self.hp_a1 * self.hp_y1 - self.hp_a2 * self.hp_y2;
+            self.hp_x2 = self.hp_x1;
+            self.hp_x1 = *sample;
+            self.hp_y2 = self.hp_y1;
+            self.hp_y1 = hp_out;
+
+            // Lowpass
+            let lp_out = self.lp_b0 * hp_out + self.lp_b1 * self.lp_x1 + self.lp_b2 * self.lp_x2
+                - self.lp_a1 * self.lp_y1 - self.lp_a2 * self.lp_y2;
+            self.lp_x2 = self.lp_x1;
+            self.lp_x1 = hp_out;
+            self.lp_y2 = self.lp_y1;
+            self.lp_y1 = lp_out;
+
+            *sample = lp_out;
+        }
+
+        // Limiter
+        self.limiter.process(buffer);
+    }
+
+    /// Flush limiter lookahead tail.
+    pub fn flush(&mut self, output: &mut Vec<f32>) {
+        self.limiter.flush(output);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Noise Gate
 // ---------------------------------------------------------------------------
 
