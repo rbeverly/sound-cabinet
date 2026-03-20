@@ -402,7 +402,7 @@ fn cmd_stream() -> Result<()> {
                 }
                 EngineMsg::DefineVoice { name, expr } => {
                     let mut eng = engine_for_msgs.lock().unwrap();
-                    eng.handle_command(sound_cabinet::dsl::Command::VoiceDef { name, expr })
+                    eng.handle_command(sound_cabinet::dsl::Command::VoiceDef { name, expr, kind: sound_cabinet::dsl::ast::DefKind::Voice })
                         .unwrap_or_else(|e| eprintln!("Engine error: {e}"));
                 }
                 EngineMsg::SetBpm(bpm) => {

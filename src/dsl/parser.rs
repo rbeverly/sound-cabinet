@@ -4,7 +4,7 @@ use pest::Parser;
 use pest_derive::Parser;
 
 use super::ast::{
-    Command, Expr, PatternEvent, RepeatBody, Script, SectionEntry, WeightedChoice,
+    Command, DefKind, Expr, PatternEvent, RepeatBody, Script, SectionEntry, WeightedChoice,
 };
 
 #[derive(Parser)]
@@ -164,11 +164,15 @@ fn try_parse_command(line: &str) -> Result<Option<Command>> {
         }
     }
 
-    // Voice / fx / instrument definitions (all produce VoiceDef)
-    for rule in [Rule::voice_def, Rule::fx_def, Rule::instrument_def] {
+    // Voice / fx / instrument definitions
+    for (rule, kind) in [
+        (Rule::voice_def, DefKind::Voice),
+        (Rule::fx_def, DefKind::Fx),
+        (Rule::instrument_def, DefKind::Instrument),
+    ] {
         if let Ok(pairs) = ScoreParser::parse(rule, line) {
             for pair in pairs {
-                return Ok(Some(parse_voice_def(pair)?));
+                return Ok(Some(parse_voice_def(pair, kind)?));
             }
         }
     }
@@ -432,11 +436,11 @@ fn parse_repeat_block(header: &str, body: &[String]) -> Result<Command> {
 // Expression / command parsers (shared)
 // ---------------------------------------------------------------------------
 
-fn parse_voice_def(pair: Pair<Rule>) -> Result<Command> {
+fn parse_voice_def(pair: Pair<Rule>, kind: DefKind) -> Result<Command> {
     let mut inner = pair.into_inner();
     let name = inner.next().unwrap().as_str().to_string();
     let expr = parse_expr(inner.next().unwrap())?;
-    Ok(Command::VoiceDef { name, expr })
+    Ok(Command::VoiceDef { name, expr, kind })
 }
 
 fn parse_bpm(pair: Pair<Rule>) -> Result<Command> {
@@ -720,8 +724,9 @@ mod tests {
         let script =
             parse_script("voice x = (saw(40) + 0.5 * sine(80)) >> lowpass(2000, 0.7)\n").unwrap();
         match &script.commands[0] {
-            Command::VoiceDef { name, expr } => {
+            Command::VoiceDef { name, expr, kind } => {
                 assert_eq!(name, "x");
+                assert_eq!(*kind, DefKind::Voice);
                 match expr {
                     Expr::Pipe(_, _) => {}
                     other => panic!("Expected Pipe, got {other:?}"),

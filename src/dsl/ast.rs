@@ -53,11 +53,33 @@ pub enum RepeatBody {
     Shuffle(Vec<String>),
 }
 
+/// What kind of named definition this is.
+/// Preserved from parse time for validation and error messages.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DefKind {
+    /// `voice name = expr` — complete signal graph, used directly
+    Voice,
+    /// `fx name = expr` — effect chain (1-in, 1-out), used in pipe chains
+    Fx,
+    /// `instrument name = expr` — template with `freq` variable, instantiated with a frequency
+    Instrument,
+}
+
+impl std::fmt::Display for DefKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DefKind::Voice => write!(f, "voice"),
+            DefKind::Fx => write!(f, "fx"),
+            DefKind::Instrument => write!(f, "instrument"),
+        }
+    }
+}
+
 /// A single command in the score.
 #[derive(Debug, Clone)]
 pub enum Command {
-    /// Define a named voice: `voice pad = (saw(40) + sine(80))`
-    VoiceDef { name: String, expr: Expr },
+    /// Define a named voice, fx chain, or instrument
+    VoiceDef { name: String, expr: Expr, kind: DefKind },
     /// Set tempo: `bpm 120`
     SetBpm(f64),
     /// Schedule playback: `at 0 play pad for 4 beats`

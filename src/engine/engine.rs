@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use fundsp::hacker::*;
 
-use crate::dsl::ast::{Command, Expr};
+use crate::dsl::ast::{Command, DefKind, Expr};
 use crate::dsl::parser::resolve_chord;
 use crate::engine::graph::{build_graph, extract_arp, extract_swell, strip_swell, substitute_freq, substitute_var};
 
@@ -24,6 +24,7 @@ pub struct Engine {
     pub sample_rate: f64,
     pub bpm: f64,
     voices: HashMap<String, Expr>,
+    voice_kinds: HashMap<String, DefKind>,
     wavetables: HashMap<String, Vec<f64>>,
     schedule: Vec<ScheduledEvent>,
     current_sample: u64,
@@ -37,6 +38,7 @@ impl Engine {
             sample_rate,
             bpm: 120.0,
             voices: HashMap::new(),
+            voice_kinds: HashMap::new(),
             wavetables: HashMap::new(),
             schedule: Vec::new(),
             current_sample: 0,
@@ -48,7 +50,8 @@ impl Engine {
     /// Process a parsed command.
     pub fn handle_command(&mut self, cmd: Command) -> Result<()> {
         match cmd {
-            Command::VoiceDef { name, expr } => {
+            Command::VoiceDef { name, expr, kind } => {
+                self.voice_kinds.insert(name.clone(), kind);
                 self.voices.insert(name, expr);
             }
             Command::WaveDef { name, samples } => {

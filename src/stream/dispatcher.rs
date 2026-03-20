@@ -27,7 +27,7 @@ pub fn run_dispatcher(rx: Receiver<String>, tx: Sender<EngineMsg>) -> Result<()>
 
 fn command_to_msg(cmd: Command) -> EngineMsg {
     match cmd {
-        Command::VoiceDef { name, expr } => EngineMsg::DefineVoice { name, expr },
+        Command::VoiceDef { name, expr, .. } => EngineMsg::DefineVoice { name, expr },
         Command::SetBpm(bpm) => EngineMsg::SetBpm(bpm),
         Command::PlayAt {
             beat,

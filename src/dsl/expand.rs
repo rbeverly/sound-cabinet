@@ -4,6 +4,8 @@ use anyhow::{anyhow, Result};
 use rand::Rng;
 
 use super::ast::{Command, PatternEvent, RepeatBody, Script, SectionEntry};
+#[cfg(test)]
+use super::ast::DefKind;
 
 struct PatternInfo {
     duration_beats: f64,
@@ -250,6 +252,7 @@ mod tests {
                         name: "sine".into(),
                         args: vec![Expr::Number(55.0)],
                     },
+                    kind: DefKind::Voice,
                 },
                 Command::SetBpm(120.0),
                 Command::PatternDef {
