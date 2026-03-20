@@ -16,6 +16,9 @@ struct ScheduledEvent {
     /// Optional swell envelope applied in the render loop (attack_secs, release_secs).
     /// Handled here instead of in the DSP graph for precise, non-cycling timing.
     swell: Option<(f64, f64)>,
+    /// Per-event gain multiplier (used by arp for swell-based per-step dynamics).
+    /// Applied multiplicatively with the swell envelope.
+    gain: f32,
 }
 
 /// The central audio engine. Manages voice definitions, scheduled events,
@@ -86,6 +89,7 @@ impl Engine {
                         duration_secs,
                         net,
                         swell,
+                        gain: 1.0,
                     });
                 }
             }
@@ -145,6 +149,7 @@ impl Engine {
                         duration_secs,
                         net,
                         swell,
+                        gain: 1.0,
                     });
                 }
             }
@@ -232,7 +237,7 @@ impl Engine {
                 };
 
                 let out = event.net.get_mono();
-                buffer[i] += out * anti_click * swell_env;
+                buffer[i] += out * anti_click * swell_env * event.gain;
             }
         }
 
@@ -381,39 +386,17 @@ impl Engine {
                 fade_in.min(fade_out)
             });
 
+            // Per-step gain from swell envelope (if present)
+            let step_gain = sub_swell_gain.unwrap_or(1.0) as f32;
+
             self.schedule.push(ScheduledEvent {
                 start_sample: start,
                 end_sample: end,
                 duration_secs: dur_secs,
                 net,
                 swell: None,
+                gain: step_gain,
             });
-
-            // Apply the pre-computed swell gain to this sub-event
-            if let Some(env_val) = sub_swell_gain {
-                if env_val < 1.0 {
-                    if let Some(event) = self.schedule.last_mut() {
-                        let gain_net = build_graph(
-                            &Expr::Number(env_val),
-                            &self.voices,
-                            &self.wavetables,
-                            self.sample_rate,
-                            None,
-                        )?;
-                        let original = std::mem::replace(
-                            &mut event.net,
-                            build_graph(
-                                &Expr::Number(0.0),
-                                &self.voices,
-                                &self.wavetables,
-                                self.sample_rate,
-                                None,
-                            )?,
-                        );
-                        event.net = original * gain_net;
-                    }
-                }
-            }
         }
 
         Ok(Some(()))
