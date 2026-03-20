@@ -359,6 +359,15 @@ impl Engine {
         self.schedule.retain(|e| e.end_sample > buf_end);
     }
 
+    /// Skip ahead to a given beat position. Advances `current_sample` and
+    /// drops events that end before that point. Events that span the skip
+    /// point will start playing from the middle.
+    pub fn skip_to_beat(&mut self, beat: f64) {
+        let target_sample = self.beats_to_samples(beat);
+        self.current_sample = target_sample;
+        self.schedule.retain(|e| e.end_sample > target_sample);
+    }
+
     /// Returns true when all scheduled events have finished playing.
     pub fn is_finished(&self) -> bool {
         self.schedule.is_empty()

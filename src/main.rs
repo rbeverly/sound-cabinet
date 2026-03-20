@@ -47,6 +47,32 @@ fn print_usage() {
     eprintln!("  sound-cabinet stream              (reads from stdin)");
 }
 
+/// Parse a `--flag <value>` pair from args, returning the f64 value if present.
+fn parse_flag_f64(args: &[String], flag: &str) -> Result<Option<f64>> {
+    for (i, a) in args.iter().enumerate() {
+        if a == flag {
+            let val = args.get(i + 1)
+                .ok_or_else(|| anyhow!("{flag} requires a number"))?;
+            return Ok(Some(val.parse().map_err(|_| anyhow!("{flag} requires a number"))?));
+        }
+    }
+    Ok(None)
+}
+
+/// Check if a string is the value argument to a --flag (i.e., the element after a -- flag).
+fn is_flag_value(args: &[String], candidate: &str) -> bool {
+    for (i, a) in args.iter().enumerate() {
+        if a.starts_with("--") && a.len() > 2 {
+            if let Some(next) = args.get(i + 1) {
+                if next == candidate {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Parse, import, and load only definitions (voices, instruments, fx, waves, bpm)
 /// from a score file — no playback events scheduled.
 fn load_definitions(score_path: &str) -> Result<Engine> {
@@ -170,20 +196,22 @@ fn cmd_render(args: &[String]) -> Result<()> {
 /// Play a score file through speakers.
 fn cmd_play(args: &[String]) -> Result<()> {
     if args.is_empty() {
-        return Err(anyhow!("Usage: sound-cabinet play <score.sc> [-v]"));
+        return Err(anyhow!("Usage: sound-cabinet play <score.sc> [-v] [--from <beat>]"));
     }
 
     let verbose = args.iter().any(|a| a == "-v" || a == "--verbose");
-    let score_path = args.iter().find(|a| !a.starts_with('-'))
-        .ok_or_else(|| anyhow!("Usage: sound-cabinet play <score.sc> [-v]"))?;
+    let from_beat = parse_flag_f64(args, "--from")?;
+    let score_path = args.iter()
+        .find(|a| !a.starts_with('-') && !is_flag_value(args, a))
+        .ok_or_else(|| anyhow!("Usage: sound-cabinet play <score.sc> [-v] [--from <beat>]"))?;
 
     let mut engine = build_engine(score_path)?;
     engine.verbose = verbose;
-    if verbose {
-        eprintln!("Playing (verbose)... (Ctrl+C to stop)");
-    } else {
-        eprintln!("Playing... (Ctrl+C to stop)");
+    if let Some(beat) = from_beat {
+        engine.skip_to_beat(beat);
+        eprintln!("Skipping to beat {beat}...");
     }
+    eprintln!("Playing{}... (Ctrl+C to stop)", if verbose { " (verbose)" } else { "" });
     realtime::play_realtime(engine)?;
 
     Ok(())
@@ -194,12 +222,14 @@ fn cmd_watch(args: &[String]) -> Result<()> {
     use notify::{RecursiveMode, Watcher};
 
     if args.is_empty() {
-        return Err(anyhow!("Usage: sound-cabinet watch <score.sc> [-v]"));
+        return Err(anyhow!("Usage: sound-cabinet watch <score.sc> [-v] [--from <beat>]"));
     }
 
     let verbose = args.iter().any(|a| a == "-v" || a == "--verbose");
-    let score_path = args.iter().find(|a| !a.starts_with('-'))
-        .ok_or_else(|| anyhow!("Usage: sound-cabinet watch <score.sc> [-v]"))?
+    let from_beat = parse_flag_f64(args, "--from")?;
+    let score_path = args.iter()
+        .find(|a| !a.starts_with('-') && !is_flag_value(args, a))
+        .ok_or_else(|| anyhow!("Usage: sound-cabinet watch <score.sc> [-v] [--from <beat>]"))?
         .clone();
     let watch_dir = Path::new(&score_path)
         .parent()
@@ -209,6 +239,9 @@ fn cmd_watch(args: &[String]) -> Result<()> {
     // Initial build
     let mut engine = build_engine(&score_path)?;
     engine.verbose = verbose;
+    if let Some(beat) = from_beat {
+        engine.skip_to_beat(beat);
+    }
     let engine = Arc::new(Mutex::new(engine));
 
     // Start audio stream using play_streaming
@@ -249,6 +282,9 @@ fn cmd_watch(args: &[String]) -> Result<()> {
                 match build_engine(&score_path) {
                     Ok(mut new_engine) => {
                         new_engine.verbose = verbose;
+                        if let Some(beat) = from_beat {
+                            new_engine.skip_to_beat(beat);
+                        }
                         let mut eng = engine.lock().unwrap();
                         *eng = new_engine;
                         eprintln!("Playing...");

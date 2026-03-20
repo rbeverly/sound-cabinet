@@ -92,6 +92,9 @@ sound-cabinet play examples/demo.sc
 # Play with verbose output — shows beat positions and pattern names
 sound-cabinet play examples/demo.sc -v
 
+# Skip ahead — start playing from beat 140
+sound-cabinet play examples/demo.sc --from 140
+
 # Watch mode — live reload on file save
 sound-cabinet watch examples/demo.sc
 
