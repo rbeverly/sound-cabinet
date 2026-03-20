@@ -210,7 +210,9 @@ Generate a waveform at a given frequency:
 | `triangle(E4)` | Triangle — softer than saw |
 | `square(G2)` | Square — hollow, woody |
 | `pulse(C3, 0.25)` | Pulse wave — variable width (0.0-1.0). 0.5 = square, 0.1 = thin/nasal, 0.9 = bright. |
-| `noise()` | White noise (no frequency argument) |
+| `noise()` / `white()` | White noise — flat spectrum, bright. Hi-hats, snares, breath textures. |
+| `pink()` | Pink noise — 3 dB/octave rolloff, warmer. Vinyl crackle, ambient, rain. |
+| `brown()` | Brown noise — 6 dB/octave rolloff, deep rumble. Thunder, ocean, room tone. |
 
 Pulse width can be swept over time using parameter automation: `pulse(C3, 0.1 -> 0.9)` — classic PWM synth pad sound.
 
@@ -444,8 +446,9 @@ The `examples/` directory includes several complete compositions:
 | `lofi-afternoon.sc` | Lofi hip-hop track with swing, chorus, distortion, and vibrato |
 | `wave-test.sc` | Custom waveform demo — plateau, spike, asymmetric, ziggurat |
 | `compress-test.sc` | A/B comparison of compression on drums, bass, and pads |
+| `instrument-demo.sc` | Showcase of the default instrument library — keys, strings, mallets, bass, pads |
 
-Voice kits in `examples/voices/` define reusable instrument sets that compositions import.
+Voice kits in `examples/voices/` define reusable instrument sets that compositions import. The **default instrument library** (`voices/instruments.sc`) includes 20+ instruments across 5 families (keys, plucked strings, pads, bass, mallets) plus texture voices (vinyl crackle, tape hiss, room tone) and effect chains (lofi, hall, radio).
 
 Render any example:
 
@@ -457,6 +460,17 @@ sound-cabinet render examples/lofi-afternoon.sc -o lofi-afternoon.wav
 ## Roadmap
 
 What's coming next, roughly in priority order.
+
+### Expression ranges
+
+The `->` sweep operator currently only accepts literal numbers (`800 -> 4000`). Expression ranges would allow freq-relative sweeps inside instruments — essential for filter envelopes that track the note:
+
+```
+// Currently not supported — but should be:
+instrument pluck = saw(freq) >> lowpass(freq * 8 -> freq * 1.5, 0.6) >> decay(12)
+```
+
+This requires extending `Expr::Range` from `Range(f64, f64)` to `Range(Box<Expr>, Box<Expr>)`, and having the graph builder evaluate both sides before constructing the sweep envelope. The key challenge is that `freq * 8` isn't known until instrument instantiation time, so the range evaluation needs to happen after `substitute_var`.
 
 ### Waveshaping modes
 

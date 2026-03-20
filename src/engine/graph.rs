@@ -143,8 +143,18 @@ fn build_fn_call(
             net.set_sample_rate(sample_rate);
             Ok(net)
         }
-        "noise" => {
+        "noise" | "white" => {
             let mut net = Net::wrap(Box::new(white()));
+            net.set_sample_rate(sample_rate);
+            Ok(net)
+        }
+        "pink" => {
+            let mut net = Net::wrap(Box::new(pink()));
+            net.set_sample_rate(sample_rate);
+            Ok(net)
+        }
+        "brown" => {
+            let mut net = Net::wrap(Box::new(brown()));
             net.set_sample_rate(sample_rate);
             Ok(net)
         }
