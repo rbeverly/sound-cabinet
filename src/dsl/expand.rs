@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::{anyhow, Result};
 use rand::Rng;
 
-use super::ast::{Command, PatternEvent, RepeatBody, Script, SectionEntry};
+use super::ast::{Command, Expr, PatternEvent, RepeatBody, Script, SectionEntry, WithMap};
 #[cfg(test)]
 use super::ast::DefKind;
 
@@ -17,6 +17,57 @@ struct PatternInfo {
 struct SectionInfo {
     duration_beats: f64,
     entries: Vec<SectionEntry>,
+    with_map: Option<WithMap>,
+}
+
+/// Replace voice references in an expression according to a substitution map.
+/// `with_map` maps pattern-local names to actual voice/instrument names.
+fn apply_with_map(expr: &Expr, with_map: &WithMap) -> Expr {
+    match expr {
+        Expr::VoiceRef(name) => {
+            if let Some(replacement) = with_map.get(name) {
+                Expr::VoiceRef(replacement.clone())
+            } else {
+                expr.clone()
+            }
+        }
+        Expr::FnCall { name, args } => {
+            // Also substitute the function name if it's a voice/instrument invocation
+            let resolved_name = with_map.get(name).cloned().unwrap_or_else(|| name.clone());
+            Expr::FnCall {
+                name: resolved_name,
+                args: args.iter().map(|a| apply_with_map(a, with_map)).collect(),
+            }
+        }
+        Expr::Pipe(a, b) => Expr::Pipe(
+            Box::new(apply_with_map(a, with_map)),
+            Box::new(apply_with_map(b, with_map)),
+        ),
+        Expr::Sum(a, b) => Expr::Sum(
+            Box::new(apply_with_map(a, with_map)),
+            Box::new(apply_with_map(b, with_map)),
+        ),
+        Expr::Sub(a, b) => Expr::Sub(
+            Box::new(apply_with_map(a, with_map)),
+            Box::new(apply_with_map(b, with_map)),
+        ),
+        Expr::Mul(a, b) => Expr::Mul(
+            Box::new(apply_with_map(a, with_map)),
+            Box::new(apply_with_map(b, with_map)),
+        ),
+        Expr::Div(a, b) => Expr::Div(
+            Box::new(apply_with_map(a, with_map)),
+            Box::new(apply_with_map(b, with_map)),
+        ),
+        Expr::Number(_) | Expr::Range(_, _) => expr.clone(),
+    }
+}
+
+/// Merge with maps: inner values override outer values.
+fn merge_with_maps(outer: &WithMap, inner: &WithMap) -> WithMap {
+    let mut merged = outer.clone();
+    merged.extend(inner.iter().map(|(k, v)| (k.clone(), v.clone())));
+    merged
 }
 
 struct ExpansionContext {
@@ -42,33 +93,51 @@ impl ExpansionContext {
         }
     }
 
-    fn expand_name(&self, name: &str, base_beat: f64, global_swing: f64, global_humanize: f64, bpm: f64, rng: &mut impl Rng) -> Result<Vec<Command>> {
+    fn expand_name(&self, name: &str, base_beat: f64, global_swing: f64, global_humanize: f64, bpm: f64, with_map: &WithMap, rng: &mut impl Rng) -> Result<Vec<Command>> {
         if let Some(p) = self.patterns.get(name) {
             let swing = p.swing.unwrap_or(global_swing);
             let humanize = p.humanize.unwrap_or(global_humanize);
-            Ok(expand_pattern_events(&p.events, base_beat, swing, humanize, bpm, rng))
+            Ok(expand_pattern_events(&p.events, base_beat, swing, humanize, bpm, with_map, rng))
         } else if let Some(s) = self.sections.get(name) {
-            self.expand_section(s, base_beat, global_swing, global_humanize, bpm, rng)
+            self.expand_section(s, base_beat, global_swing, global_humanize, bpm, with_map, rng)
         } else {
             Err(anyhow!("Unknown pattern or section: '{name}'"))
         }
     }
 
-    fn expand_section(&self, section: &SectionInfo, base_beat: f64, global_swing: f64, global_humanize: f64, bpm: f64, rng: &mut impl Rng) -> Result<Vec<Command>> {
+    fn expand_section(&self, section: &SectionInfo, base_beat: f64, global_swing: f64, global_humanize: f64, bpm: f64, inherited_with: &WithMap, rng: &mut impl Rng) -> Result<Vec<Command>> {
         let mut output = Vec::new();
+
+        // Merge inherited with_map with section-level with_map
+        let section_with = if let Some(sw) = &section.with_map {
+            merge_with_maps(inherited_with, sw)
+        } else {
+            inherited_with.clone()
+        };
 
         for entry in &section.entries {
             match entry {
-                SectionEntry::RepeatEvery { name, every_beats } => {
+                SectionEntry::RepeatEvery { name, every_beats, with_map } => {
+                    // Merge section-level with entry-level (entry overrides section)
+                    let entry_with = if let Some(ew) = with_map {
+                        merge_with_maps(&section_with, ew)
+                    } else {
+                        section_with.clone()
+                    };
                     let mut beat = 0.0;
                     while beat < section.duration_beats {
-                        let cmds = self.expand_name(name, base_beat + beat, global_swing, global_humanize, bpm, rng)?;
+                        let cmds = self.expand_name(name, base_beat + beat, global_swing, global_humanize, bpm, &entry_with, rng)?;
                         output.extend(cmds);
                         beat += every_beats;
                     }
                 }
-                SectionEntry::Play { name } => {
-                    let cmds = self.expand_name(name, base_beat, global_swing, global_humanize, bpm, rng)?;
+                SectionEntry::Play { name, with_map } => {
+                    let entry_with = if let Some(ew) = with_map {
+                        merge_with_maps(&section_with, ew)
+                    } else {
+                        section_with.clone()
+                    };
+                    let cmds = self.expand_name(name, base_beat, global_swing, global_humanize, bpm, &entry_with, rng)?;
                     output.extend(cmds);
                 }
             }
@@ -78,7 +147,7 @@ impl ExpansionContext {
     }
 }
 
-fn expand_pattern_events(events: &[PatternEvent], base_beat: f64, swing: f64, humanize_ms: f64, bpm: f64, rng: &mut impl Rng) -> Vec<Command> {
+fn expand_pattern_events(events: &[PatternEvent], base_beat: f64, swing: f64, humanize_ms: f64, bpm: f64, with_map: &WithMap, rng: &mut impl Rng) -> Vec<Command> {
     events
         .iter()
         .map(|e| {
@@ -103,9 +172,16 @@ fn expand_pattern_events(events: &[PatternEvent], base_beat: f64, swing: f64, hu
                 beat = (beat + offset).max(0.0);
             }
 
+            // Apply voice substitution from with_map
+            let expr = if with_map.is_empty() {
+                e.expr.clone()
+            } else {
+                apply_with_map(&e.expr, with_map)
+            };
+
             Command::PlayAt {
                 beat,
-                expr: e.expr.clone(),
+                expr,
                 duration_beats: e.duration_beats,
             }
         })
@@ -120,6 +196,7 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
     let mut cursor: f64 = 0.0;
     let mut global_swing: f64 = 0.5; // 0.5 = straight
     let mut global_humanize: f64 = 0.0;
+    let mut global_with: WithMap = HashMap::new();
     let mut bpm: f64 = 120.0;
 
     for cmd in script.commands {
@@ -135,6 +212,11 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
             }
             Command::SetHumanize(v) => {
                 global_humanize = v;
+                // consumed here — not passed to engine
+            }
+            Command::SetWith(map) => {
+                // Merge into global with_map (later statements override earlier ones)
+                global_with.extend(map);
                 // consumed here — not passed to engine
             }
             Command::VoiceDef { .. }
@@ -161,13 +243,14 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
                 name,
                 duration_beats,
                 entries,
+                with_map,
             } => {
                 ctx.sections
-                    .insert(name, SectionInfo { duration_beats, entries });
+                    .insert(name, SectionInfo { duration_beats, entries, with_map });
             }
             Command::PlaySequential { name } => {
                 let duration = ctx.duration_of(&name)?;
-                let events = ctx.expand_name(&name, cursor, global_swing, global_humanize, bpm, rng)?;
+                let events = ctx.expand_name(&name, cursor, global_swing, global_humanize, bpm, &global_with, rng)?;
                 output.extend(events);
                 cursor += duration;
             }
@@ -177,14 +260,14 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
                         match item {
                             RepeatBody::Play(name) => {
                                 let duration = ctx.duration_of(name)?;
-                                let events = ctx.expand_name(name, cursor, global_swing, global_humanize, bpm, rng)?;
+                                let events = ctx.expand_name(name, cursor, global_swing, global_humanize, bpm, &global_with, rng)?;
                                 output.extend(events);
                                 cursor += duration;
                             }
                             RepeatBody::Pick(choices) => {
                                 let name = weighted_pick(choices, rng);
                                 let duration = ctx.duration_of(&name)?;
-                                let events = ctx.expand_name(&name, cursor, global_swing, global_humanize, bpm, rng)?;
+                                let events = ctx.expand_name(&name, cursor, global_swing, global_humanize, bpm, &global_with, rng)?;
                                 output.extend(events);
                                 cursor += duration;
                             }
@@ -193,7 +276,7 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
                                 shuffle_vec(&mut shuffled, rng);
                                 for name in &shuffled {
                                     let duration = ctx.duration_of(name)?;
-                                    let events = ctx.expand_name(name, cursor, global_swing, global_humanize, bpm, rng)?;
+                                    let events = ctx.expand_name(name, cursor, global_swing, global_humanize, bpm, &global_with, rng)?;
                                     output.extend(events);
                                     cursor += duration;
                                 }
@@ -331,7 +414,9 @@ mod tests {
                     entries: vec![SectionEntry::RepeatEvery {
                         name: "drums".into(),
                         every_beats: 4.0,
+                        with_map: None,
                     }],
+                    with_map: None,
                 },
                 Command::PlaySequential {
                     name: "verse".into(),

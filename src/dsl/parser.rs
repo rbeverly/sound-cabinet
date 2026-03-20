@@ -3,8 +3,11 @@ use pest::iterators::Pair;
 use pest::Parser;
 use pest_derive::Parser;
 
+use std::collections::HashMap;
+
 use super::ast::{
     Command, DefKind, Expr, PatternEvent, RepeatBody, Script, SectionEntry, WeightedChoice,
+    WithMap,
 };
 
 #[derive(Parser)]
@@ -230,6 +233,12 @@ fn try_parse_command(line: &str) -> Result<Option<Command>> {
             return Ok(Some(Command::SetHumanize(val)));
         }
     }
+    if let Ok(pairs) = ScoreParser::parse(Rule::with_stmt, line) {
+        for pair in pairs {
+            let map = parse_mappings(pair.into_inner());
+            return Ok(Some(Command::SetWith(map)));
+        }
+    }
 
     // Scheduled event: at N play expr for M beats
     if let Ok(pairs) = ScoreParser::parse(Rule::at_stmt, line) {
@@ -274,6 +283,32 @@ fn parse_single_line(line: &str) -> Result<Option<Command>> {
 // ---------------------------------------------------------------------------
 // Block parsers
 // ---------------------------------------------------------------------------
+
+/// Parse a sequence of `mapping` pairs into a WithMap.
+fn parse_mappings(pairs: pest::iterators::Pairs<Rule>) -> WithMap {
+    let mut map = HashMap::new();
+    for pair in pairs {
+        if pair.as_rule() == Rule::mapping {
+            let mut inner = pair.into_inner();
+            let from = inner.next().unwrap().as_str().to_string();
+            let to = inner.next().unwrap().as_str().to_string();
+            map.insert(from, to);
+        }
+    }
+    map
+}
+
+/// Parse an optional with_clause from a pair's inner iterator.
+/// Returns Some(WithMap) if a with_clause is present, None otherwise.
+fn parse_optional_with(inner: &mut pest::iterators::Pairs<Rule>) -> Option<WithMap> {
+    // Peek at remaining pairs for a with_clause
+    for pair in inner {
+        if pair.as_rule() == Rule::with_clause {
+            return Some(parse_mappings(pair.into_inner()));
+        }
+    }
+    None
+}
 
 fn parse_pattern_def(header: &str, body: &[String]) -> Result<Command> {
     let pairs = ScoreParser::parse(Rule::pattern_header, header)
@@ -337,6 +372,8 @@ fn parse_section_def(header: &str, body: &[String]) -> Result<Command> {
     let mut inner = pair.into_inner();
     let name = inner.next().unwrap().as_str().to_string();
     let duration_beats: f64 = inner.next().unwrap().as_str().parse()?;
+    // Skip beat_unit, then check for optional with_clause on section header
+    let section_with = parse_optional_with(&mut inner);
 
     let mut entries = Vec::new();
     for line in body {
@@ -347,21 +384,21 @@ fn parse_section_def(header: &str, body: &[String]) -> Result<Command> {
             let mut ei = entry_pair.into_inner();
             let entry_name = ei.next().unwrap().as_str().to_string();
             let every_beats: f64 = ei.next().unwrap().as_str().parse()?;
+            // Skip beat_unit, check for optional with_clause
+            let entry_with = parse_optional_with(&mut ei);
             entries.push(SectionEntry::RepeatEvery {
                 name: entry_name,
                 every_beats,
+                with_map: entry_with,
             });
         } else if line.starts_with("play ") {
             let entry_pairs = ScoreParser::parse(Rule::section_entry_play, line)
                 .map_err(|e| anyhow!("Section play entry parse error:\n{e}"))?;
             let entry_pair = entry_pairs.into_iter().next().unwrap();
-            let entry_name = entry_pair
-                .into_inner()
-                .next()
-                .unwrap()
-                .as_str()
-                .to_string();
-            entries.push(SectionEntry::Play { name: entry_name });
+            let mut ei = entry_pair.into_inner();
+            let entry_name = ei.next().unwrap().as_str().to_string();
+            let entry_with = parse_optional_with(&mut ei);
+            entries.push(SectionEntry::Play { name: entry_name, with_map: entry_with });
         } else {
             return Err(anyhow!("Unrecognized section entry: {line}"));
         }
@@ -371,6 +408,7 @@ fn parse_section_def(header: &str, body: &[String]) -> Result<Command> {
         name,
         duration_beats,
         entries,
+        with_map: section_with,
     })
 }
 
@@ -795,6 +833,7 @@ section verse = 16 beats
                 name,
                 duration_beats,
                 entries,
+                ..
             } => {
                 assert_eq!(name, "verse");
                 assert_eq!(*duration_beats, 16.0);

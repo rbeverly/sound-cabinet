@@ -2,7 +2,10 @@ WHITESPACE = _{ " " | "\t" }
 COMMENT    = _{ "//" ~ (!NEWLINE ~ ANY)* }
 
 script = { SOI ~ (line ~ NEWLINE)* ~ line? ~ EOI }
-line   = { voice_def | fx_def | instrument_def | wave_def | pedal_down_stmt | pedal_up_stmt | swing_stmt | humanize_stmt | bpm_stmt | at_stmt | import_stmt | play_stmt | empty_line }
+line   = { voice_def | fx_def | instrument_def | wave_def | pedal_down_stmt | pedal_up_stmt | swing_stmt | humanize_stmt | with_stmt | bpm_stmt | at_stmt | import_stmt | play_stmt | empty_line }
+
+// Top-level voice binding defaults: with kick = analog_kick, snare = tight_snare
+with_stmt = { "with" ~ mapping ~ ("," ~ mapping)* }
 empty_line = { "" }
 
 // Voice definitions: voice name = expr
@@ -42,13 +45,17 @@ file_path   = @{ (!NEWLINE ~ !(" ") ~ ANY)+ }
 pattern_header = { "pattern" ~ ident ~ "=" ~ number ~ beat_unit ~ pattern_modifier* }
 pattern_modifier = { ("swing" ~ number) | ("humanize" ~ number) }
 
-// Section header: section verse = 16 beats
-section_header = { "section" ~ ident ~ "=" ~ number ~ beat_unit }
+// Section header: section verse = 16 beats [with {kick = 808, snare = clap}]
+section_header = { "section" ~ ident ~ "=" ~ number ~ beat_unit ~ with_clause? }
 
-// Section entry: repeat boom_bap every 4 beats
-section_entry_repeat = { "repeat" ~ ident ~ "every" ~ number ~ beat_unit }
-// Section entry: play jazz_chords
-section_entry_play = { "play" ~ ident }
+// Section entry: repeat boom_bap every 4 beats [with {kick = 808}]
+section_entry_repeat = { "repeat" ~ ident ~ "every" ~ number ~ beat_unit ~ with_clause? }
+// Section entry: play jazz_chords [with {melody = rhodes}]
+section_entry_play = { "play" ~ ident ~ with_clause? }
+
+// Voice substitution: with {kick = 808_kick, snare = clap}
+with_clause = { "with" ~ "{" ~ mapping ~ ("," ~ mapping)* ~ "}" }
+mapping = { ident ~ "=" ~ ident }
 
 // Repeat header: repeat 4 {
 repeat_header = { "repeat" ~ integer ~ "{" }

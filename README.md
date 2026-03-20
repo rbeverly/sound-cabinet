@@ -358,6 +358,27 @@ at 0 play pluck >> arp(C4, Eb4, G4, Bb4, 4) >> lowpass(1500, 0.6) for 4 beats
 
 If the voice template has a frequency of `0`, that's fine — the arp substitutes it. If the voice already has a real frequency, the arp overrides it.
 
+### Voice Substitution (`with`)
+
+Patterns and sections use voice names as placeholders. The `with` clause lets you swap in different instruments at play-time — the same drum pattern works with any kit, the same melody works with any instrument.
+
+Three levels of scoping (innermost wins):
+
+```
+// Global defaults — apply to everything
+with kick = analog_kick, snare = tight_snare, hat = crispy_hat
+
+// Section-level — override globals for this section
+section verse = 16 beats with {kick = 808_kick, snare = clap}
+  repeat drums every 4 beats                           // uses section defaults
+  repeat drums every 4 beats with {hat = shaker}       // override just the hat
+
+// Per-entry — override for one specific use
+  play melody_line with {mel = rhodes}
+```
+
+This decouples rhythm/melody from timbre. A boom-bap pattern defined with `kick`, `snare`, and `hat` works with electronic drums, acoustic samples, or synthesized percussion — just change the `with` bindings.
+
 ### Sustain Pedal
 
 The sustain pedal extends notes beyond their key-down duration, simulating piano damper behavior:
@@ -452,6 +473,10 @@ The `examples/` directory includes several complete compositions:
 | `wave-test.sc` | Custom waveform demo — plateau, spike, asymmetric, ziggurat |
 | `compress-test.sc` | A/B comparison of compression on drums, bass, and pads |
 | `instrument-demo.sc` | Showcase of the default instrument library — keys, strings, mallets, bass, pads |
+| `with-demo.sc` | Voice substitution demo — same patterns played with different instrument sets |
+| `black-glass.sc` | Downtempo electronic with organic textures and layered percussion |
+| `neon-cascade.sc` | Progressive house with filter sweeps, supersaw leads, and long builds |
+| `three-faces.sc` | Classical theme (Rachmaninoff) reinterpreted as jazz, ragtime, and drum & bass |
 
 Voice kits in `examples/voices/` define reusable instrument sets that compositions import. The **default instrument library** (`voices/instruments.sc`) includes 20+ instruments across 5 families (keys, plucked strings, pads, bass, mallets) plus texture voices (vinyl crackle, tape hiss, room tone) and effect chains (lofi, hall, radio).
 

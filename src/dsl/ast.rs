@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 /// DSP expression tree — the core recursive type representing signal graphs.
 #[derive(Debug, Clone)]
 pub enum Expr {
@@ -29,13 +31,16 @@ pub struct PatternEvent {
     pub duration_beats: f64,
 }
 
+/// Voice substitution map: maps pattern voice names to actual voice/instrument names.
+pub type WithMap = HashMap<String, String>;
+
 /// A placement within a section.
 #[derive(Debug, Clone)]
 pub enum SectionEntry {
-    /// `repeat boom_bap every 4 beats`
-    RepeatEvery { name: String, every_beats: f64 },
-    /// `play jazz_chords`
-    Play { name: String },
+    /// `repeat boom_bap every 4 beats [with {kick = 808}]`
+    RepeatEvery { name: String, every_beats: f64, with_map: Option<WithMap> },
+    /// `play jazz_chords [with {melody = rhodes}]`
+    Play { name: String, with_map: Option<WithMap> },
 }
 
 /// A weighted choice for `pick`.
@@ -103,6 +108,7 @@ pub enum Command {
         name: String,
         duration_beats: f64,
         entries: Vec<SectionEntry>,
+        with_map: Option<WithMap>,
     },
     /// Top-level sequential play: `play intro`
     PlaySequential { name: String },
@@ -121,6 +127,8 @@ pub enum Command {
     SetSwing(f64),
     /// Set humanize jitter: `humanize 10` (±ms random timing offset)
     SetHumanize(f64),
+    /// Set global voice bindings: `with kick = analog_kick, snare = tight_snare`
+    SetWith(WithMap),
 }
 
 /// A complete parsed score file.

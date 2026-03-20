@@ -115,8 +115,8 @@ impl Engine {
                     self.pedal_windows.push((down_sample, up_sample));
                 }
             }
-            // Swing/humanize are consumed by apply_timing — ignore if they reach engine
-            Command::SetSwing(_) | Command::SetHumanize(_) => {}
+            // Swing/humanize/with are consumed by the expander — ignore if they reach engine
+            Command::SetSwing(_) | Command::SetHumanize(_) | Command::SetWith(_) => {}
             // These variants are resolved before reaching the engine
             Command::Import { .. }
             | Command::PatternDef { .. }
