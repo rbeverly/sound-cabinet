@@ -189,6 +189,18 @@ pub fn parse_line(input: &str) -> Result<Command> {
             return parse_bpm(pair);
         }
     }
+    if let Ok(pairs) = ScoreParser::parse(Rule::swing_stmt, trimmed) {
+        for pair in pairs {
+            let val: f64 = pair.into_inner().next().unwrap().as_str().parse()?;
+            return Ok(Command::SetSwing(val));
+        }
+    }
+    if let Ok(pairs) = ScoreParser::parse(Rule::humanize_stmt, trimmed) {
+        for pair in pairs {
+            let val: f64 = pair.into_inner().next().unwrap().as_str().parse()?;
+            return Ok(Command::SetHumanize(val));
+        }
+    }
     if let Ok(pairs) = ScoreParser::parse(Rule::at_stmt, trimmed) {
         for pair in pairs {
             return parse_at(pair);
@@ -268,6 +280,18 @@ fn parse_single_line(line: &str) -> Result<Option<Command>> {
             return Ok(Some(parse_bpm(pair)?));
         }
     }
+    if let Ok(pairs) = ScoreParser::parse(Rule::swing_stmt, line) {
+        for pair in pairs {
+            let val: f64 = pair.into_inner().next().unwrap().as_str().parse().unwrap();
+            return Ok(Some(Command::SetSwing(val)));
+        }
+    }
+    if let Ok(pairs) = ScoreParser::parse(Rule::humanize_stmt, line) {
+        for pair in pairs {
+            let val: f64 = pair.into_inner().next().unwrap().as_str().parse().unwrap();
+            return Ok(Some(Command::SetHumanize(val)));
+        }
+    }
     if let Ok(pairs) = ScoreParser::parse(Rule::at_stmt, line) {
         for pair in pairs {
             return Ok(Some(parse_at(pair)?));
@@ -289,6 +313,24 @@ fn parse_pattern_def(header: &str, body: &[String]) -> Result<Command> {
     let mut inner = pair.into_inner();
     let name = inner.next().unwrap().as_str().to_string();
     let duration_beats: f64 = inner.next().unwrap().as_str().parse()?;
+    // skip beat_unit
+    let _ = inner.next(); // "beats" / "beat"
+
+    // Parse optional modifiers: swing 0.65, humanize 5
+    let mut swing = None;
+    let mut humanize = None;
+    for modifier in inner {
+        if modifier.as_rule() == Rule::pattern_modifier {
+            let text = modifier.as_str().trim();
+            if text.starts_with("swing") {
+                let val: f64 = text.strip_prefix("swing").unwrap().trim().parse()?;
+                swing = Some(val);
+            } else if text.starts_with("humanize") {
+                let val: f64 = text.strip_prefix("humanize").unwrap().trim().parse()?;
+                humanize = Some(val);
+            }
+        }
+    }
 
     let mut events = Vec::new();
     for line in body {
@@ -312,6 +354,8 @@ fn parse_pattern_def(header: &str, body: &[String]) -> Result<Command> {
         name,
         duration_beats,
         events,
+        swing,
+        humanize,
     })
 }
 
@@ -752,10 +796,14 @@ pattern drums = 4 beats
                 name,
                 duration_beats,
                 events,
+                swing,
+                humanize,
             } => {
                 assert_eq!(name, "drums");
                 assert_eq!(*duration_beats, 4.0);
                 assert_eq!(events.len(), 4);
+                assert!(swing.is_none());
+                assert!(humanize.is_none());
                 assert_eq!(events[0].beat_offset, 0.0);
                 assert_eq!(events[1].beat_offset, 1.0);
             }

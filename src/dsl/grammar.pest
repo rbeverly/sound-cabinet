@@ -2,7 +2,7 @@ WHITESPACE = _{ " " | "\t" }
 COMMENT    = _{ "//" ~ (!NEWLINE ~ ANY)* }
 
 script = { SOI ~ (line ~ NEWLINE)* ~ line? ~ EOI }
-line   = { voice_def | fx_def | instrument_def | wave_def | pedal_down_stmt | pedal_up_stmt | bpm_stmt | at_stmt | import_stmt | play_stmt | empty_line }
+line   = { voice_def | fx_def | instrument_def | wave_def | pedal_down_stmt | pedal_up_stmt | swing_stmt | humanize_stmt | bpm_stmt | at_stmt | import_stmt | play_stmt | empty_line }
 empty_line = { "" }
 
 // Voice definitions: voice name = expr
@@ -24,6 +24,12 @@ pedal_up_stmt = { "pedal" ~ "up" ~ "at" ~ number }
 // BPM: bpm 120
 bpm_stmt = { "bpm" ~ number }
 
+// Swing: swing 0.6 (shifts offbeats — 0.5 = straight, 0.6 = light swing, 0.67 = triplet swing)
+swing_stmt = { "swing" ~ number }
+
+// Humanize: humanize 10 (±10ms random jitter per event)
+humanize_stmt = { "humanize" ~ number }
+
 // Scheduled events: at 0 play expr for 4 beats
 at_stmt = { "at" ~ number ~ "play" ~ expr ~ "for" ~ number ~ beat_unit }
 beat_unit = { "beats" | "beat" }
@@ -32,8 +38,9 @@ beat_unit = { "beats" | "beat" }
 import_stmt = { "import" ~ file_path }
 file_path   = @{ (!NEWLINE ~ !(" ") ~ ANY)+ }
 
-// Pattern header: pattern boom_bap = 4 beats
-pattern_header = { "pattern" ~ ident ~ "=" ~ number ~ beat_unit }
+// Pattern header: pattern boom_bap = 4 beats [swing 0.65] [humanize 5]
+pattern_header = { "pattern" ~ ident ~ "=" ~ number ~ beat_unit ~ pattern_modifier* }
+pattern_modifier = { ("swing" ~ number) | ("humanize" ~ number) }
 
 // Section header: section verse = 16 beats
 section_header = { "section" ~ ident ~ "=" ~ number ~ beat_unit }

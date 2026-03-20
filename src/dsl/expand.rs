@@ -8,6 +8,8 @@ use super::ast::{Command, PatternEvent, RepeatBody, Script, SectionEntry};
 struct PatternInfo {
     duration_beats: f64,
     events: Vec<PatternEvent>,
+    swing: Option<f64>,
+    humanize: Option<f64>,
 }
 
 struct SectionInfo {
@@ -38,17 +40,19 @@ impl ExpansionContext {
         }
     }
 
-    fn expand_name(&self, name: &str, base_beat: f64) -> Result<Vec<Command>> {
+    fn expand_name(&self, name: &str, base_beat: f64, global_swing: f64, global_humanize: f64, bpm: f64, rng: &mut impl Rng) -> Result<Vec<Command>> {
         if let Some(p) = self.patterns.get(name) {
-            Ok(expand_pattern_events(&p.events, base_beat))
+            let swing = p.swing.unwrap_or(global_swing);
+            let humanize = p.humanize.unwrap_or(global_humanize);
+            Ok(expand_pattern_events(&p.events, base_beat, swing, humanize, bpm, rng))
         } else if let Some(s) = self.sections.get(name) {
-            self.expand_section(s, base_beat)
+            self.expand_section(s, base_beat, global_swing, global_humanize, bpm, rng)
         } else {
             Err(anyhow!("Unknown pattern or section: '{name}'"))
         }
     }
 
-    fn expand_section(&self, section: &SectionInfo, base_beat: f64) -> Result<Vec<Command>> {
+    fn expand_section(&self, section: &SectionInfo, base_beat: f64, global_swing: f64, global_humanize: f64, bpm: f64, rng: &mut impl Rng) -> Result<Vec<Command>> {
         let mut output = Vec::new();
 
         for entry in &section.entries {
@@ -56,13 +60,13 @@ impl ExpansionContext {
                 SectionEntry::RepeatEvery { name, every_beats } => {
                     let mut beat = 0.0;
                     while beat < section.duration_beats {
-                        let cmds = self.expand_name(name, base_beat + beat)?;
+                        let cmds = self.expand_name(name, base_beat + beat, global_swing, global_humanize, bpm, rng)?;
                         output.extend(cmds);
                         beat += every_beats;
                     }
                 }
                 SectionEntry::Play { name } => {
-                    let cmds = self.expand_name(name, base_beat)?;
+                    let cmds = self.expand_name(name, base_beat, global_swing, global_humanize, bpm, rng)?;
                     output.extend(cmds);
                 }
             }
@@ -72,13 +76,36 @@ impl ExpansionContext {
     }
 }
 
-fn expand_pattern_events(events: &[PatternEvent], base_beat: f64) -> Vec<Command> {
+fn expand_pattern_events(events: &[PatternEvent], base_beat: f64, swing: f64, humanize_ms: f64, bpm: f64, rng: &mut impl Rng) -> Vec<Command> {
     events
         .iter()
-        .map(|e| Command::PlayAt {
-            beat: base_beat + e.beat_offset,
-            expr: e.expr.clone(),
-            duration_beats: e.duration_beats,
+        .map(|e| {
+            let mut beat = base_beat + e.beat_offset;
+
+            // Apply swing: shift events on offbeat positions
+            if (swing - 0.5).abs() > 0.001 {
+                let offset_frac = e.beat_offset.fract();
+                // Swing any non-downbeat eighth-note position (0.5 within each beat)
+                if (offset_frac - 0.5).abs() < 0.05 {
+                    let offset_floor = e.beat_offset.floor();
+                    beat = base_beat + offset_floor + swing;
+                }
+            }
+
+            // Apply humanize: random timing jitter
+            if humanize_ms > 0.0 {
+                let jitter_beats = humanize_ms / 1000.0 * (bpm / 60.0);
+                let r1: f64 = rng.gen_range(-1.0..1.0);
+                let r2: f64 = rng.gen_range(-1.0..1.0);
+                let offset = (r1 + r2) / 2.0 * jitter_beats;
+                beat = (beat + offset).max(0.0);
+            }
+
+            Command::PlayAt {
+                beat,
+                expr: e.expr.clone(),
+                duration_beats: e.duration_beats,
+            }
         })
         .collect()
 }
@@ -89,12 +116,26 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
     let mut ctx = ExpansionContext::new();
     let mut output = Vec::new();
     let mut cursor: f64 = 0.0;
+    let mut global_swing: f64 = 0.5; // 0.5 = straight
+    let mut global_humanize: f64 = 0.0;
+    let mut bpm: f64 = 120.0;
 
     for cmd in script.commands {
         match cmd {
+            Command::SetBpm(v) => {
+                bpm = v;
+                output.push(cmd);
+            }
+            Command::SetSwing(v) => {
+                global_swing = v;
+                // consumed here — not passed to engine
+            }
+            Command::SetHumanize(v) => {
+                global_humanize = v;
+                // consumed here — not passed to engine
+            }
             Command::VoiceDef { .. }
             | Command::WaveDef { .. }
-            | Command::SetBpm(_)
             | Command::Import { .. }
             | Command::PedalDown { .. }
             | Command::PedalUp { .. } => {
@@ -107,9 +148,11 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
                 name,
                 duration_beats,
                 events,
+                swing,
+                humanize,
             } => {
                 ctx.patterns
-                    .insert(name, PatternInfo { duration_beats, events });
+                    .insert(name, PatternInfo { duration_beats, events, swing, humanize });
             }
             Command::SectionDef {
                 name,
@@ -121,7 +164,7 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
             }
             Command::PlaySequential { name } => {
                 let duration = ctx.duration_of(&name)?;
-                let events = ctx.expand_name(&name, cursor)?;
+                let events = ctx.expand_name(&name, cursor, global_swing, global_humanize, bpm, rng)?;
                 output.extend(events);
                 cursor += duration;
             }
@@ -131,14 +174,14 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
                         match item {
                             RepeatBody::Play(name) => {
                                 let duration = ctx.duration_of(name)?;
-                                let events = ctx.expand_name(name, cursor)?;
+                                let events = ctx.expand_name(name, cursor, global_swing, global_humanize, bpm, rng)?;
                                 output.extend(events);
                                 cursor += duration;
                             }
                             RepeatBody::Pick(choices) => {
                                 let name = weighted_pick(choices, rng);
                                 let duration = ctx.duration_of(&name)?;
-                                let events = ctx.expand_name(&name, cursor)?;
+                                let events = ctx.expand_name(&name, cursor, global_swing, global_humanize, bpm, rng)?;
                                 output.extend(events);
                                 cursor += duration;
                             }
@@ -147,7 +190,7 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
                                 shuffle_vec(&mut shuffled, rng);
                                 for name in &shuffled {
                                     let duration = ctx.duration_of(name)?;
-                                    let events = ctx.expand_name(name, cursor)?;
+                                    let events = ctx.expand_name(name, cursor, global_swing, global_humanize, bpm, rng)?;
                                     output.extend(events);
                                     cursor += duration;
                                 }
@@ -161,6 +204,9 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
 
     Ok(Script { commands: output })
 }
+
+// apply_timing is no longer needed — swing/humanize are applied during pattern expansion
+// in expand_script, with per-pattern scoping support.
 
 fn weighted_pick(
     choices: &[super::ast::WeightedChoice],
@@ -222,6 +268,8 @@ mod tests {
                             duration_beats: 0.5,
                         },
                     ],
+                    swing: None,
+                    humanize: None,
                 },
                 Command::PlaySequential {
                     name: "drums".into(),
@@ -271,6 +319,8 @@ mod tests {
                         expr: Expr::VoiceRef("kick".into()),
                         duration_beats: 0.5,
                     }],
+                    swing: None,
+                    humanize: None,
                 },
                 Command::SectionDef {
                     name: "verse".into(),

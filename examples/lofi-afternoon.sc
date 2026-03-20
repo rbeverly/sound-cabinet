@@ -4,6 +4,7 @@
 import voices/lofi-kit.sc
 
 bpm 75
+humanize 6
 
 // -- Patterns --
 
@@ -13,8 +14,8 @@ pattern boom_bap = 4 beats
   at 2 play kick for 0.5 beats
   at 3 play snare for 0.25 beats
 
-// Busier variation — same backbone, ghost snare + offbeat hat for feel
-pattern boom_bap_busy = 4 beats
+// Busier variation — swung offbeats for lazy feel
+pattern boom_bap_busy = 4 beats swing 0.65
   at 0   play kick for 0.5 beats
   at 1   play snare for 0.25 beats
   at 1.5 play ghost_snare for 0.15 beats

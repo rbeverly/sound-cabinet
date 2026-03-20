@@ -73,6 +73,8 @@ pub enum Command {
         name: String,
         duration_beats: f64,
         events: Vec<PatternEvent>,
+        swing: Option<f64>,
+        humanize: Option<f64>,
     },
     /// Define a named section that composes patterns
     SectionDef {
@@ -93,6 +95,10 @@ pub enum Command {
     PedalDown { beat: f64 },
     /// Sustain pedal up: `pedal up at 8.0`
     PedalUp { beat: f64 },
+    /// Set swing amount: `swing 0.6` (0.5 = straight, 0.67 = triplet feel)
+    SetSwing(f64),
+    /// Set humanize jitter: `humanize 10` (±ms random timing offset)
+    SetHumanize(f64),
 }
 
 /// A complete parsed score file.

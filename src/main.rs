@@ -27,6 +27,7 @@ fn main() -> Result<()> {
         "render" => cmd_render(&args[2..])?,
         "play" => cmd_play(&args[2..])?,
         "watch" => cmd_watch(&args[2..])?,
+        "piano" => cmd_piano(&args[2..])?,
         "stream" => cmd_stream()?,
         _ => {
             print_usage();
@@ -42,7 +43,34 @@ fn print_usage() {
     eprintln!("  sound-cabinet render <score.sc> -o <output.wav>");
     eprintln!("  sound-cabinet play <score.sc>");
     eprintln!("  sound-cabinet watch <score.sc>   (live reload on file save)");
+    eprintln!("  sound-cabinet piano <score.sc>   (play with keyboard)");
     eprintln!("  sound-cabinet stream              (reads from stdin)");
+}
+
+/// Parse, import, and load only definitions (voices, instruments, fx, waves, bpm)
+/// from a score file — no playback events scheduled.
+fn load_definitions(score_path: &str) -> Result<Engine> {
+    use sound_cabinet::dsl::Command;
+
+    let source = std::fs::read_to_string(score_path)?;
+    let script = parse_script(&source)?;
+    let base_dir = Path::new(score_path).parent().unwrap_or(Path::new("."));
+    let script = resolve_imports(script, base_dir)?;
+    let script = expand_script(script, &mut rand::thread_rng())?;
+
+
+    let mut engine = Engine::new(SAMPLE_RATE);
+    for cmd in script.commands {
+        match &cmd {
+            Command::VoiceDef { .. }
+            | Command::WaveDef { .. }
+            | Command::SetBpm(_) => {
+                engine.handle_command(cmd)?;
+            }
+            _ => {} // skip playback events, patterns, sections, etc.
+        }
+    }
+    Ok(engine)
 }
 
 /// Parse, import, expand, and build an engine from a score file.
@@ -52,6 +80,7 @@ fn build_engine(score_path: &str) -> Result<Engine> {
     let base_dir = Path::new(score_path).parent().unwrap_or(Path::new("."));
     let script = resolve_imports(script, base_dir)?;
     let script = expand_script(script, &mut rand::thread_rng())?;
+
 
     let mut engine = Engine::new(SAMPLE_RATE);
     for cmd in script.commands {
@@ -163,6 +192,178 @@ fn cmd_watch(args: &[String]) -> Result<()> {
     let _ = shutdown_tx.send(());
     let _ = audio_thread.join();
     Ok(())
+}
+
+/// Map a keyboard key to a MIDI note number.
+/// Layout:
+///   Bottom row: Z S X D C V G B H N J M ,    → C3 to C4 (chromatic)
+///   Top row:    Q 2 W 3 E R 5 T 6 Y 7 U I    → C4 to C5 (chromatic)
+fn key_to_midi(c: char) -> Option<i32> {
+    match c {
+        // Bottom row: C3 (48) to C4 (60)
+        'z' => Some(48),  // C3
+        's' => Some(49),  // C#3
+        'x' => Some(50),  // D3
+        'd' => Some(51),  // D#3
+        'c' => Some(52),  // E3
+        'v' => Some(53),  // F3
+        'g' => Some(54),  // F#3
+        'b' => Some(55),  // G3
+        'h' => Some(56),  // G#3
+        'n' => Some(57),  // A3
+        'j' => Some(58),  // A#3
+        'm' => Some(59),  // B3
+        ',' => Some(60),  // C4
+
+        // Top row: C4 (60) to C5 (72)
+        'q' => Some(60),  // C4
+        '2' => Some(61),  // C#4
+        'w' => Some(62),  // D4
+        '3' => Some(63),  // D#4
+        'e' => Some(64),  // E4
+        'r' => Some(65),  // F4
+        '5' => Some(66),  // F#4
+        't' => Some(67),  // G4
+        '6' => Some(68),  // G#4
+        'y' => Some(69),  // A4
+        '7' => Some(70),  // A#4
+        'u' => Some(71),  // B4
+        'i' => Some(72),  // C5
+
+        _ => None,
+    }
+}
+
+/// Convert MIDI note number to frequency in Hz (A4 = 440).
+fn midi_to_hz(midi: i32) -> f64 {
+    440.0 * 2.0_f64.powf((midi as f64 - 69.0) / 12.0)
+}
+
+/// Note name from MIDI number (for display).
+fn midi_to_name(midi: i32) -> String {
+    let names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+    let octave = (midi / 12) - 1;
+    let note = midi % 12;
+    format!("{}{}", names[note as usize], octave)
+}
+
+/// Live piano mode: play an instrument with your keyboard.
+fn cmd_piano(args: &[String]) -> Result<()> {
+    use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::terminal;
+    use sound_cabinet::dsl::Command;
+
+    if args.is_empty() {
+        return Err(anyhow!("Usage: sound-cabinet piano <score.sc> [instrument-name]"));
+    }
+
+    let score_path = &args[0];
+    let instrument_name = args.get(1).map(|s| s.as_str());
+
+    // Load definitions from the score file
+    let engine = load_definitions(score_path)?;
+
+    // Wrap in Arc<Mutex> for audio thread
+    let engine = Arc::new(Mutex::new(engine));
+
+    // Start audio stream
+    let (shutdown_tx, shutdown_rx) = crossbeam_channel::bounded::<()>(1);
+    let engine_for_audio = Arc::clone(&engine);
+    let audio_thread = thread::spawn(move || {
+        if let Err(e) = realtime::play_streaming(engine_for_audio, shutdown_rx) {
+            eprintln!("Audio error: {e}");
+        }
+    });
+
+    // Determine default note duration in beats (notes play for this long then decay)
+    let note_duration_beats = 2.0;
+
+    eprintln!("Piano mode — {}", score_path);
+    if let Some(name) = instrument_name {
+        eprintln!("Instrument: {}", name);
+    } else {
+        eprintln!("Using first available instrument/voice (or sine fallback)");
+    }
+    eprintln!();
+    eprintln!("  │ s │ d │   │ g │ h │ j │   │    │ 2 │ 3 │   │ 5 │ 6 │ 7 │   │");
+    eprintln!("  │C#3│D#3│   │F#3│G#3│A#3│   │    │C#4│D#4│   │F#4│G#4│A#4│   │");
+    eprintln!("┌─┴┬──┴┬──┴┬──┴┬──┴┬──┴┬──┴┬──┤  ┌─┴┬──┴┬──┴┬──┴┬──┴┬──┴┬──┴┬──┤");
+    eprintln!("│ z│ x │ c │ v │ b │ n │ m │ ,│  │ q│ w │ e │ r │ t │ y │ u │ i│");
+    eprintln!("│C3│D3 │E3 │F3 │G3 │A3 │B3 │C4│  │C4│D4 │E4 │F4 │G4 │A4 │B4 │C5│");
+    eprintln!("└──┴───┴───┴───┴───┴───┴───┴──┘  └──┴───┴───┴───┴───┴───┴───┴──┘");
+    eprintln!();
+    eprintln!("Press keys to play. Esc or Ctrl+C to quit.");
+
+    // Enter raw terminal mode
+    terminal::enable_raw_mode()?;
+
+    let result = (|| -> Result<()> {
+        loop {
+            if event::poll(Duration::from_millis(50))? {
+                if let Event::Key(KeyEvent { code, modifiers, .. }) = event::read()? {
+                    // Exit on Esc or Ctrl+C
+                    if code == KeyCode::Esc
+                        || (code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL))
+                    {
+                        break;
+                    }
+
+                    if let KeyCode::Char(c) = code {
+                        if let Some(midi) = key_to_midi(c) {
+                            let freq = midi_to_hz(midi);
+                            let name = midi_to_name(midi);
+
+                            // Build the expression for this note
+                            let expr = if let Some(inst_name) = instrument_name {
+                                // instrument(freq)
+                                sound_cabinet::dsl::ast::Expr::FnCall {
+                                    name: inst_name.to_string(),
+                                    args: vec![sound_cabinet::dsl::ast::Expr::Number(freq)],
+                                }
+                            } else {
+                                // Default: sine(freq) with decay
+                                sound_cabinet::dsl::ast::Expr::Pipe(
+                                    Box::new(sound_cabinet::dsl::ast::Expr::FnCall {
+                                        name: "sine".to_string(),
+                                        args: vec![sound_cabinet::dsl::ast::Expr::Number(freq)],
+                                    }),
+                                    Box::new(sound_cabinet::dsl::ast::Expr::FnCall {
+                                        name: "decay".to_string(),
+                                        args: vec![sound_cabinet::dsl::ast::Expr::Number(6.0)],
+                                    }),
+                                )
+                            };
+
+                            // Schedule the note relative to current playback position
+                            let mut eng = engine.lock().unwrap();
+                            eng.handle_command_relative(Command::PlayAt {
+                                beat: 0.0,
+                                expr,
+                                duration_beats: note_duration_beats,
+                            })
+                            .unwrap_or_else(|e| {
+                                // Can't easily print in raw mode, just ignore
+                                let _ = e;
+                            });
+
+                            // Print the note name (raw mode needs \r\n)
+                            eprint!("  {} ({:.1} Hz)\r\n", name, freq);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    })();
+
+    // Restore terminal
+    terminal::disable_raw_mode()?;
+    eprintln!("\nPiano mode ended.");
+
+    let _ = shutdown_tx.send(());
+    let _ = audio_thread.join();
+
+    result
 }
 
 /// Stream mode: read lines from stdin, play in real-time.

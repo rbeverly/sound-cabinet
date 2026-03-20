@@ -77,6 +77,9 @@ sound-cabinet play examples/demo.sc
 # Watch mode — live reload on file save
 sound-cabinet watch examples/demo.sc
 
+# Piano mode — play any instrument live with your keyboard
+sound-cabinet piano examples/voices/concerto2-kit.sc piano
+
 # Stream mode — type lines or pipe them in, hear them immediately
 sound-cabinet stream
 ```
@@ -210,6 +213,20 @@ Generate a waveform at a given frequency:
 | `noise()` | White noise (no frequency argument) |
 
 Pulse width can be swept over time using parameter automation: `pulse(C3, 0.1 -> 0.9)` — classic PWM synth pad sound.
+
+#### Custom waveforms
+
+Define arbitrary waveform shapes as arrays of sample points. The array represents one cycle — the oscillator reads through it at the right speed for the frequency, interpolating linearly:
+
+```
+wave plateau = [0.0, 0.4, 0.8, 1.0, 1.0, 1.0, 0.8, 0.4, 0.0, -0.4, -0.8, -1.0, -1.0, -1.0, -0.8, -0.4]
+wave spike = [0.0, 1.0, 0.3, 0.1, 0.0, -0.1, -0.3, -1.0]
+
+at 0 play 0.3 * plateau(C3) >> lowpass(2000, 0.7) for 4 beats
+at 4 play 0.3 * spike(A4) >> reverb(0.6, 0.4, 0.25) for 4 beats
+```
+
+Array length determines resolution. Fewer points = crunchier, more aliased (8-bit character). More points = smoother, higher fidelity. Waves don't need to be symmetric — asymmetry adds even harmonics (tube/tape warmth). Custom waves work with instruments, effects, arp — everything in the pipe chain.
 
 ### Filters
 
@@ -347,6 +364,30 @@ pedal up at 8.0                      // both notes released
 
 Notes that end while the pedal is down have their duration extended to the pedal-up point. The MIDI converter (`midi2sc.py`) automatically translates CC64 pedal events into `pedal down/up` instructions.
 
+### Swing & Humanize
+
+Timing transforms that make patterns feel human. Swing shifts offbeat events (eighth-note positions like 0.5, 1.5, 2.5) later within each beat. Humanize adds random timing jitter.
+
+**Global** — applies to all patterns that don't have their own swing/humanize:
+
+```
+swing 0.62        // 0.5 = straight, 0.67 = triplet swing
+humanize 8        // ±8ms random jitter per event
+```
+
+**Per-pattern** — overrides global settings for that pattern:
+
+```
+pattern hats = 4 beats swing 0.65 humanize 5
+  at 0.5 play hat for 0.2 beats
+  at 1.5 play hat for 0.2 beats
+
+pattern kick = 4 beats
+  at 0 play kick for 0.5 beats    // straight — no swing
+```
+
+This lets you swing the hats while keeping the kick on the grid, or humanize the melody while leaving the drums robotic.
+
 ### Operators
 
 | Operator | Meaning | Example |
@@ -377,6 +418,20 @@ at 0 play sine(A4) for 2 beats" | sound-cabinet stream
 
 This is the foundation for generative music — pipe output from an LLM or any program that generates `.sc` lines.
 
+## Piano Mode
+
+Play any instrument or custom waveform live with your keyboard:
+
+```bash
+sound-cabinet piano examples/voices/concerto2-kit.sc piano
+sound-cabinet piano examples/wave-test.sc spike
+sound-cabinet piano examples/voices/lofi-kit.sc mel
+```
+
+The first argument is a score file (loads its instrument/voice/fx/wave definitions). The optional second argument is the instrument or wave name to play. Without it, a default sine+decay tone is used.
+
+The keyboard maps two chromatic octaves (C3–C5) across your QWERTY layout — the same layout as GarageBand. Press Esc or Ctrl+C to exit.
+
 ## Examples
 
 The `examples/` directory includes several complete compositions:
@@ -386,8 +441,9 @@ The `examples/` directory includes several complete compositions:
 | `demo.sc` | Basic features walkthrough |
 | `effects-demo.sc` | Showcases effects, arp, pulse oscillator, PWM sweep, filter automation, and compression |
 | `concerto2.sc` | Rachmaninoff Piano Concerto No. 2 (converted from MIDI) |
-| `lofi-afternoon.sc` | Lofi hip-hop track with chorus, distortion, and vibrato |
-| `therapy-lofi.sc` | Extended ambient/lofi piece (~4 min) |
+| `lofi-afternoon.sc` | Lofi hip-hop track with swing, chorus, distortion, and vibrato |
+| `wave-test.sc` | Custom waveform demo — plateau, spike, asymmetric, ziggurat |
+| `compress-test.sc` | A/B comparison of compression on drums, bass, and pads |
 
 Voice kits in `examples/voices/` define reusable instrument sets that compositions import.
 
@@ -411,17 +467,18 @@ saw(C3) >> distort(3.0, "fold")    // foldback
 sine(A4) >> distort(2.0, "asym")   // asymmetric / tube-style
 ```
 
-### Custom waveforms
+### Wavetable interpolation modes
 
-Define arbitrary waveform shapes as arrays of sample points. The oscillator interpolates between them and loops at the given frequency:
+Custom waveforms currently use linear interpolation between sample points. Non-linear modes (cubic, spline) would allow smooth curves with fewer points — a 4-point wave with cubic interpolation could produce a bell curve that needs 64+ points linearly. Specified as a per-wave argument:
 
 ```
-wave wonky = [0.0, 0.3, 0.8, 1.0, 1.0, 0.6, 0.2, -0.5, -0.8, -1.0, -0.4, 0.0]
-
-at 0 play wonky(C3) >> lowpass(800, 0.7) for 4 beats
+wave bell cubic = [0.0, 1.0, 1.0, 0.0]    // cubic interpolation
+wave harsh = [0.0, 1.0, -1.0, 0.0]         // default: linear
 ```
 
-Or as a visual grid (rows = amplitude, columns = time):
+### Wave grid syntax
+
+Visual grid definition for waveforms (rows = amplitude, columns = time):
 
 ```
 wave spiky = 8x8 {
@@ -436,7 +493,9 @@ wave spiky = 8x8 {
 }
 ```
 
-Waves don't have to be symmetric — asymmetry adds even harmonics (tube/tape warmth). Multi-cycle patterns are also possible, where the repeating unit is longer than one wave period:
+### Multi-cycle waveforms
+
+Compose multiple wave definitions into a longer repeating pattern. The fundamental period becomes the full sequence, creating richer harmonics:
 
 ```
 wave evolving = cycle [wonky, spiky, spiky, wonky]
@@ -463,28 +522,18 @@ tuning 432        // A4 = 432 Hz — all notes shift accordingly
 
 Beyond alternate reference pitches, support non-12-TET tuning systems — 19-TET, 24-TET (quarter tones), just intonation, gamelan pelog/slendro. This changes the fundamental interval math from `2^(semitones/12)` to pluggable tuning tables. Named scale systems (ragas, maqam, pentatonic modes) could work as selections from a tuning: `arp(raga_bhairav, 4)`.
 
-### Swing & humanize
+### Composable timing transforms (future)
 
-Composable timing transforms — they change *when* events fire, not the audio signal. Can be applied at the pattern definition, at play-time via piping, or globally. Transforms compose multiplicatively when stacked.
+Play-time piping for swing — apply different swing to different layers in the same section:
 
 ```
-// On the pattern definition
-pattern drums = 4 beats swing 0.6
-  at 0 play kick for 0.5 beats
-  at 1 play hat for 0.25 beats
-
-// At play-time — different swing per layer in the same section
 section groove = 16 beats
   repeat hats every 4 beats >> swing 0.7
   repeat kick_pattern every 4 beats
-  play chords >> swing 0.6
   play bass
-
-// Global jitter
-humanize 10       // ±10ms per note
 ```
 
-Swing is the foundation of shuffle, jazz, and boom-bap grooves. Humanize adds the subtle imprecision of a real player. Stacking swing (e.g., swung pattern played with additional swing) pushes notes progressively behind the beat — a real production technique for that Dilla-style loose feel.
+Also: expressive dynamics (`rush`, `drag`, `push`) for manual performance markup, and algorithmic humanization based on musical structure heuristics.
 
 ### Velocity & dynamics
 
@@ -562,6 +611,19 @@ This would replace the manual `200 / freq` approximation with a proper psychoaco
 ### MIDI export (sc2midi)
 
 Render to `.mid` instead of `.wav` so compositions can be brought into a DAW with real instruments. The arp and note-name infrastructure already maps cleanly to MIDI events. Combined with the existing `midi2sc.py` importer, this creates a round-trip: MIDI → .sc (edit/compose) → MIDI (produce in DAW).
+
+### MIDI keyboard support
+
+Connect a physical MIDI keyboard for live playing with velocity sensitivity, pedal support, and mod wheel. Uses the `midir` crate to listen for MIDI note-on/note-off events. Would enable real velocity values (instead of uniform volume) and CC data (sustain pedal, expression).
+
+### Note-on / note-off engine support
+
+The engine currently schedules notes with fixed durations. For realistic live playing, instruments need two distinct behaviors:
+
+- **Percussive** (piano, plucked strings): key down fires a single impulse, note decays naturally, key up activates damper (fast fade)
+- **Sustained** (organ, synth pad): key down starts continuous generation, key up stops it with a release envelope
+
+This requires adding a note-off event type to the engine's scheduling system, enabling proper key-duration-sensitive playback in piano mode and MIDI input.
 
 ### VST3/AU plugin export
 
