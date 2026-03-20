@@ -139,94 +139,22 @@ pub fn parse_script(input: &str) -> Result<Script> {
     Ok(Script { commands })
 }
 
-/// Parse a single line of input into a Command (used by streaming mode).
-pub fn parse_line(input: &str) -> Result<Command> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() || trimmed.starts_with("//") {
-        return Err(anyhow!("Empty or comment line"));
-    }
-
-    if let Ok(pairs) = ScoreParser::parse(Rule::voice_def, trimmed) {
-        for pair in pairs {
-            return parse_voice_def(pair);
-        }
-    }
-    if let Ok(pairs) = ScoreParser::parse(Rule::fx_def, trimmed) {
-        for pair in pairs {
-            return parse_voice_def(pair);
-        }
-    }
-    if let Ok(pairs) = ScoreParser::parse(Rule::instrument_def, trimmed) {
-        for pair in pairs {
-            return parse_voice_def(pair);
-        }
-    }
-    if let Ok(pairs) = ScoreParser::parse(Rule::wave_def, trimmed) {
-        for pair in pairs {
-            let mut inner = pair.into_inner();
-            let name = inner.next().unwrap().as_str().to_string();
-            let samples: Vec<f64> = inner
-                .filter(|p| p.as_rule() == Rule::number)
-                .map(|p| p.as_str().parse().unwrap())
-                .collect();
-            return Ok(Command::WaveDef { name, samples });
-        }
-    }
-    if let Ok(pairs) = ScoreParser::parse(Rule::pedal_down_stmt, trimmed) {
-        for pair in pairs {
-            let beat: f64 = pair.into_inner().next().unwrap().as_str().parse().unwrap();
-            return Ok(Command::PedalDown { beat });
-        }
-    }
-    if let Ok(pairs) = ScoreParser::parse(Rule::pedal_up_stmt, trimmed) {
-        for pair in pairs {
-            let beat: f64 = pair.into_inner().next().unwrap().as_str().parse().unwrap();
-            return Ok(Command::PedalUp { beat });
-        }
-    }
-    if let Ok(pairs) = ScoreParser::parse(Rule::bpm_stmt, trimmed) {
-        for pair in pairs {
-            return parse_bpm(pair);
-        }
-    }
-    if let Ok(pairs) = ScoreParser::parse(Rule::swing_stmt, trimmed) {
-        for pair in pairs {
-            let val: f64 = pair.into_inner().next().unwrap().as_str().parse()?;
-            return Ok(Command::SetSwing(val));
-        }
-    }
-    if let Ok(pairs) = ScoreParser::parse(Rule::humanize_stmt, trimmed) {
-        for pair in pairs {
-            let val: f64 = pair.into_inner().next().unwrap().as_str().parse()?;
-            return Ok(Command::SetHumanize(val));
-        }
-    }
-    if let Ok(pairs) = ScoreParser::parse(Rule::at_stmt, trimmed) {
-        for pair in pairs {
-            return parse_at(pair);
-        }
-    }
-
-    Err(anyhow!("Unrecognized line: {trimmed}"))
-}
-
-// ---------------------------------------------------------------------------
-// Single-line parsing
-// ---------------------------------------------------------------------------
-
-fn parse_single_line(line: &str) -> Result<Option<Command>> {
+/// Try to parse a single line as any known command type.
+/// Returns Ok(Some(cmd)) if parsed, Ok(None) if empty/comment, Err if unrecognized.
+/// This is the single source of truth for line-level parsing — both streaming mode
+/// and script mode call this function.
+fn try_parse_command(line: &str) -> Result<Option<Command>> {
     if line.is_empty() || line.starts_with("//") {
         return Ok(None);
     }
 
-    // Try import
+    // Import (string prefix check, not grammar rule)
     if line.starts_with("import ") {
         let path = line.strip_prefix("import ").unwrap().trim().to_string();
         return Ok(Some(Command::Import { path }));
     }
 
-    // Try play (top-level sequential) — must check before at_stmt since both
-    // could start differently, but play_stmt is just "play <ident>"
+    // Top-level sequential play: "play intro" (but not "play X for N beats")
     if line.starts_with("play ") && !line.contains(" for ") {
         if let Ok(pairs) = ScoreParser::parse(Rule::play_stmt, line) {
             for pair in pairs {
@@ -236,62 +164,70 @@ fn parse_single_line(line: &str) -> Result<Option<Command>> {
         }
     }
 
-    // Try voice_def, fx_def, bpm_stmt, at_stmt via the full grammar
-    if let Ok(pairs) = ScoreParser::parse(Rule::voice_def, line) {
-        for pair in pairs {
-            return Ok(Some(parse_voice_def(pair)?));
+    // Voice / fx / instrument definitions (all produce VoiceDef)
+    for rule in [Rule::voice_def, Rule::fx_def, Rule::instrument_def] {
+        if let Ok(pairs) = ScoreParser::parse(rule, line) {
+            for pair in pairs {
+                return Ok(Some(parse_voice_def(pair)?));
+            }
         }
     }
-    if let Ok(pairs) = ScoreParser::parse(Rule::fx_def, line) {
-        for pair in pairs {
-            return Ok(Some(parse_voice_def(pair)?));
-        }
-    }
-    if let Ok(pairs) = ScoreParser::parse(Rule::instrument_def, line) {
-        for pair in pairs {
-            return Ok(Some(parse_voice_def(pair)?));
-        }
-    }
+
+    // Wavetable definition
     if let Ok(pairs) = ScoreParser::parse(Rule::wave_def, line) {
         for pair in pairs {
-            let mut inner = pair.into_inner();
-            let name = inner.next().unwrap().as_str().to_string();
-            let samples: Vec<f64> = inner
-                .filter(|p| p.as_rule() == Rule::number)
-                .map(|p| p.as_str().parse().unwrap())
-                .collect();
-            return Ok(Some(Command::WaveDef { name, samples }));
+            return Ok(Some(parse_wave_def_pair(pair)?));
         }
     }
+
+    // Pedal events
     if let Ok(pairs) = ScoreParser::parse(Rule::pedal_down_stmt, line) {
         for pair in pairs {
-            let beat: f64 = pair.into_inner().next().unwrap().as_str().parse().unwrap();
+            let beat: f64 = pair.into_inner().next()
+                .ok_or_else(|| anyhow!("Expected beat in pedal down"))?
+                .as_str().parse()
+                .map_err(|_| anyhow!("Invalid number in pedal down statement"))?;
             return Ok(Some(Command::PedalDown { beat }));
         }
     }
     if let Ok(pairs) = ScoreParser::parse(Rule::pedal_up_stmt, line) {
         for pair in pairs {
-            let beat: f64 = pair.into_inner().next().unwrap().as_str().parse().unwrap();
+            let beat: f64 = pair.into_inner().next()
+                .ok_or_else(|| anyhow!("Expected beat in pedal up"))?
+                .as_str().parse()
+                .map_err(|_| anyhow!("Invalid number in pedal up statement"))?;
             return Ok(Some(Command::PedalUp { beat }));
         }
     }
+
+    // BPM
     if let Ok(pairs) = ScoreParser::parse(Rule::bpm_stmt, line) {
         for pair in pairs {
             return Ok(Some(parse_bpm(pair)?));
         }
     }
+
+    // Swing / humanize
     if let Ok(pairs) = ScoreParser::parse(Rule::swing_stmt, line) {
         for pair in pairs {
-            let val: f64 = pair.into_inner().next().unwrap().as_str().parse().unwrap();
+            let val: f64 = pair.into_inner().next()
+                .ok_or_else(|| anyhow!("Expected value in swing statement"))?
+                .as_str().parse()
+                .map_err(|_| anyhow!("Invalid number in swing statement"))?;
             return Ok(Some(Command::SetSwing(val)));
         }
     }
     if let Ok(pairs) = ScoreParser::parse(Rule::humanize_stmt, line) {
         for pair in pairs {
-            let val: f64 = pair.into_inner().next().unwrap().as_str().parse().unwrap();
+            let val: f64 = pair.into_inner().next()
+                .ok_or_else(|| anyhow!("Expected value in humanize statement"))?
+                .as_str().parse()
+                .map_err(|_| anyhow!("Invalid number in humanize statement"))?;
             return Ok(Some(Command::SetHumanize(val)));
         }
     }
+
+    // Scheduled event: at N play expr for M beats
     if let Ok(pairs) = ScoreParser::parse(Rule::at_stmt, line) {
         for pair in pairs {
             return Ok(Some(parse_at(pair)?));
@@ -299,6 +235,36 @@ fn parse_single_line(line: &str) -> Result<Option<Command>> {
     }
 
     Err(anyhow!("Unrecognized line: {line}"))
+}
+
+/// Extract a wave_def pair into a WaveDef command.
+fn parse_wave_def_pair(pair: Pair<Rule>) -> Result<Command> {
+    let mut inner = pair.into_inner();
+    let name = inner.next()
+        .ok_or_else(|| anyhow!("Expected name in wave definition"))?
+        .as_str().to_string();
+    let samples: Result<Vec<f64>> = inner
+        .filter(|p| p.as_rule() == Rule::number)
+        .map(|p| p.as_str().parse::<f64>().map_err(|e| anyhow!("Invalid number in wave definition: {e}")))
+        .collect();
+    Ok(Command::WaveDef { name, samples: samples? })
+}
+
+/// Parse a single line of input into a Command (used by streaming mode).
+pub fn parse_line(input: &str) -> Result<Command> {
+    let trimmed = input.trim();
+    match try_parse_command(trimmed)? {
+        Some(cmd) => Ok(cmd),
+        None => Err(anyhow!("Empty or comment line")),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Single-line parsing (used by script mode) — delegates to try_parse_command
+// ---------------------------------------------------------------------------
+
+fn parse_single_line(line: &str) -> Result<Option<Command>> {
+    try_parse_command(line)
 }
 
 // ---------------------------------------------------------------------------

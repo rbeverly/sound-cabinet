@@ -614,37 +614,33 @@ pub struct Degrade {
     // Noise mix
     noise_amount: f32,
     noise_state: u32, // simple PRNG state
+    // Stored for set_sample_rate recalculation
+    amount: f32,
+    sample_rate: f64,
 }
 
 impl Degrade {
     pub fn new(amount: f32) -> Self {
         let amount = amount.max(0.0).min(1.0);
-
-        // Lowpass: 8000 Hz at 0.0, 400 Hz at 1.0 (as a one-pole coefficient)
-        // coefficient = exp(-2π * freq / sr), approximate for 44100
-        let cutoff = 8000.0 * (1.0 - amount) + 400.0 * amount;
-        let lp_coeff = (-2.0 * std::f32::consts::PI * cutoff / 44100.0).exp();
-
-        // Decimation: factor 1 at 0.0, factor 8 at 1.0
-        let decimate_factor = 1.0 + amount * 7.0;
-
-        // Bit crush: 14 bits at 0.0, 4 bits at 1.0
-        let bits = 14.0 - amount * 10.0;
-        let crush_levels = (2.0_f32).powf(bits);
-
-        // Noise mix: 0% at 0.0, 15% at 1.0
-        let noise_amount = amount * 0.15;
-
-        Degrade {
-            lp_coeff,
+        let mut d = Degrade {
+            lp_coeff: 0.0,
             lp_state: 0.0,
-            decimate_factor,
+            decimate_factor: 1.0 + amount * 7.0,
             dec_counter: 0.0,
             dec_held: 0.0,
-            crush_levels,
-            noise_amount,
+            crush_levels: (2.0_f32).powf(14.0 - amount * 10.0),
+            noise_amount: amount * 0.15,
             noise_state: 12345,
-        }
+            amount,
+            sample_rate: DEFAULT_SR,
+        };
+        d.recalc_coeff();
+        d
+    }
+
+    fn recalc_coeff(&mut self) {
+        let cutoff = 8000.0 * (1.0 - self.amount) + 400.0 * self.amount;
+        self.lp_coeff = (-2.0 * std::f32::consts::PI * cutoff / self.sample_rate as f32).exp();
     }
 
     #[inline]
@@ -667,6 +663,13 @@ impl AudioNode for Degrade {
         self.lp_state = 0.0;
         self.dec_counter = 0.0;
         self.dec_held = 0.0;
+    }
+
+    fn set_sample_rate(&mut self, sample_rate: f64) {
+        if self.sample_rate != sample_rate {
+            self.sample_rate = sample_rate;
+            self.recalc_coeff();
+        }
     }
 
     #[inline]

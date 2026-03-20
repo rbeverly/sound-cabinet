@@ -205,8 +205,7 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
     Ok(Script { commands: output })
 }
 
-// apply_timing is no longer needed — swing/humanize are applied during pattern expansion
-// in expand_script, with per-pattern scoping support.
+
 
 fn weighted_pick(
     choices: &[super::ast::WeightedChoice],

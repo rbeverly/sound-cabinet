@@ -7,6 +7,8 @@ use crate::dsl::ast::Expr;
 use crate::dsl::parser::resolve_chord;
 use crate::engine::effects::{BitCrush, Compressor, Decimate, Degrade, FeedbackDelay, Freeverb, LeakyFilter, WavetableOsc};
 
+const MAX_RECURSION_DEPTH: usize = 64;
+
 /// Translate an AST Expr into a fundsp Net (boxed dynamic signal graph).
 ///
 /// Voice definitions are looked up by name and recursively expanded,
@@ -21,6 +23,20 @@ pub fn build_graph(
     sample_rate: f64,
     duration_secs: Option<f64>,
 ) -> Result<Net> {
+    build_graph_inner(expr, voices, wavetables, sample_rate, duration_secs, 0)
+}
+
+fn build_graph_inner(
+    expr: &Expr,
+    voices: &HashMap<String, Expr>,
+    wavetables: &HashMap<String, Vec<f64>>,
+    sample_rate: f64,
+    duration_secs: Option<f64>,
+    depth: usize,
+) -> Result<Net> {
+    if depth > MAX_RECURSION_DEPTH {
+        return Err(anyhow!("Maximum recursion depth exceeded — possible circular voice reference"));
+    }
     match expr {
         Expr::Number(v) => {
             let val = *v as f32;
@@ -41,37 +57,37 @@ pub fn build_graph(
         }
 
         Expr::FnCall { name, args } => {
-            build_fn_call(name, args, voices, wavetables, sample_rate, duration_secs)
+            build_fn_call(name, args, voices, wavetables, sample_rate, duration_secs, depth)
         }
 
         Expr::VoiceRef(name) => {
             let voice_expr = voices
                 .get(name)
                 .ok_or_else(|| anyhow!("Unknown voice: {name}"))?;
-            build_graph(voice_expr, voices, wavetables, sample_rate, duration_secs)
+            build_graph_inner(voice_expr, voices, wavetables, sample_rate, duration_secs, depth + 1)
         }
 
         Expr::Pipe(a, b) => {
-            let net_a = build_graph(a, voices, wavetables, sample_rate, duration_secs)?;
-            let net_b = build_graph(b, voices, wavetables, sample_rate, duration_secs)?;
+            let net_a = build_graph_inner(a, voices, wavetables, sample_rate, duration_secs, depth + 1)?;
+            let net_b = build_graph_inner(b, voices, wavetables, sample_rate, duration_secs, depth + 1)?;
             Ok(net_a >> net_b)
         }
 
         Expr::Sum(a, b) => {
-            let net_a = build_graph(a, voices, wavetables, sample_rate, duration_secs)?;
-            let net_b = build_graph(b, voices, wavetables, sample_rate, duration_secs)?;
+            let net_a = build_graph_inner(a, voices, wavetables, sample_rate, duration_secs, depth + 1)?;
+            let net_b = build_graph_inner(b, voices, wavetables, sample_rate, duration_secs, depth + 1)?;
             Ok(net_a + net_b)
         }
 
         Expr::Mul(a, b) => {
-            let net_a = build_graph(a, voices, wavetables, sample_rate, duration_secs)?;
-            let net_b = build_graph(b, voices, wavetables, sample_rate, duration_secs)?;
+            let net_a = build_graph_inner(a, voices, wavetables, sample_rate, duration_secs, depth + 1)?;
+            let net_b = build_graph_inner(b, voices, wavetables, sample_rate, duration_secs, depth + 1)?;
             Ok(net_a * net_b)
         }
 
         Expr::Sub(a, b) => {
-            let net_a = build_graph(a, voices, wavetables, sample_rate, duration_secs)?;
-            let net_b = build_graph(b, voices, wavetables, sample_rate, duration_secs)?;
+            let net_a = build_graph_inner(a, voices, wavetables, sample_rate, duration_secs, depth + 1)?;
+            let net_b = build_graph_inner(b, voices, wavetables, sample_rate, duration_secs, depth + 1)?;
             Ok(net_a - net_b)
         }
 
@@ -88,6 +104,7 @@ fn build_fn_call(
     wavetables: &HashMap<String, Vec<f64>>,
     sample_rate: f64,
     duration_secs: Option<f64>,
+    depth: usize,
 ) -> Result<Net> {
     match name {
         // Oscillators: 0 inputs, 1 output
@@ -198,7 +215,6 @@ fn build_fn_call(
             }
         }
         "highpass" => {
-            let freq = expect_number(&args, 0, name)? as f32;
             let q = expect_number(&args, 1, name)? as f32;
 
             if let Some(Expr::Range(start, end)) = args.first() {
@@ -217,6 +233,7 @@ fn build_fn_call(
                 net.set_sample_rate(sample_rate);
                 Ok(net)
             } else {
+                let freq = expect_number(&args, 0, name)? as f32;
                 let mut net = Net::wrap(Box::new(highpass_hz(freq, q)));
                 net.set_sample_rate(sample_rate);
                 Ok(net)
@@ -422,7 +439,7 @@ fn build_fn_call(
                         net.set_sample_rate(sample_rate);
                         for freq in &chord_notes {
                             let substituted = substitute_var(template, "freq", *freq);
-                            let note_net = build_graph(&substituted, voices, wavetables, sample_rate, duration_secs)?;
+                            let note_net = build_graph_inner(&substituted, voices, wavetables, sample_rate, duration_secs, depth + 1)?;
                             let mut gain = Net::wrap(Box::new(dc(scale)));
                             gain.set_sample_rate(sample_rate);
                             net = net + (note_net * gain);
@@ -433,7 +450,7 @@ fn build_fn_call(
                 // Single frequency
                 let freq = expect_number(args, 0, name)?;
                 let substituted = substitute_var(template, "freq", freq);
-                build_graph(&substituted, voices, wavetables, sample_rate, duration_secs)
+                build_graph_inner(&substituted, voices, wavetables, sample_rate, duration_secs, depth + 1)
             } else {
                 Err(anyhow!("Unknown DSP function: {name}"))
             }

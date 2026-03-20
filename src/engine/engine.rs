@@ -65,9 +65,8 @@ impl Engine {
                 let start_sample = self.beats_to_samples(beat);
 
                 // Check for arpeggiator: arp(...) or arp(...) >> swell(...)
-                if let Some(arp_result) = self.try_handle_arp(&expr, start_sample, duration_beats)? {
+                if self.try_handle_arp(&expr, start_sample, duration_beats)?.is_some() {
                     // Arpeggiator handled — sub-events already scheduled
-                    let _ = arp_result;
                 } else {
                     let duration_samples = self.beats_to_samples(duration_beats);
                     let end_sample = start_sample + duration_samples;
