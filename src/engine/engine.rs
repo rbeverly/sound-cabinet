@@ -33,6 +33,9 @@ pub struct Engine {
     current_sample: u64,
     pedal_windows: Vec<(u64, u64)>,
     pedal_pending: Option<u64>,
+    /// Tempo map: list of (beat, bpm) pairs for mid-score tempo changes.
+    /// Used by beats_to_samples to integrate over tempo segments.
+    tempo_map: Vec<(f64, f64)>,
 }
 
 impl Engine {
@@ -47,6 +50,7 @@ impl Engine {
             current_sample: 0,
             pedal_windows: Vec::new(),
             pedal_pending: None,
+            tempo_map: vec![(0.0, 120.0)],
         }
     }
 
@@ -60,7 +64,15 @@ impl Engine {
             Command::WaveDef { name, samples } => {
                 self.wavetables.insert(name, samples);
             }
-            Command::SetBpm(bpm) => {
+            Command::SetBpm { bpm, at_beat } => {
+                let change_beat = at_beat.unwrap_or(0.0);
+                if (bpm - self.bpm).abs() > 0.001 && change_beat > 0.0 {
+                    // Mid-score tempo change — add to tempo map
+                    self.tempo_map.push((change_beat, bpm));
+                } else if self.tempo_map.len() == 1 && change_beat == 0.0 {
+                    // Initial BPM set — update the first entry
+                    self.tempo_map[0] = (0.0, bpm);
+                }
                 self.bpm = bpm;
             }
             Command::PlayAt {
@@ -402,9 +414,107 @@ impl Engine {
         Ok(Some(()))
     }
 
-    fn beats_to_samples(&self, beats: f64) -> u64 {
-        let seconds_per_beat = 60.0 / self.bpm;
-        (beats * seconds_per_beat * self.sample_rate) as u64
+    /// Convert an absolute beat position to an absolute sample position.
+    ///
+    /// Integrates over the tempo map: each segment [start_beat, next_start_beat)
+    /// contributes time at its BPM. For beat positions beyond the last tempo change,
+    /// the final BPM is used.
+    ///
+    /// With a single BPM (no mid-score changes), this is equivalent to:
+    ///   beats * 60.0 / bpm * sample_rate
+    fn beats_to_samples(&self, beat: f64) -> u64 {
+        let mut total_seconds = 0.0;
+
+        for i in 0..self.tempo_map.len() {
+            let (seg_start, seg_bpm) = self.tempo_map[i];
+
+            // Where does this segment end? At the next tempo change, or infinity.
+            let seg_end = if i + 1 < self.tempo_map.len() {
+                self.tempo_map[i + 1].0
+            } else {
+                f64::INFINITY
+            };
+
+            // Skip segments entirely before beat 0 (shouldn't happen, but defensive)
+            if seg_end <= 0.0 {
+                continue;
+            }
+
+            // How many beats of this segment are before `beat`?
+            let effective_start = seg_start;
+            let effective_end = seg_end.min(beat);
+
+            if effective_end <= effective_start {
+                // This segment is entirely at or after `beat` — we're done
+                // (or it's a zero-length segment)
+                if seg_start >= beat {
+                    break;
+                }
+                continue;
+            }
+
+            let beats_in_seg = effective_end - effective_start;
+            total_seconds += beats_in_seg * 60.0 / seg_bpm;
+        }
+
+        (total_seconds * self.sample_rate) as u64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_beats_to_samples_single_bpm() {
+        let mut engine = Engine::new(44100.0);
+        engine.handle_command(Command::SetBpm { bpm: 120.0, at_beat: None }).unwrap();
+        // At 120 BPM: 1 beat = 0.5 seconds = 22050 samples
+        assert_eq!(engine.beats_to_samples(1.0), 22050);
+        assert_eq!(engine.beats_to_samples(4.0), 88200);
+        assert_eq!(engine.beats_to_samples(0.0), 0);
+    }
+
+    #[test]
+    fn test_beats_to_samples_tempo_change() {
+        let mut engine = Engine::new(44100.0);
+        // Start at 120 BPM
+        engine.handle_command(Command::SetBpm { bpm: 120.0, at_beat: Some(0.0) }).unwrap();
+        // At beat 4, switch to 60 BPM
+        engine.handle_command(Command::SetBpm { bpm: 60.0, at_beat: Some(4.0) }).unwrap();
+
+        // Beat 2: entirely in the 120 BPM zone
+        // 2 beats at 120 BPM = 1 second = 44100 samples
+        assert_eq!(engine.beats_to_samples(2.0), 44100);
+
+        // Beat 4: right at the boundary, entirely in 120 BPM zone
+        // 4 beats at 120 BPM = 2 seconds = 88200 samples
+        assert_eq!(engine.beats_to_samples(4.0), 88200);
+
+        // Beat 6: 4 beats at 120 BPM + 2 beats at 60 BPM
+        // = 2 seconds + 2 seconds = 4 seconds = 176400 samples
+        assert_eq!(engine.beats_to_samples(6.0), 176400);
+
+        // Beat 8: 4 beats at 120 BPM + 4 beats at 60 BPM
+        // = 2 seconds + 4 seconds = 6 seconds = 264600 samples
+        assert_eq!(engine.beats_to_samples(8.0), 264600);
+    }
+
+    #[test]
+    fn test_beats_to_samples_three_tempos() {
+        let mut engine = Engine::new(44100.0);
+        engine.handle_command(Command::SetBpm { bpm: 60.0, at_beat: Some(0.0) }).unwrap();
+        engine.handle_command(Command::SetBpm { bpm: 120.0, at_beat: Some(4.0) }).unwrap();
+        engine.handle_command(Command::SetBpm { bpm: 240.0, at_beat: Some(8.0) }).unwrap();
+
+        // Beat 4: 4 beats at 60 BPM = 4 seconds
+        assert_eq!(engine.beats_to_samples(4.0), 44100 * 4);
+
+        // Beat 8: 4 beats at 60 BPM + 4 beats at 120 BPM = 4 + 2 = 6 seconds
+        assert_eq!(engine.beats_to_samples(8.0), 44100 * 6);
+
+        // Beat 12: 4 at 60 + 4 at 120 + 4 at 240 = 4 + 2 + 1 = 7 seconds
+        assert_eq!(engine.beats_to_samples(12.0), 44100 * 7);
     }
 }
 

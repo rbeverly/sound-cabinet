@@ -80,8 +80,8 @@ impl std::fmt::Display for DefKind {
 pub enum Command {
     /// Define a named voice, fx chain, or instrument
     VoiceDef { name: String, expr: Expr, kind: DefKind },
-    /// Set tempo: `bpm 120`
-    SetBpm(f64),
+    /// Set tempo: `bpm 120`. Optional beat position for mid-score tempo changes.
+    SetBpm { bpm: f64, at_beat: Option<f64> },
     /// Schedule playback: `at 0 play pad for 4 beats`
     PlayAt {
         beat: f64,

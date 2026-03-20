@@ -124,9 +124,10 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
 
     for cmd in script.commands {
         match cmd {
-            Command::SetBpm(v) => {
+            Command::SetBpm { bpm: v, .. } => {
                 bpm = v;
-                output.push(cmd);
+                // Annotate with current cursor position for tempo map
+                output.push(Command::SetBpm { bpm: v, at_beat: Some(cursor) });
             }
             Command::SetSwing(v) => {
                 global_swing = v;
@@ -254,7 +255,7 @@ mod tests {
                     },
                     kind: DefKind::Voice,
                 },
-                Command::SetBpm(120.0),
+                Command::SetBpm { bpm: 120.0, at_beat: None },
                 Command::PatternDef {
                     name: "drums".into(),
                     duration_beats: 4.0,

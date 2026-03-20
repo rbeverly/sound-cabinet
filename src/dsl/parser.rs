@@ -446,7 +446,7 @@ fn parse_voice_def(pair: Pair<Rule>, kind: DefKind) -> Result<Command> {
 fn parse_bpm(pair: Pair<Rule>) -> Result<Command> {
     let mut inner = pair.into_inner();
     let bpm: f64 = inner.next().unwrap().as_str().parse()?;
-    Ok(Command::SetBpm(bpm))
+    Ok(Command::SetBpm { bpm, at_beat: None })
 }
 
 fn parse_at(pair: Pair<Rule>) -> Result<Command> {
@@ -689,7 +689,7 @@ mod tests {
     fn test_parse_bpm() {
         let script = parse_script("bpm 120\n").unwrap();
         match &script.commands[0] {
-            Command::SetBpm(bpm) => assert_eq!(*bpm, 120.0),
+            Command::SetBpm { bpm, .. } => assert_eq!(*bpm, 120.0),
             _ => panic!("Expected SetBpm"),
         }
     }

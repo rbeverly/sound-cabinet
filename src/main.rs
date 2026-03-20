@@ -64,7 +64,7 @@ fn load_definitions(score_path: &str) -> Result<Engine> {
         match &cmd {
             Command::VoiceDef { .. }
             | Command::WaveDef { .. }
-            | Command::SetBpm(_) => {
+            | Command::SetBpm { .. } => {
                 engine.handle_command(cmd)?;
             }
             _ => {} // skip playback events, patterns, sections, etc.
@@ -407,7 +407,7 @@ fn cmd_stream() -> Result<()> {
                 }
                 EngineMsg::SetBpm(bpm) => {
                     let mut eng = engine_for_msgs.lock().unwrap();
-                    eng.handle_command(sound_cabinet::dsl::Command::SetBpm(bpm))
+                    eng.handle_command(sound_cabinet::dsl::Command::SetBpm { bpm, at_beat: None })
                         .unwrap_or_else(|e| eprintln!("Engine error: {e}"));
                 }
                 EngineMsg::PlayNow {

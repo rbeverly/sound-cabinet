@@ -622,14 +622,19 @@ pub struct Degrade {
 impl Degrade {
     pub fn new(amount: f32) -> Self {
         let amount = amount.max(0.0).min(1.0);
+        // Use exponential curves so low amounts are subtle and high amounts are destructive.
+        // amount 0.0-0.3: barely noticeable warmth
+        // amount 0.3-0.6: audible degradation
+        // amount 0.6-1.0: heavy destruction
+        let amt_sq = amount * amount; // quadratic curve — gentler at low values
         let mut d = Degrade {
             lp_coeff: 0.0,
             lp_state: 0.0,
-            decimate_factor: 1.0 + amount * 7.0,
+            decimate_factor: 1.0 + amt_sq * 7.0,        // 1.0 at 0, ~1.07 at 0.3, ~2.5 at 0.6, 8.0 at 1.0
             dec_counter: 0.0,
             dec_held: 0.0,
-            crush_levels: (2.0_f32).powf(14.0 - amount * 10.0),
-            noise_amount: amount * 0.15,
+            crush_levels: (2.0_f32).powf(14.0 - amt_sq * 10.0), // 14-bit at 0, ~13-bit at 0.3, ~10-bit at 0.6, 4-bit at 1.0
+            noise_amount: amt_sq * amt_sq * 0.15,        // essentially zero below 0.3, ~0.001 at 0.5, 0.15 at 1.0
             noise_state: 12345,
             amount,
             sample_rate: DEFAULT_SR,
@@ -639,7 +644,8 @@ impl Degrade {
     }
 
     fn recalc_coeff(&mut self) {
-        let cutoff = 8000.0 * (1.0 - self.amount) + 400.0 * self.amount;
+        let amt_sq = self.amount * self.amount;
+        let cutoff = 8000.0 * (1.0 - amt_sq) + 400.0 * amt_sq;
         self.lp_coeff = (-2.0 * std::f32::consts::PI * cutoff / self.sample_rate as f32).exp();
     }
 
