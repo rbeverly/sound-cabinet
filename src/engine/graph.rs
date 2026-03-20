@@ -5,7 +5,7 @@ use fundsp::hacker::*;
 
 use crate::dsl::ast::Expr;
 use crate::dsl::parser::resolve_chord;
-use crate::engine::effects::{Compressor, FeedbackDelay, Freeverb, WavetableOsc};
+use crate::engine::effects::{BitCrush, Compressor, Decimate, Degrade, FeedbackDelay, Freeverb, LeakyFilter, WavetableOsc};
 
 /// Translate an AST Expr into a fundsp Net (boxed dynamic signal graph).
 ///
@@ -159,12 +159,23 @@ fn build_fn_call(
             Ok(net)
         }
 
-        // Filters: 1 input, 1 output (with optional parameter automation)
+        // Filters: 1 input, 1 output (with optional parameter automation and mix)
+        // lowpass(freq, q) or lowpass(freq, q, mix) where mix 0.0-1.0 blends dry/wet
         "lowpass" => {
             let q = expect_number(&args, 1, name)? as f32;
+            let mix: Option<f32> = if args.len() > 2 {
+                Some(expect_number(&args, 2, name)? as f32)
+            } else {
+                None
+            };
 
-            // Check if frequency is a Range (sweep) or static Number
-            if let Some(Expr::Range(start, end)) = args.first() {
+            if let Some(mix_val) = mix {
+                // Use LeakyFilter: custom one-pole lowpass with internal dry/wet blend
+                let freq = expect_number(&args, 0, name)? as f32;
+                let mut net = Net::wrap(Box::new(An(LeakyFilter::new(freq, mix_val))));
+                net.set_sample_rate(sample_rate);
+                Ok(net)
+            } else if let Some(Expr::Range(start, end)) = args.first() {
                 // Dynamic lowpass: (signal | cutoff_sweep) >> lowpass_q(q)
                 let start = *start;
                 let end = *end;
@@ -187,11 +198,10 @@ fn build_fn_call(
             }
         }
         "highpass" => {
+            let freq = expect_number(&args, 0, name)? as f32;
             let q = expect_number(&args, 1, name)? as f32;
 
             if let Some(Expr::Range(start, end)) = args.first() {
-                // Dynamic highpass: signal - lowpass(signal) = highpass(signal)
-                // Split signal, lowpass one copy with sweep, subtract
                 let start = *start;
                 let end = *end;
                 let dur = duration_secs.unwrap_or(4.0);
@@ -202,13 +212,11 @@ fn build_fn_call(
                 let input = Net::wrap(Box::new(pass()));
                 let lp_filter = Net::wrap(Box::new(lowpass_q(q)));
                 let lp_path = (input | sweep) >> lp_filter;
-                // original - lowpass = highpass
                 let original = Net::wrap(Box::new(pass()));
                 let mut net = original - lp_path;
                 net.set_sample_rate(sample_rate);
                 Ok(net)
             } else {
-                let freq = expect_number(&args, 0, name)? as f32;
                 let mut net = Net::wrap(Box::new(highpass_hz(freq, q)));
                 net.set_sample_rate(sample_rate);
                 Ok(net)
@@ -337,6 +345,33 @@ fn build_fn_call(
                 0.1 // 100ms default release
             };
             let mut net = Net::wrap(Box::new(An(Compressor::new(threshold, ratio, attack, release))));
+            net.set_sample_rate(sample_rate);
+            Ok(net)
+        }
+
+        // Bit crusher: reduce bit depth for quantization noise
+        // crush(bits) — 8.0 = retro, 4.0 = heavy, 12.0 = subtle
+        "crush" => {
+            let bits = expect_number(args, 0, name)? as f32;
+            let mut net = Net::wrap(Box::new(An(BitCrush::new(bits))));
+            net.set_sample_rate(sample_rate);
+            Ok(net)
+        }
+
+        // Decimator: reduce effective sample rate for aliasing artifacts
+        // decimate(factor) — 2.0 = half rate, 8.0 = heavy, 1.0 = no effect
+        "decimate" => {
+            let factor = expect_number(args, 0, name)? as f32;
+            let mut net = Net::wrap(Box::new(An(Decimate::new(factor))));
+            net.set_sample_rate(sample_rate);
+            Ok(net)
+        }
+
+        // Degrade: combined tape/medium degradation
+        // degrade(amount) — 0.0 = clean, 0.3 = warm, 0.6 = worn tape, 1.0 = destroyed
+        "degrade" => {
+            let amount = expect_number(args, 0, name)? as f32;
+            let mut net = Net::wrap(Box::new(An(Degrade::new(amount))));
             net.set_sample_rate(sample_rate);
             Ok(net)
         }

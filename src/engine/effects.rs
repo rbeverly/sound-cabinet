@@ -427,3 +427,271 @@ impl AudioNode for WavetableOsc {
         [sample].into()
     }
 }
+
+// ---------------------------------------------------------------------------
+// Leaky Filter (lowpass with dry/wet mix)
+// ---------------------------------------------------------------------------
+
+/// One-pole lowpass filter with dry/wet mix.
+/// At mix=1.0, fully filtered. At mix=0.5, half the original leaks through.
+///
+/// This is simpler than the SVF lowpass_hz but allows partial filtering
+/// without the routing complexity of parallel dry/wet paths.
+///
+/// 1 input, 1 output.
+#[derive(Clone)]
+pub struct LeakyFilter {
+    coeff: f32,
+    state: f32,
+    mix: f32,
+    sample_rate: f64,
+    cutoff: f32,
+}
+
+impl LeakyFilter {
+    pub fn new(cutoff: f32, mix: f32) -> Self {
+        let coeff = Self::calc_coeff(cutoff, DEFAULT_SR);
+        LeakyFilter {
+            coeff,
+            state: 0.0,
+            mix: mix.max(0.0).min(1.0),
+            sample_rate: DEFAULT_SR,
+            cutoff,
+        }
+    }
+
+    fn calc_coeff(cutoff: f32, sr: f64) -> f32 {
+        (-2.0 * std::f32::consts::PI * cutoff / sr as f32).exp()
+    }
+}
+
+impl AudioNode for LeakyFilter {
+    const ID: u64 = 1007;
+    type Inputs = U1;
+    type Outputs = U1;
+
+    fn reset(&mut self) {
+        self.state = 0.0;
+    }
+
+    fn set_sample_rate(&mut self, sample_rate: f64) {
+        if self.sample_rate != sample_rate {
+            self.sample_rate = sample_rate;
+            self.coeff = Self::calc_coeff(self.cutoff, sample_rate);
+        }
+    }
+
+    #[inline]
+    fn tick(&mut self, input: &Frame<f32, Self::Inputs>) -> Frame<f32, Self::Outputs> {
+        let dry = input[0];
+        // One-pole lowpass
+        self.state = self.coeff * self.state + (1.0 - self.coeff) * dry;
+        // Blend: mix=1.0 fully filtered, mix=0.0 fully dry
+        let out = dry * (1.0 - self.mix) + self.state * self.mix;
+        [out].into()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Bit Crusher
+// ---------------------------------------------------------------------------
+
+/// Reduces bit depth of the signal, creating quantization noise.
+///
+/// - `bits`: effective bit depth (1.0 = extreme, 8.0 = retro, 16.0 = CD quality)
+///
+/// Lower values = more destruction. Fractional values are allowed for smooth control.
+/// 1 input, 1 output.
+#[derive(Clone)]
+pub struct BitCrush {
+    levels: f32,
+}
+
+impl BitCrush {
+    pub fn new(bits: f32) -> Self {
+        let levels = (2.0_f32).powf(bits.max(1.0).min(16.0));
+        BitCrush { levels }
+    }
+}
+
+impl AudioNode for BitCrush {
+    const ID: u64 = 1004;
+    type Inputs = U1;
+    type Outputs = U1;
+
+    fn reset(&mut self) {}
+
+    #[inline]
+    fn tick(&mut self, input: &Frame<f32, Self::Inputs>) -> Frame<f32, Self::Outputs> {
+        let x = input[0];
+        // Quantize: map to discrete levels then back
+        let crushed = (x * self.levels).round() / self.levels;
+        [crushed].into()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sample Rate Reducer (Decimator)
+// ---------------------------------------------------------------------------
+
+/// Reduces effective sample rate by holding samples, creating aliasing artifacts.
+///
+/// - `factor`: hold each sample for this many ticks. 1.0 = no effect, 4.0 = quarter rate,
+///   10.0+ = heavy digital degradation.
+///
+/// 1 input, 1 output.
+#[derive(Clone)]
+pub struct Decimate {
+    factor: f32,
+    counter: f32,
+    held: f32,
+}
+
+impl Decimate {
+    pub fn new(factor: f32) -> Self {
+        Decimate {
+            factor: factor.max(1.0),
+            counter: 0.0,
+            held: 0.0,
+        }
+    }
+}
+
+impl AudioNode for Decimate {
+    const ID: u64 = 1005;
+    type Inputs = U1;
+    type Outputs = U1;
+
+    fn reset(&mut self) {
+        self.counter = 0.0;
+        self.held = 0.0;
+    }
+
+    #[inline]
+    fn tick(&mut self, input: &Frame<f32, Self::Inputs>) -> Frame<f32, Self::Outputs> {
+        self.counter += 1.0;
+        if self.counter >= self.factor {
+            self.counter -= self.factor;
+            self.held = input[0];
+        }
+        [self.held].into()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Degrade — combined tape/medium degradation effect
+// ---------------------------------------------------------------------------
+
+/// Simulates signal degradation through a worn medium (tape, phone line, radio).
+///
+/// Combines lowpass filtering, sample rate reduction, bit crushing, and noise
+/// replacement in a single effect. The `amount` parameter (0.0–1.0) controls
+/// the intensity of all degradation stages together.
+///
+/// - amount 0.0 = clean signal
+/// - amount 0.3 = subtle warmth, slight noise floor
+/// - amount 0.6 = worn tape, noticeable degradation
+/// - amount 1.0 = destroyed, mostly noise
+///
+/// Internally:
+/// - Lowpass cutoff: 8000 Hz → 400 Hz as amount increases
+/// - Decimate factor: 1 → 8 as amount increases
+/// - Bit crush: 14 → 4 bits as amount increases
+/// - Noise mix: 0 → 15% as amount increases
+///
+/// 1 input, 1 output.
+#[derive(Clone)]
+pub struct Degrade {
+    // Lowpass state (one-pole)
+    lp_coeff: f32,
+    lp_state: f32,
+    // Decimation
+    decimate_factor: f32,
+    dec_counter: f32,
+    dec_held: f32,
+    // Bit crush
+    crush_levels: f32,
+    // Noise mix
+    noise_amount: f32,
+    noise_state: u32, // simple PRNG state
+}
+
+impl Degrade {
+    pub fn new(amount: f32) -> Self {
+        let amount = amount.max(0.0).min(1.0);
+
+        // Lowpass: 8000 Hz at 0.0, 400 Hz at 1.0 (as a one-pole coefficient)
+        // coefficient = exp(-2π * freq / sr), approximate for 44100
+        let cutoff = 8000.0 * (1.0 - amount) + 400.0 * amount;
+        let lp_coeff = (-2.0 * std::f32::consts::PI * cutoff / 44100.0).exp();
+
+        // Decimation: factor 1 at 0.0, factor 8 at 1.0
+        let decimate_factor = 1.0 + amount * 7.0;
+
+        // Bit crush: 14 bits at 0.0, 4 bits at 1.0
+        let bits = 14.0 - amount * 10.0;
+        let crush_levels = (2.0_f32).powf(bits);
+
+        // Noise mix: 0% at 0.0, 15% at 1.0
+        let noise_amount = amount * 0.15;
+
+        Degrade {
+            lp_coeff,
+            lp_state: 0.0,
+            decimate_factor,
+            dec_counter: 0.0,
+            dec_held: 0.0,
+            crush_levels,
+            noise_amount,
+            noise_state: 12345,
+        }
+    }
+
+    #[inline]
+    fn next_noise(&mut self) -> f32 {
+        // Simple xorshift PRNG for deterministic noise
+        self.noise_state ^= self.noise_state << 13;
+        self.noise_state ^= self.noise_state >> 17;
+        self.noise_state ^= self.noise_state << 5;
+        // Map to -1.0..1.0
+        (self.noise_state as f32 / u32::MAX as f32) * 2.0 - 1.0
+    }
+}
+
+impl AudioNode for Degrade {
+    const ID: u64 = 1006;
+    type Inputs = U1;
+    type Outputs = U1;
+
+    fn reset(&mut self) {
+        self.lp_state = 0.0;
+        self.dec_counter = 0.0;
+        self.dec_held = 0.0;
+    }
+
+    #[inline]
+    fn tick(&mut self, input: &Frame<f32, Self::Inputs>) -> Frame<f32, Self::Outputs> {
+        let x = input[0];
+
+        // 1. One-pole lowpass
+        self.lp_state = self.lp_coeff * self.lp_state + (1.0 - self.lp_coeff) * x;
+        let filtered = self.lp_state;
+
+        // 2. Decimate (sample-and-hold)
+        self.dec_counter += 1.0;
+        if self.dec_counter >= self.decimate_factor {
+            self.dec_counter -= self.decimate_factor;
+            self.dec_held = filtered;
+        }
+        let decimated = self.dec_held;
+
+        // 3. Bit crush
+        let crushed = (decimated * self.crush_levels).round() / self.crush_levels;
+
+        // 4. Mix in noise (replacing lost signal content)
+        let noise = self.next_noise();
+        let out = crushed * (1.0 - self.noise_amount) + noise * self.noise_amount;
+
+        [out].into()
+    }
+}

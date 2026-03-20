@@ -237,7 +237,9 @@ Process an incoming signal. Chain after a source with `>>`:
 | Function | Effect |
 |---|---|
 | `lowpass(freq, q)` | Cuts frequencies above `freq`. `q` controls resonance (0.5 = gentle, 2.0 = sharp peak). |
+| `lowpass(freq, q, mix)` | Same, with dry/wet blend. `mix` 0.0 = all dry, 1.0 = fully filtered, 0.5 = half the original leaks through. |
 | `highpass(freq, q)` | Cuts frequencies below `freq`. Same `q` behavior. |
+| `highpass(freq, q, mix)` | Same, with dry/wet blend. |
 
 #### Parameter automation
 
@@ -283,6 +285,9 @@ Effects process a signal in the pipe chain — place them after the source and a
 | `delay(time, fb, mix)` | Feedback delay. `time` in seconds, `fb` 0.0-1.0 (recirculation), `mix` 0.0-1.0 (dry/wet). Auto-damped HF in feedback path. | `triangle(G5) >> delay(0.3, 0.5, 0.4)` |
 | `reverb(size, damp, mix)` | Freeverb algorithmic reverb. `size` 0.0-1.0 (room size), `damp` 0.0-1.0 (HF absorption), `mix` 0.0-1.0 (dry/wet). | `saw(C4) >> reverb(0.8, 0.4, 0.3)` |
 | `compress(thresh, ratio, atk, rel)` | Dynamic range compression. `thresh` in dB, `ratio` e.g. 4 = 4:1, `atk`/`rel` in seconds. | `saw(C2) >> compress(-15, 4, 0.01, 0.1)` |
+| `crush(bits)` | Bit depth reduction. 8 = retro, 10 = subtle grit, 4 = destroyed. | `saw(C3) >> crush(8)` |
+| `decimate(factor)` | Sample rate reduction. 2 = half rate, 8 = heavy digital dirt. | `sine(A4) >> decimate(4)` |
+| `degrade(amount)` | Combined tape/medium degradation (lowpass + decimate + crush + noise). 0.3 = warm, 0.6 = worn tape, 1.0 = destroyed. | `triangle(C4) >> degrade(0.5)` |
 
 Effects are just pipe stages — you can stack them freely:
 
@@ -471,6 +476,35 @@ instrument pluck = saw(freq) >> lowpass(freq * 8 -> freq * 1.5, 0.6) >> decay(12
 ```
 
 This requires extending `Expr::Range` from `Range(f64, f64)` to `Range(Box<Expr>, Box<Expr>)`, and having the graph builder evaluate both sides before constructing the sweep envelope. The key challenge is that `freq * 8` isn't known until instrument instantiation time, so the range evaluation needs to happen after `substitute_var`.
+
+### Parallel signal routing
+
+Named internal buses inside `fx` definitions that allow splitting, processing, and recombining signals. Essential for effects that need to reference the input from multiple processing paths (e.g., replacing high frequencies with noise, sidechain ducking, wet/dry processing):
+
+```
+fx worn_tape = {
+  dry: lowpass(1200, 0.3)
+  noise: 0.03 * pink() >> highpass(1000, 0.5)
+  out: dry + noise
+}
+
+fx sidechain_duck = {
+  signal: pass()
+  envelope: envelope_follow(0.001, 0.1)
+  out: signal * (1.0 - envelope)
+}
+```
+
+This is the foundation for sidechain compression, frequency-dependent noise replacement, and any effect where one signal controls another. Can be built incrementally — start with simple named buses, extend to envelope followers and cross-modulation later.
+
+### Import namespacing
+
+Prevent name collisions when importing multiple kits. Currently the second import silently overwrites the first:
+
+```
+import voices/lofi-kit.sc as lofi       // lofi.bass, lofi.mel, etc.
+import voices/instruments.sc as inst     // inst.rhodes, inst.nylon, etc.
+```
 
 ### Waveshaping modes
 

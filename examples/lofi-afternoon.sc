@@ -38,19 +38,20 @@ pattern hats_push = 4 beats
   at 3   play hat for 0.2 beats
   at 3.5 play hat for 0.1 beats
 
-// Chord progression: Cm7 → Abmaj7 → Fm7 → G7
+// Chord progression: Cm7 → Abmaj7 → Fm7 → Bbmaj7
+// Bbmaj7 replaces Gdom7 — dominant 7th tritone was clashing with the melody
 pattern chords = 16 beats
   at 0  play chord_pad(Cm7) for 4 beats
   at 4  play chord_pad(Abmaj7) for 4 beats
   at 8  play chord_pad(Fm7) for 4 beats
-  at 12 play chord_pad(Gdom7) for 4 beats
+  at 12 play chord_pad(Bbmaj7) for 4 beats
 
 // Bass follows chord roots
 pattern bass_line = 16 beats
   at 0  play bass(C2) for 4 beats
   at 4  play bass(Ab1) for 4 beats
   at 8  play bass(F1) for 4 beats
-  at 12 play bass(G1) for 4 beats
+  at 12 play bass(Bb1) for 4 beats
 
 // Vinyl texture — constant hiss + surface imperfections cycling with the record
 // 33 RPM = 1.82s per rotation = 2.27 beats at 75 bpm
@@ -168,11 +169,21 @@ section groove_b = 16 beats
   repeat hats every 4 beats
   play melody_b
 
-// Climax — ghost notes and hat pickups add energy without changing tempo
+// Pad swell — airy texture underneath the climax
+pattern pad_layer = 16 beats
+  at 0 play pad(C3) >> swell(2.0, 2.0) for 8 beats
+  at 0 play pad(Eb3) >> swell(2.0, 2.0) for 8 beats
+  at 0 play pad(G3) >> swell(2.0, 2.0) for 8 beats
+  at 8 play pad(Ab3) >> swell(2.0, 2.0) for 8 beats
+  at 8 play pad(C4) >> swell(2.0, 2.0) for 8 beats
+  at 8 play pad(Eb4) >> swell(2.0, 2.0) for 8 beats
+
+// Climax — ghost notes, hat pickups, and pad layer add energy
 section climax = 16 beats
   play chords
   play bass_line
   play vinyl
+  play pad_layer
   repeat boom_bap_busy every 4 beats
   repeat hats_push every 4 beats
   play melody_climax
