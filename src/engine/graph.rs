@@ -5,7 +5,7 @@ use fundsp::hacker::*;
 
 use crate::dsl::ast::Expr;
 use crate::dsl::parser::resolve_chord;
-use crate::engine::effects::{BitCrush, Compressor, Decimate, Degrade, FeedbackDelay, Freeverb, LeakyFilter, WavetableOsc};
+use crate::engine::effects::{BitCrush, Compressor, Decimate, Degrade, FeedbackDelay, Freeverb, LeakyFilter, NoiseGate, WavetableOsc};
 
 const MAX_RECURSION_DEPTH: usize = 64;
 
@@ -238,6 +238,27 @@ fn build_fn_call(
                 net.set_sample_rate(sample_rate);
                 Ok(net)
             }
+        }
+
+        // Bandpass filter: passes a frequency band, cuts above and below
+        // bandpass(center_freq, q) — higher q = narrower band
+        "bandpass" => {
+            let freq = expect_number(&args, 0, name)? as f32;
+            let q = expect_number(&args, 1, name)? as f32;
+            let mut net = Net::wrap(Box::new(bandpass_hz(freq, q)));
+            net.set_sample_rate(sample_rate);
+            Ok(net)
+        }
+
+        // Noise gate: silences signal below threshold
+        // gate(threshold, attack, release)
+        "gate" => {
+            let threshold = expect_number(&args, 0, name)? as f32;
+            let attack = if args.len() > 1 { expect_number(&args, 1, name)? as f32 } else { 0.001 };
+            let release = if args.len() > 2 { expect_number(&args, 2, name)? as f32 } else { 0.01 };
+            let mut net = Net::wrap(Box::new(An(NoiseGate::new(threshold, attack, release))));
+            net.set_sample_rate(sample_rate);
+            Ok(net)
         }
 
         // Envelope: 1 input, 1 output — multiplies signal by exp(-rate * t)

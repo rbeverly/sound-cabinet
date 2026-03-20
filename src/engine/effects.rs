@@ -698,3 +698,80 @@ impl AudioNode for Degrade {
         [out].into()
     }
 }
+
+// ---------------------------------------------------------------------------
+// Noise Gate
+// ---------------------------------------------------------------------------
+
+/// Silences signal below a threshold, with attack/release smoothing.
+///
+/// - `threshold`: level below which signal is muted (0.0-1.0 linear, e.g. 0.01)
+/// - `attack`: how fast the gate opens when signal exceeds threshold (seconds)
+/// - `release`: how fast the gate closes when signal drops below (seconds)
+///
+/// 1 input, 1 output.
+#[derive(Clone)]
+pub struct NoiseGate {
+    threshold: f32,
+    attack_coeff: f32,
+    release_coeff: f32,
+    envelope: f32,
+    sample_rate: f64,
+    attack_secs: f64,
+    release_secs: f64,
+}
+
+impl NoiseGate {
+    pub fn new(threshold: f32, attack: f32, release: f32) -> Self {
+        let mut g = NoiseGate {
+            threshold,
+            attack_coeff: 0.0,
+            release_coeff: 0.0,
+            envelope: 0.0,
+            sample_rate: DEFAULT_SR,
+            attack_secs: attack as f64,
+            release_secs: release as f64,
+        };
+        g.recalc();
+        g
+    }
+
+    fn recalc(&mut self) {
+        self.attack_coeff = (-1.0 / (self.attack_secs * self.sample_rate)).exp() as f32;
+        self.release_coeff = (-1.0 / (self.release_secs * self.sample_rate)).exp() as f32;
+    }
+}
+
+impl AudioNode for NoiseGate {
+    const ID: u64 = 1008;
+    type Inputs = U1;
+    type Outputs = U1;
+
+    fn reset(&mut self) {
+        self.envelope = 0.0;
+    }
+
+    fn set_sample_rate(&mut self, sample_rate: f64) {
+        if self.sample_rate != sample_rate {
+            self.sample_rate = sample_rate;
+            self.recalc();
+        }
+    }
+
+    #[inline]
+    fn tick(&mut self, input: &Frame<f32, Self::Inputs>) -> Frame<f32, Self::Outputs> {
+        let x = input[0];
+        let abs_x = x.abs();
+
+        // Envelope follower
+        if abs_x > self.envelope {
+            self.envelope = self.attack_coeff * self.envelope + (1.0 - self.attack_coeff) * abs_x;
+        } else {
+            self.envelope = self.release_coeff * self.envelope + (1.0 - self.release_coeff) * abs_x;
+        }
+
+        // Gate: pass signal if envelope is above threshold, silence otherwise
+        let gate = if self.envelope > self.threshold { 1.0 } else { 0.0 };
+        [x * gate].into()
+    }
+}
