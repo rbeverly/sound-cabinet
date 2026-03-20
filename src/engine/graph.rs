@@ -5,7 +5,7 @@ use fundsp::hacker::*;
 
 use crate::dsl::ast::Expr;
 use crate::dsl::parser::resolve_chord;
-use crate::engine::effects::{BitCrush, Compressor, Decimate, Degrade, FeedbackDelay, Freeverb, LeakyFilter, NoiseGate, WavetableOsc};
+use crate::engine::effects::{BitCrush, Compressor, Decimate, Degrade, EqBandType, FeedbackDelay, Freeverb, LeakyFilter, NoiseGate, ParametricEQ, WavetableOsc};
 
 const MAX_RECURSION_DEPTH: usize = 64;
 
@@ -426,6 +426,33 @@ fn build_fn_call(
             let mut pass_node = Net::wrap(Box::new(pass()));
             pass_node.set_sample_rate(sample_rate);
             Ok(pass_node * gain_node)
+        }
+
+        // Parametric EQ: single biquad band.
+        // eq(freq, gain_db, q)      — peak/bell filter
+        // eq(freq, gain_db, "low")  — low shelf
+        // eq(freq, gain_db, "high") — high shelf
+        "eq" => {
+            let freq = expect_number(args, 0, name)? as f32;
+            let gain_db = expect_number(args, 1, name)? as f32;
+
+            // Third arg: number → peak with Q, string → shelf type
+            let (band_type, q) = match args.get(2) {
+                Some(Expr::Number(v)) => (EqBandType::Peak, *v as f32),
+                Some(Expr::VoiceRef(s)) if s == "low" => (EqBandType::LowShelf, 0.7071),
+                Some(Expr::VoiceRef(s)) if s == "high" => (EqBandType::HighShelf, 0.7071),
+                Some(Expr::VoiceRef(s)) => {
+                    return Err(anyhow!("eq: unknown band type '{s}' — use a Q value, \"low\", or \"high\""));
+                }
+                None => (EqBandType::Peak, 1.0), // default Q
+                _ => {
+                    return Err(anyhow!("eq: third argument must be a Q value, \"low\", or \"high\""));
+                }
+            };
+
+            let mut net = Net::wrap(Box::new(An(ParametricEQ::new(freq, gain_db, q, band_type))));
+            net.set_sample_rate(sample_rate);
+            Ok(net)
         }
 
         // Chord: play all notes of a named chord simultaneously.

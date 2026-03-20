@@ -292,8 +292,38 @@ Effects process a signal in the pipe chain — place them after the source and a
 | `decimate(factor)` | Sample rate reduction. 2 = half rate, 8 = heavy digital dirt. | `sine(A4) >> decimate(4)` |
 | `degrade(amount)` | Combined tape/medium degradation (lowpass + decimate + crush + noise). 0.3 = warm, 0.6 = worn tape, 1.0 = destroyed. | `triangle(C4) >> degrade(0.5)` |
 | `loudness(freq)` | ISO 226 equal-loudness compensation. Applies frequency-dependent gain so all pitches are perceived at roughly equal loudness. Reference: 1 kHz = 0 dB. | `saw(freq) >> loudness(freq)` |
+| `eq(freq, gain, q)` | Parametric EQ — peak (bell) filter. Boost or cut `gain` dB at `freq` Hz with bandwidth `q`. | `saw(C3) >> eq(400, -3, 1.5)` |
+| `eq(freq, gain, low)` | Low shelf — boost or cut everything below `freq`. | `saw(C3) >> eq(80, 4, low)` |
+| `eq(freq, gain, high)` | High shelf — boost or cut everything above `freq`. | `sine(A4) >> eq(10000, 2, high)` |
 
 `loudness(freq)` is most useful inside instrument definitions where `freq` is automatically substituted with the note's Hz value. A C2 (65 Hz) gets ~+8 dB, a C4 (262 Hz) gets ~+1.5 dB, and A4 (440 Hz) gets ~+0.3 dB. This replaces manual hacks like `200/freq` with a proper psychoacoustic curve.
+
+#### Parametric EQ
+
+Three band types for surgical frequency shaping:
+
+```
+// Peak (bell): boost or cut at a center frequency with Q bandwidth
+saw(C3) >> eq(400, -3, 1.5)       // cut 3 dB at 400 Hz, Q=1.5 (narrow)
+saw(C3) >> eq(3000, 2, 0.8)       // boost 2 dB at 3 kHz, Q=0.8 (wide)
+
+// Low shelf: boost or cut everything below the corner frequency
+saw(C2) >> eq(80, 4, low)         // +4 dB bass warmth
+saw(C2) >> eq(200, -3, low)       // cut sub-bass mud
+
+// High shelf: boost or cut everything above the corner frequency
+sine(A4) >> eq(10000, 2, high)    // +2 dB air/sparkle
+saw(C4) >> eq(8000, -4, high)     // tame harshness
+```
+
+Stack multiple bands into an fx chain for multi-band EQ:
+
+```
+fx master_eq = eq(80, 3, low) >> eq(400, -2, 1.5) >> eq(3000, 2, 0.8) >> eq(12000, 2, high)
+fx radio = highpass(300, 0.5) >> lowpass(3000, 0.3) >> eq(1000, 4, 0.6)
+```
+
+Q values for peak bands: 0.5 = very wide (gentle, broad), 1.0 = moderate (default), 3.0+ = narrow/surgical. Shelves use a fixed Q of 0.707 (Butterworth, maximally flat).
 
 Effects are just pipe stages — you can stack them freely:
 
@@ -492,9 +522,32 @@ Every render passes through an automatic master bus chain:
 
 1. **Highpass at 30 Hz** — removes inaudible sub-bass that eats headroom (Butterworth 2nd-order)
 2. **Lowpass at 18 kHz** — removes ultrasonic content from aliasing and filter resonance (Butterworth 2nd-order)
-3. **Brick-wall limiter at -0.3 dBFS** — prevents peaks from hitting 0 dBFS, with 5ms lookahead for clean transient handling
+3. **RMS compressor** — reduces crest factor (the gap between peak transients and sustained content), raising perceived loudness
+4. **Brick-wall limiter at -0.3 dBFS** — prevents peaks from hitting 0 dBFS, with 5ms lookahead for clean transient handling
 
-This runs on all output — `render`, `play`, `watch`, `piano`, and `stream`. The master bandpass reclaims headroom stolen by inaudible frequencies, and the limiter catches peaks that would otherwise clip.
+This runs on all output — `render`, `play`, `watch`, `piano`, and `stream`. The master bandpass reclaims headroom stolen by inaudible frequencies, the compressor tightens dynamics, and the limiter catches peaks.
+
+### Master bus configuration
+
+Control the compressor and limiter from within a score:
+
+```
+master compress 0.5      // gentle — subtle dynamic tightening
+master compress 1.0      // default — standard mastering compression
+master compress 2.0      // heavy — loud, punchy, reduced dynamic range
+master compress 0        // off — bypass compressor entirely
+master ceiling -1.0      // set limiter ceiling to -1.0 dBFS (default: -0.3)
+```
+
+Or from the CLI (overrides score settings):
+
+```bash
+sound-cabinet render track.sc -o track.wav --compress 2.0
+sound-cabinet render track.sc -o track.wav --ceiling -1.0
+sound-cabinet render track.sc -o track.wav --compress 0 --lufs -14  # no compression, LUFS normalization only
+```
+
+The compression `amount` maps to threshold/ratio internally: 0.5 = gentle (-36 dB, 1.5:1), 1.0 = standard (-18 dB, 2:1), 2.0 = heavy (-9 dB, 3:1). Higher values produce louder, more compressed output at the cost of dynamic range.
 
 ### Loudness measurement
 
@@ -690,20 +743,6 @@ Shifts the piano hammer mechanism to strike fewer strings — quieter and timbra
 soft down at 4.0
 soft up at 8.0
 ```
-
-### EQ (parametric equalizer)
-
-Multi-band parametric EQ as a pipe-chain effect. Boost or cut specific frequency ranges — essential for mixing and for solving the equal-loudness problem in instrument definitions:
-
-```
-// 3-band EQ: boost bass, cut muddy mids, add treble air
-fx master_eq = eq(80, 6, "shelf") >> eq(400, -3, 1.0) >> eq(10000, 3, "shelf")
-
-// In an instrument: compensate for Fletcher-Munson curve
-instrument piano = ... >> eq(80, 8, "shelf") >> eq(200, 4, 1.0)
-```
-
-Also useful for shaping individual voices, creating telephone/radio effects, or matching the tonal character of reference tracks.
 
 ### Format export (MP3, FLAC, AAC)
 

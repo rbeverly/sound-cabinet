@@ -215,6 +215,29 @@ fn try_parse_command(line: &str) -> Result<Option<Command>> {
     }
 
     // Swing / humanize
+    if let Ok(pairs) = ScoreParser::parse(Rule::master_stmt, line) {
+        for pair in pairs {
+            let inner = pair.into_inner().next()
+                .ok_or_else(|| anyhow!("Expected master sub-command"))?;
+            match inner.as_rule() {
+                Rule::master_compress => {
+                    let val: f64 = inner.into_inner().next()
+                        .ok_or_else(|| anyhow!("Expected value in master compress"))?
+                        .as_str().parse()
+                        .map_err(|_| anyhow!("Invalid number in master compress"))?;
+                    return Ok(Some(Command::MasterCompress(val)));
+                }
+                Rule::master_ceiling => {
+                    let val: f64 = inner.into_inner().next()
+                        .ok_or_else(|| anyhow!("Expected value in master ceiling"))?
+                        .as_str().parse()
+                        .map_err(|_| anyhow!("Invalid number in master ceiling"))?;
+                    return Ok(Some(Command::MasterCeiling(val)));
+                }
+                _ => {}
+            }
+        }
+    }
     if let Ok(pairs) = ScoreParser::parse(Rule::swing_stmt, line) {
         for pair in pairs {
             let val: f64 = pair.into_inner().next()

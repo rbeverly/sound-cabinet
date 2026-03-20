@@ -64,7 +64,9 @@ fn load_definitions(score_path: &str) -> Result<Engine> {
         match &cmd {
             Command::VoiceDef { .. }
             | Command::WaveDef { .. }
-            | Command::SetBpm { .. } => {
+            | Command::SetBpm { .. }
+            | Command::MasterCompress(_)
+            | Command::MasterCeiling(_) => {
                 engine.handle_command(cmd)?;
             }
             _ => {} // skip playback events, patterns, sections, etc.
@@ -92,10 +94,12 @@ fn build_engine(score_path: &str) -> Result<Engine> {
 
 /// Render a score file to WAV.
 fn cmd_render(args: &[String]) -> Result<()> {
-    // Parse args: <score.sc> -o <output.wav> [--lufs <target>]
+    // Parse args: <score.sc> -o <output.wav> [--lufs <target>] [--compress <amount>] [--ceiling <dBFS>]
     let mut score_path: Option<&str> = None;
     let mut output_path: Option<PathBuf> = None;
     let mut target_lufs: Option<f64> = None;
+    let mut compress: Option<f32> = None;
+    let mut ceiling: Option<f32> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -114,6 +118,22 @@ fn cmd_render(args: &[String]) -> Result<()> {
                     })?);
                 }
             }
+            "--compress" => {
+                i += 1;
+                if i < args.len() {
+                    compress = Some(args[i].parse().map_err(|_| {
+                        anyhow!("--compress requires a number (0.0 = off, 1.0 = default, 2.0 = heavy)")
+                    })?);
+                }
+            }
+            "--ceiling" => {
+                i += 1;
+                if i < args.len() {
+                    ceiling = Some(args[i].parse().map_err(|_| {
+                        anyhow!("--ceiling requires a number in dBFS (e.g. --ceiling -1.0)")
+                    })?);
+                }
+            }
             _ => {
                 if score_path.is_none() {
                     score_path = Some(&args[i]);
@@ -123,10 +143,18 @@ fn cmd_render(args: &[String]) -> Result<()> {
         i += 1;
     }
 
-    let score_path = score_path.ok_or_else(|| anyhow!("Usage: sound-cabinet render <score.sc> -o <output.wav> [--lufs <target>]"))?;
-    let output_path = output_path.ok_or_else(|| anyhow!("Usage: sound-cabinet render <score.sc> -o <output.wav> [--lufs <target>]"))?;
+    let usage = "Usage: sound-cabinet render <score.sc> -o <output.wav> [--lufs <target>] [--compress <amount>] [--ceiling <dBFS>]";
+    let score_path = score_path.ok_or_else(|| anyhow!(usage))?;
+    let output_path = output_path.ok_or_else(|| anyhow!(usage))?;
 
     let mut engine = build_engine(score_path)?;
+    // CLI overrides for master bus
+    if let Some(amount) = compress {
+        engine.set_master_compress(amount);
+    }
+    if let Some(db) = ceiling {
+        engine.set_master_ceiling(db);
+    }
     render_to_wav(&mut engine, &output_path, target_lufs)?;
     eprintln!("Rendered to {}", output_path.display());
 

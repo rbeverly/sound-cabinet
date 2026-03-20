@@ -789,14 +789,116 @@ impl BrickwallLimiter {
 }
 
 // ---------------------------------------------------------------------------
-// Master Bus (highpass + lowpass + limiter)
+// Master Compressor (buffer-based, for master bus)
 // ---------------------------------------------------------------------------
 
-/// Master bus processing chain: bandpass filter (HP + LP) followed by a
-/// brick-wall limiter. Operates on buffers, not the AudioNode trait.
+/// Gentle mastering compressor that reduces crest factor (the gap between
+/// peak transients and sustained content). Sits before the limiter to raise
+/// the perceived loudness floor without clipping.
+///
+/// Uses RMS envelope detection (not peak) for musical, transparent compression.
+/// Default settings: -18 dB threshold, 2:1 ratio, 10ms attack, 200ms release.
+///
+/// Not an AudioNode — operates on buffers for master bus use.
+pub struct MasterCompressor {
+    threshold: f32,    // dB
+    ratio: f32,
+    attack_coeff: f32,
+    release_coeff: f32,
+    envelope_sq: f32,  // squared RMS envelope (avoids sqrt per sample)
+    makeup_gain: f32,  // compensate for gain reduction
+}
+
+impl MasterCompressor {
+    pub fn new(threshold_db: f32, ratio: f32, attack_secs: f64, release_secs: f64, sample_rate: f64) -> Self {
+        let attack_coeff = (-1.0 / (attack_secs * sample_rate)).exp() as f32;
+        let release_coeff = (-1.0 / (release_secs * sample_rate)).exp() as f32;
+        // Auto-makeup gain: compensate for average gain reduction.
+        // Standard formula: half of the maximum possible reduction at threshold.
+        // For -18dB threshold, 2:1 ratio: 18 * (1 - 1/2) / 2 = 4.5 dB makeup
+        let makeup_db = threshold_db.abs() * (1.0 - 1.0 / ratio) / 2.0;
+        let makeup_gain = 10.0_f32.powf(makeup_db.min(12.0) / 20.0);
+        MasterCompressor {
+            threshold: threshold_db,
+            ratio: ratio.max(1.0),
+            attack_coeff,
+            release_coeff,
+            envelope_sq: 0.0,
+            makeup_gain,
+        }
+    }
+
+    /// Create from a simple 0.0–2.0 amount parameter.
+    ///
+    /// - 0.0 = off (1:1 ratio, effectively bypass)
+    /// - 0.5 = gentle (threshold -24 dB, 1.5:1)
+    /// - 1.0 = default (threshold -18 dB, 2:1)
+    /// - 2.0 = heavy (threshold -12 dB, 3:1)
+    pub fn from_amount(amount: f32, sample_rate: f64) -> Self {
+        if amount <= 0.0 {
+            // Bypass: ratio 1:1 means no gain change
+            return Self::new(-100.0, 1.0, 0.01, 0.2, sample_rate);
+        }
+        let amount = amount.min(3.0);
+        // Threshold: -24 at 0.5, -18 at 1.0, -12 at 2.0
+        let threshold = -18.0 / amount;
+        // Ratio: 1.5:1 at 0.5, 2:1 at 1.0, 3:1 at 2.0
+        let ratio = 1.0 + amount;
+        // Attack: faster at higher amounts (10ms default, 5ms at 2.0)
+        let attack = (0.010 / amount.max(0.5)) as f64;
+        // Release: 200ms default
+        let release = 0.200_f64;
+        Self::new(threshold, ratio, attack, release, sample_rate)
+    }
+
+    /// Process a buffer in-place.
+    pub fn process(&mut self, buffer: &mut [f32]) {
+        for sample in buffer.iter_mut() {
+            let x = *sample;
+            let x_sq = x * x;
+
+            // RMS envelope follower (track squared signal, compare in dB domain)
+            if x_sq > self.envelope_sq {
+                self.envelope_sq = self.attack_coeff * self.envelope_sq
+                    + (1.0 - self.attack_coeff) * x_sq;
+            } else {
+                self.envelope_sq = self.release_coeff * self.envelope_sq
+                    + (1.0 - self.release_coeff) * x_sq;
+            }
+
+            // Convert RMS to dB (RMS = sqrt(envelope_sq), dB = 20*log10(rms))
+            // = 10*log10(envelope_sq)
+            let env_db = if self.envelope_sq > 1e-20 {
+                10.0 * self.envelope_sq.log10()
+            } else {
+                -200.0
+            };
+
+            // Gain reduction
+            let gain_db = if env_db > self.threshold {
+                let over = env_db - self.threshold;
+                let compressed_over = over / self.ratio;
+                self.threshold + compressed_over - env_db
+            } else {
+                0.0
+            };
+
+            let gain = 10.0_f32.powf(gain_db / 20.0) * self.makeup_gain;
+            *sample = x * gain;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Master Bus (highpass + lowpass + compressor + limiter)
+// ---------------------------------------------------------------------------
+
+/// Master bus processing chain: bandpass filter (HP + LP), gentle compressor,
+/// and brick-wall limiter. Operates on buffers, not the AudioNode trait.
 ///
 /// - Highpass at 30 Hz: removes inaudible sub-bass that eats headroom
 /// - Lowpass at 18 kHz: removes ultrasonic content from aliasing/resonance
+/// - Compressor: reduces crest factor (peak-to-RMS gap) for higher perceived loudness
 /// - Limiter at -0.3 dBFS: prevents peaks from hitting 0 dBFS
 pub struct MasterBus {
     // Highpass state (2nd-order Butterworth via biquad)
@@ -819,6 +921,8 @@ pub struct MasterBus {
     lp_x2: f32,
     lp_y1: f32,
     lp_y2: f32,
+    // Compressor (crest factor reduction)
+    compressor: MasterCompressor,
     // Limiter
     limiter: BrickwallLimiter,
 }
@@ -829,13 +933,27 @@ impl MasterBus {
         let (lp_b0, lp_b1, lp_b2, lp_a1, lp_a2) = Self::lowpass_coeffs(18000.0, sample_rate);
         // -0.3 dBFS ceiling ≈ 0.966
         let ceiling = 10.0_f32.powf(-0.3 / 20.0);
+        // Default: gentle mastering compression (amount 1.0)
+        let compressor = MasterCompressor::from_amount(1.0, sample_rate);
         MasterBus {
             hp_a1, hp_a2, hp_b0, hp_b1, hp_b2,
             hp_x1: 0.0, hp_x2: 0.0, hp_y1: 0.0, hp_y2: 0.0,
             lp_a1, lp_a2, lp_b0, lp_b1, lp_b2,
             lp_x1: 0.0, lp_x2: 0.0, lp_y1: 0.0, lp_y2: 0.0,
+            compressor,
             limiter: BrickwallLimiter::new(ceiling, 0.1, sample_rate),
         }
+    }
+
+    /// Set the compression amount (0.0 = off, 1.0 = default, 2.0 = heavy).
+    pub fn set_compress(&mut self, amount: f32, sample_rate: f64) {
+        self.compressor = MasterCompressor::from_amount(amount, sample_rate);
+    }
+
+    /// Set the limiter ceiling in dBFS (e.g., -0.3 for default, -1.0 for broadcast).
+    pub fn set_ceiling(&mut self, db: f32, sample_rate: f64) {
+        let ceiling = 10.0_f32.powf(db / 20.0);
+        self.limiter = BrickwallLimiter::new(ceiling, 0.1, sample_rate);
     }
 
     /// 2nd-order Butterworth highpass biquad coefficients.
@@ -866,7 +984,7 @@ impl MasterBus {
         (b0, b1, b2, a1, a2)
     }
 
-    /// Process a buffer in-place: highpass → lowpass → limiter.
+    /// Process a buffer in-place: highpass → lowpass → compressor → limiter.
     pub fn process(&mut self, buffer: &mut [f32]) {
         for sample in buffer.iter_mut() {
             // Highpass
@@ -887,6 +1005,9 @@ impl MasterBus {
 
             *sample = lp_out;
         }
+
+        // Compressor (crest factor reduction)
+        self.compressor.process(buffer);
 
         // Limiter
         self.limiter.process(buffer);
@@ -972,5 +1093,138 @@ impl AudioNode for NoiseGate {
         // Gate: pass signal if envelope is above threshold, silence otherwise
         let gate = if self.envelope > self.threshold { 1.0 } else { 0.0 };
         [x * gate].into()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Parametric EQ (biquad-based)
+// ---------------------------------------------------------------------------
+
+/// Band type for the parametric EQ.
+#[derive(Clone, Copy, Debug)]
+pub enum EqBandType {
+    /// Bell/peak filter: boost or cut at a center frequency with Q bandwidth.
+    Peak,
+    /// Low shelf: boost or cut everything below the corner frequency.
+    LowShelf,
+    /// High shelf: boost or cut everything above the corner frequency.
+    HighShelf,
+}
+
+/// Single-band parametric EQ using a biquad filter.
+///
+/// Supports three band types:
+/// - **Peak** (bell): `eq(freq, gain_db, q)` — boost/cut at freq with bandwidth Q
+/// - **Low shelf**: `eq(freq, gain_db, "low")` — boost/cut below freq
+/// - **High shelf**: `eq(freq, gain_db, "high")` — boost/cut above freq
+///
+/// Uses the Audio EQ Cookbook biquad formulas (Robert Bristow-Johnson).
+/// 1 input, 1 output.
+#[derive(Clone)]
+pub struct ParametricEQ {
+    // Biquad state
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+    x1: f32,
+    x2: f32,
+    y1: f32,
+    y2: f32,
+    // Stored for recalculation on sample rate change
+    freq: f32,
+    gain_db: f32,
+    q: f32,
+    band_type: EqBandType,
+    sample_rate: f64,
+}
+
+impl ParametricEQ {
+    pub fn new(freq: f32, gain_db: f32, q: f32, band_type: EqBandType) -> Self {
+        let mut eq = ParametricEQ {
+            b0: 1.0, b1: 0.0, b2: 0.0,
+            a1: 0.0, a2: 0.0,
+            x1: 0.0, x2: 0.0, y1: 0.0, y2: 0.0,
+            freq,
+            gain_db,
+            q: q.max(0.1),
+            band_type,
+            sample_rate: 0.0,
+        };
+        eq.set_sample_rate(DEFAULT_SR);
+        eq
+    }
+
+    fn recalc(&mut self) {
+        let sr = self.sample_rate as f32;
+        let w0 = 2.0 * std::f32::consts::PI * self.freq / sr;
+        let cos_w0 = w0.cos();
+        let sin_w0 = w0.sin();
+        let a_lin = 10.0_f32.powf(self.gain_db / 40.0); // sqrt of linear gain
+
+        match self.band_type {
+            EqBandType::Peak => {
+                let alpha = sin_w0 / (2.0 * self.q);
+                let a0 = 1.0 + alpha / a_lin;
+                self.b0 = (1.0 + alpha * a_lin) / a0;
+                self.b1 = (-2.0 * cos_w0) / a0;
+                self.b2 = (1.0 - alpha * a_lin) / a0;
+                self.a1 = (-2.0 * cos_w0) / a0;
+                self.a2 = (1.0 - alpha / a_lin) / a0;
+            }
+            EqBandType::LowShelf => {
+                let alpha = sin_w0 / (2.0 * self.q);
+                let two_sqrt_a_alpha = 2.0 * a_lin.sqrt() * alpha;
+                let a0 = (a_lin + 1.0) + (a_lin - 1.0) * cos_w0 + two_sqrt_a_alpha;
+                self.b0 = (a_lin * ((a_lin + 1.0) - (a_lin - 1.0) * cos_w0 + two_sqrt_a_alpha)) / a0;
+                self.b1 = (2.0 * a_lin * ((a_lin - 1.0) - (a_lin + 1.0) * cos_w0)) / a0;
+                self.b2 = (a_lin * ((a_lin + 1.0) - (a_lin - 1.0) * cos_w0 - two_sqrt_a_alpha)) / a0;
+                self.a1 = (-2.0 * ((a_lin - 1.0) + (a_lin + 1.0) * cos_w0)) / a0;
+                self.a2 = ((a_lin + 1.0) + (a_lin - 1.0) * cos_w0 - two_sqrt_a_alpha) / a0;
+            }
+            EqBandType::HighShelf => {
+                let alpha = sin_w0 / (2.0 * self.q);
+                let two_sqrt_a_alpha = 2.0 * a_lin.sqrt() * alpha;
+                let a0 = (a_lin + 1.0) - (a_lin - 1.0) * cos_w0 + two_sqrt_a_alpha;
+                self.b0 = (a_lin * ((a_lin + 1.0) + (a_lin - 1.0) * cos_w0 + two_sqrt_a_alpha)) / a0;
+                self.b1 = (-2.0 * a_lin * ((a_lin - 1.0) + (a_lin + 1.0) * cos_w0)) / a0;
+                self.b2 = (a_lin * ((a_lin + 1.0) + (a_lin - 1.0) * cos_w0 - two_sqrt_a_alpha)) / a0;
+                self.a1 = (2.0 * ((a_lin - 1.0) - (a_lin + 1.0) * cos_w0)) / a0;
+                self.a2 = ((a_lin + 1.0) - (a_lin - 1.0) * cos_w0 - two_sqrt_a_alpha) / a0;
+            }
+        }
+    }
+}
+
+impl AudioNode for ParametricEQ {
+    const ID: u64 = 1009;
+    type Inputs = U1;
+    type Outputs = U1;
+
+    fn reset(&mut self) {
+        self.x1 = 0.0;
+        self.x2 = 0.0;
+        self.y1 = 0.0;
+        self.y2 = 0.0;
+    }
+
+    fn set_sample_rate(&mut self, sample_rate: f64) {
+        if self.sample_rate != sample_rate {
+            self.sample_rate = sample_rate;
+            self.recalc();
+        }
+    }
+
+    #[inline]
+    fn tick(&mut self, input: &Frame<f32, Self::Inputs>) -> Frame<f32, Self::Outputs> {
+        let x = input[0];
+        let y = self.b0 * x + self.b1 * self.x1 + self.b2 * self.x2
+            - self.a1 * self.y1 - self.a2 * self.y2;
+        self.x2 = self.x1;
+        self.x1 = x;
+        self.y2 = self.y1;
+        self.y1 = y;
+        [y].into()
     }
 }

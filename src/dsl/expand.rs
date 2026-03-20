@@ -223,7 +223,9 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
             | Command::WaveDef { .. }
             | Command::Import { .. }
             | Command::PedalDown { .. }
-            | Command::PedalUp { .. } => {
+            | Command::PedalUp { .. }
+            | Command::MasterCompress(_)
+            | Command::MasterCeiling(_) => {
                 output.push(cmd);
             }
             Command::PlayAt { .. } => {

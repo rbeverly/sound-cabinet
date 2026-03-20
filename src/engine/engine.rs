@@ -119,6 +119,12 @@ impl Engine {
                     self.pedal_windows.push((down_sample, up_sample));
                 }
             }
+            Command::MasterCompress(amount) => {
+                self.master_bus.set_compress(amount as f32, self.sample_rate);
+            }
+            Command::MasterCeiling(db) => {
+                self.master_bus.set_ceiling(db as f32, self.sample_rate);
+            }
             // Swing/humanize/with are consumed by the expander — ignore if they reach engine
             Command::SetSwing(_) | Command::SetHumanize(_) | Command::SetWith(_) => {}
             // These variants are resolved before reaching the engine
@@ -269,6 +275,16 @@ impl Engine {
     /// Returns true when all scheduled events have finished playing.
     pub fn is_finished(&self) -> bool {
         self.schedule.is_empty()
+    }
+
+    /// Set master bus compression amount (0.0 = off, 1.0 = default, 2.0 = heavy).
+    pub fn set_master_compress(&mut self, amount: f32) {
+        self.master_bus.set_compress(amount, self.sample_rate);
+    }
+
+    /// Set limiter ceiling in dBFS (e.g., -0.3, -1.0).
+    pub fn set_master_ceiling(&mut self, db: f32) {
+        self.master_bus.set_ceiling(db, self.sample_rate);
     }
 
     /// Flush the master bus limiter lookahead buffer.

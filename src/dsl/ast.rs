@@ -129,6 +129,10 @@ pub enum Command {
     SetHumanize(f64),
     /// Set global voice bindings: `with kick = analog_kick, snare = tight_snare`
     SetWith(WithMap),
+    /// Master bus compression amount: `master compress 0.5` (0.0 = off, 1.0 = default, 2.0 = heavy)
+    MasterCompress(f64),
+    /// Master bus limiter ceiling: `master ceiling -1.0` (dBFS)
+    MasterCeiling(f64),
 }
 
 /// A complete parsed score file.
