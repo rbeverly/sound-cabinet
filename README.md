@@ -803,6 +803,18 @@ soft down at 4.0
 soft up at 8.0
 ```
 
+### Algorithmic phrase generation
+
+Pattern-driven music generation that composes phrases from layered, reusable building blocks: rhythm patterns (note placement and duration within a bar), melodic contour (relative motion --- step up, leap down a 5th, approach tone), emphasis/dynamics, and scale/mode mapping. A small library of patterns produces a large number of distinct phrases through combinatorics. Ornamentation is applied as a separate pass on top of resolved phrases, controlled by a density level (0 = clean, 3 = florid/baroque). The generator outputs `.sc` files with named variations that a composer can audition and cherry-pick, or feed into `pick()` for generative streaming music.
+
+See [docs/algorithmic-generation.md](docs/algorithmic-generation.md) for the full design.
+
+### Algorithmic instrument generation
+
+Trait-driven instrument synthesis that builds playable instruments from high-level descriptive vocabulary: `"plucked, decaying, woody, plinky"` resolves to a concrete signal chain (oscillators, filters, envelopes) through archetype templates and trait-to-parameter mapping. A small set of archetypes (plucked string, hammered string, bowed string, blown pipe, struck percussion, electronic) combined with ~30 descriptive traits produces dozens of usable instruments without requiring synthesis knowledge.
+
+See [docs/instrument-generation.md](docs/instrument-generation.md) for the full design.
+
 ### Format export (MP3, FLAC, AAC)
 
 The master bus, LUFS measurement, and normalization are implemented. What remains is format conversion for direct upload to streaming platforms:
