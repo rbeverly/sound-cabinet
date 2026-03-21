@@ -119,6 +119,27 @@ bpm 120
 
 Sets beats per minute. Defaults to 120 if omitted.
 
+#### Tempo changes
+
+You can change tempo mid-score. Each `bpm` statement takes effect from that point forward — timing of all subsequent events adjusts to the new tempo:
+
+```
+bpm 78
+play intro
+play verse
+
+bpm 82
+play chorus
+
+bpm 78
+play bridge
+
+bpm 74
+play outro
+```
+
+This works because `play` advances a cursor through the score. When the engine hits a new `bpm` line, it records the tempo change at that beat position. Earlier events keep their original timing; later events use the new tempo.
+
 #### Define a voice
 
 ```
