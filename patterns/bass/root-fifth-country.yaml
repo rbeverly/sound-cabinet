@@ -1,0 +1,16 @@
+name: Root-Fifth Country
+type: bass
+tags: [country, folk, alternating, simple]
+time: "4/4"
+
+rhythm:
+  hits: ["1/4", "~/4", "1/4", "~/4"]
+
+contour: [root, "~", leap_up_4, "~"]
+
+emphasis: [strong, "~", medium, "~"]
+
+notes: |
+  Alternating root and fifth, the backbone of country and folk music.
+  Beats 2 and 4 are rests, giving space. The leap_up_4 lands on the
+  fifth of the scale from the root (4 diatonic steps = a fifth).

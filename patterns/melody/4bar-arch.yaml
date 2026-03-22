@@ -1,0 +1,95 @@
+name: 4-Bar Arch
+type: melody
+tags: [4-bar, arch, lyrical, phrase]
+time: "4/4"
+
+# Bar 1: establish from root, gently rising
+# Bar 2: continue rising, reach the peak
+# Bar 3: begin descent from peak
+# Bar 4: resolve stepwise back to root
+
+rhythm:
+  hits:
+    # Bar 1
+    - "1/4"
+    - "1/8"
+    - "1/8"
+    - "1/4"
+    - "~/4"
+    # Bar 2
+    - "1/8"
+    - "1/8"
+    - "1/4"
+    - "1/4"
+    - "~/4"
+    # Bar 3
+    - "1/4"
+    - "1/8"
+    - "1/8"
+    - "1/4"
+    - "~/4"
+    # Bar 4
+    - "1/8"
+    - "1/8"
+    - "1/4."
+    - "1/8"
+    - "1/4"
+
+contour:
+  # Bar 1: root to third
+  - root
+  - step_up
+  - step_up
+  - hold
+  - "~"
+  # Bar 2: third up to the peak (fifth/sixth)
+  - step_up
+  - step_up
+  - leap_up_2
+  - hold
+  - "~"
+  # Bar 3: descend from peak
+  - step_down
+  - step_down
+  - step_down
+  - step_down
+  - "~"
+  # Bar 4: resolve to root
+  - step_down
+  - step_down
+  - root
+  - neighbor_up
+  - root
+
+emphasis:
+  # Bar 1
+  - medium
+  - weak
+  - weak
+  - medium
+  - "~"
+  # Bar 2
+  - medium
+  - weak
+  - strong
+  - strong
+  - "~"
+  # Bar 3
+  - medium
+  - weak
+  - weak
+  - medium
+  - "~"
+  # Bar 4
+  - medium
+  - weak
+  - strong
+  - weak
+  - strong
+
+notes: |
+  Classic arch-shaped melody across 4 bars. Rises from root through
+  stepwise motion in bars 1-2, peaks around beat 10-11, then descends
+  stepwise through bars 3-4, resolving to root with a neighbor-tone
+  ornament at the end. The rests at the end of bars 1-3 give the
+  phrase room to breathe — a singer would take a breath there.

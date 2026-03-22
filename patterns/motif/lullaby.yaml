@@ -1,0 +1,22 @@
+name: Lullaby
+type: melody
+tags: [simple, gentle, lullaby, 4-bar]
+time: "3/4"
+
+motif:
+  rhythm: ["1/4", "1/4", "1/4"]
+  contour: [root, step_up, step_down]
+  emphasis: [medium, weak, weak]
+
+structure:
+  - statement
+  - sequence_up
+  - repeat
+  - resolve
+
+notes: |
+  A gentle 3/4 lullaby motif — just three quarter notes rocking
+  up and back. The simplicity is the point: root-step_up-step_down
+  is the most basic melodic gesture, a gentle wave. In 3/4 time
+  it has a waltz-like lilt. Four bars: state the theme, push it
+  higher, hold there, then resolve home.

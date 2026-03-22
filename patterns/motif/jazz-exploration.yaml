@@ -1,0 +1,23 @@
+name: Jazz Exploration
+type: melody
+tags: [jazz, complex, 12-bar, chromatic]
+complexity: complex
+time: "4/4"
+
+motif:
+  rhythm: ["1/8", "1/8", "1/8", "1/8", "1/4"]
+  contour: [root, half_up, step_up, step_down, leap_up_3]
+  emphasis: [medium, ghost, weak, weak, strong]
+
+# structure auto-generated from complexity: complex
+# → statement, sequence_up, sequence_up, departure_high,
+#   inversion, sequence_down, departure, extension,
+#   return, statement, truncation, resolve
+
+notes: |
+  A jazz-influenced motif with a chromatic half-step that adds
+  color. The ghost note on beat 2 gives it an improvisatory,
+  conversational quality. The leap at the end creates forward
+  momentum. Complex structure produces 12 bars with inversions,
+  retrogrades, and departures — enough development for a full
+  jazz solo chorus.

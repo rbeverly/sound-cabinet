@@ -1,0 +1,17 @@
+name: Answer Phrase (descending)
+type: melody
+tags: [phrase, resolution, descending, 1-bar]
+time: "4/4"
+
+rhythm:
+  hits: ["1/8", "1/8", "1/4", "1/8", "1/8", "1/4"]
+
+contour: [leap_up_3, step_down, step_down, step_down, step_down, root]
+
+emphasis: [strong, medium, weak, medium, weak, strong]
+
+notes: |
+  Descending phrase that resolves to the root, providing closure
+  after a question phrase. The leap up on beat 1 echoes the question's
+  peak, then the line descends stepwise to rest on the root. The
+  strong emphasis on the final root reinforces the sense of arrival.

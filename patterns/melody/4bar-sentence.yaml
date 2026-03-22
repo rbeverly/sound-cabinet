@@ -1,0 +1,87 @@
+name: 4-Bar Sentence (antecedent)
+type: melody
+tags: [4-bar, sentence, antecedent, tension]
+time: "4/4"
+
+# Bar 1: short motif — a musical "idea"
+# Bar 2: repeat/vary the motif (slightly higher)
+# Bar 3: break away, build tension
+# Bar 4: land on the fifth (half cadence — unresolved)
+
+rhythm:
+  hits:
+    # Bar 1: the motif
+    - "1/8"
+    - "1/8"
+    - "1/4"
+    - "~/4"
+    - "1/4"
+    # Bar 2: motif again, pushed higher
+    - "1/8"
+    - "1/8"
+    - "1/4"
+    - "~/4"
+    - "1/4"
+    # Bar 3: break the pattern, longer notes
+    - "1/4"
+    - "1/4"
+    - "1/4"
+    - "1/4"
+    # Bar 4: slow down to land
+    - "1/4"
+    - "1/4"
+    - "1/2"
+
+contour:
+  # Bar 1: short rising motif
+  - root
+  - step_up
+  - leap_up_2
+  - "~"
+  - step_down
+  # Bar 2: same shape, starting higher
+  - step_up
+  - step_up
+  - leap_up_2
+  - "~"
+  - step_down
+  # Bar 3: continue up to peak then start coming back
+  - step_up
+  - step_up
+  - step_down
+  - step_down
+  # Bar 4: approach and land on the fifth (not root — tension)
+  - step_down
+  - step_down
+  - leap_up_4
+
+emphasis:
+  # Bar 1
+  - medium
+  - weak
+  - strong
+  - "~"
+  - weak
+  # Bar 2
+  - medium
+  - weak
+  - strong
+  - "~"
+  - weak
+  # Bar 3
+  - strong
+  - medium
+  - medium
+  - weak
+  # Bar 4
+  - weak
+  - weak
+  - strong
+
+notes: |
+  The antecedent half of a "period" — the musical equivalent of a
+  question. Bars 1-2 present a short motif twice, the second time
+  slightly higher. Bar 3 breaks the repetition and pushes to the
+  peak. Bar 4 resolves to the fifth (leap_up_4 from wherever we
+  are), creating a half-cadence: it sounds finished but not *done*.
+  Pair with 4bar-consequence for a complete 8-bar period.

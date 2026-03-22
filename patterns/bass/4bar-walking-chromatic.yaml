@@ -1,0 +1,83 @@
+name: 4-Bar Walking Chromatic
+type: bass
+tags: [4-bar, jazz, walking, chromatic]
+time: "4/4"
+
+# A 4-bar walking bass that approaches each new chord root
+# chromatically on beat 4 of the preceding bar.
+# Bar transitions should sound connected, not choppy.
+
+rhythm:
+  hits:
+    # Bar 1
+    - "1/4"
+    - "1/4"
+    - "1/4"
+    - "1/4"
+    # Bar 2
+    - "1/4"
+    - "1/4"
+    - "1/4"
+    - "1/4"
+    # Bar 3
+    - "1/4"
+    - "1/4"
+    - "1/4"
+    - "1/4"
+    # Bar 4
+    - "1/4"
+    - "1/4"
+    - "1/4"
+    - "1/4"
+
+contour:
+  # Bar 1: root, walk up, approach bar 2
+  - root
+  - step_up
+  - step_up
+  - approach
+  # Bar 2: root, walk down, approach bar 3
+  - root
+  - step_down
+  - step_down
+  - approach
+  # Bar 3: root, leap up to fifth, step back, approach bar 4
+  - root
+  - leap_up_4
+  - step_down
+  - approach
+  # Bar 4: root, step motion, resolve
+  - root
+  - step_up
+  - step_down
+  - root
+
+emphasis:
+  # Bar 1
+  - strong
+  - weak
+  - weak
+  - medium
+  # Bar 2
+  - strong
+  - weak
+  - weak
+  - medium
+  # Bar 3
+  - strong
+  - medium
+  - weak
+  - medium
+  # Bar 4
+  - strong
+  - weak
+  - weak
+  - strong
+
+notes: |
+  4-bar walking bass where each bar starts on the chord root and
+  beat 4 is a chromatic approach to the NEXT bar's root. This
+  creates smooth voice-leading across chord changes — the bass
+  line sounds continuous rather than resetting every bar. Bar 4
+  resolves to its own root on beat 4 since it's the end of the
+  phrase. Works best when each chord lasts one bar.

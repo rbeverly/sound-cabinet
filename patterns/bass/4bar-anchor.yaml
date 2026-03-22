@@ -1,0 +1,67 @@
+name: 4-Bar Anchor
+type: bass
+tags: [4-bar, sparse, supportive, pop, rock]
+time: "4/4"
+
+# Minimal bass — just enough to anchor the harmony.
+# Root on beat 1, one passing note per bar at most.
+# Leaves the melody lots of space.
+
+rhythm:
+  hits:
+    # Bar 1
+    - "1/2"
+    - "~/4"
+    - "1/4"
+    # Bar 2
+    - "1/2"
+    - "~/2"
+    # Bar 3
+    - "1/2"
+    - "~/4"
+    - "1/4"
+    # Bar 4
+    - "1/2."
+    - "~/8"
+    - "1/8"
+
+contour:
+  # Bar 1: root, rest, step to connect
+  - root
+  - "~"
+  - step_up
+  # Bar 2: just the root, let it ring
+  - root
+  - "~"
+  # Bar 3: root, rest, approach next bar
+  - root
+  - "~"
+  - approach
+  # Bar 4: root, rest, brief pickup
+  - root
+  - "~"
+  - step_down
+
+emphasis:
+  # Bar 1
+  - strong
+  - "~"
+  - weak
+  # Bar 2
+  - strong
+  - "~"
+  # Bar 3
+  - strong
+  - "~"
+  - medium
+  # Bar 4
+  - strong
+  - "~"
+  - weak
+
+notes: |
+  A deliberately sparse bass pattern that gives maximum space to
+  the melody. Root on beat 1 of each bar with a half-note duration,
+  plus one quiet connecting tone. Bar 2 is just a single root note.
+  Works for pop, rock, ballads — any context where the bass should
+  support without competing.

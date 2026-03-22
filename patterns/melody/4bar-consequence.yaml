@@ -1,0 +1,88 @@
+name: 4-Bar Consequence (resolution)
+type: melody
+tags: [4-bar, consequence, resolution, cadence]
+time: "4/4"
+
+# Bar 1: echo the sentence's opening motif
+# Bar 2: vary it — go a different direction
+# Bar 3: descend purposefully
+# Bar 4: resolve firmly to root (full cadence)
+
+rhythm:
+  hits:
+    # Bar 1: echo the motif
+    - "1/8"
+    - "1/8"
+    - "1/4"
+    - "~/4"
+    - "1/4"
+    # Bar 2: variation — different turn
+    - "1/8"
+    - "1/8"
+    - "1/4"
+    - "1/8"
+    - "1/8"
+    # Bar 3: descending, more deliberate
+    - "1/4"
+    - "1/4"
+    - "1/4"
+    - "~/4"
+    # Bar 4: cadential resolution
+    - "1/4"
+    - "1/4"
+    - "1/2"
+
+contour:
+  # Bar 1: same opening as the sentence
+  - root
+  - step_up
+  - leap_up_2
+  - "~"
+  - step_down
+  # Bar 2: but this time, turn downward
+  - step_up
+  - step_down
+  - step_down
+  - step_down
+  - step_down
+  # Bar 3: continue down
+  - step_down
+  - step_up
+  - step_down
+  - "~"
+  # Bar 4: approach and land on root
+  - step_down
+  - approach
+  - root
+
+emphasis:
+  # Bar 1
+  - medium
+  - weak
+  - strong
+  - "~"
+  - weak
+  # Bar 2
+  - medium
+  - weak
+  - medium
+  - weak
+  - weak
+  # Bar 3
+  - medium
+  - weak
+  - medium
+  - "~"
+  # Bar 4
+  - medium
+  - medium
+  - strong
+
+notes: |
+  The consequent half of a "period" — the musical answer. Bar 1
+  echoes the sentence's opening motif (listeners recognize it).
+  Bar 2 diverges — instead of pushing higher, it turns downward.
+  Bar 3 continues the descent with a brief upward turn for shape.
+  Bar 4 resolves to root via a chromatic approach tone — a full
+  cadence that says "we're done." Pair with 4bar-sentence for
+  a complete 8-bar period.

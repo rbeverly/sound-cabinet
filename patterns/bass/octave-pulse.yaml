@@ -1,0 +1,17 @@
+name: Octave Pulse
+type: bass
+tags: [electronic, dance, driving, octave]
+time: "4/4"
+
+rhythm:
+  hits: ["1/8", "1/8", "1/8", "1/8", "1/8", "1/8", "1/8", "1/8"]
+
+contour: [root, root, root, root, root, root, root, root]
+
+emphasis: [strong, weak, medium, weak, strong, weak, medium, weak]
+
+notes: |
+  Driving eighth-note pulse on the root. All the motion comes from
+  emphasis -- strong downbeats, weak offbeats. The variation engine
+  may introduce octave displacements for interest. Classic for
+  electronic, dance, and post-punk bass lines.

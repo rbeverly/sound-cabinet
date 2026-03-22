@@ -103,7 +103,64 @@ sound-cabinet piano examples/voices/concerto2-kit.sc piano
 
 # Stream mode — type lines or pipe them in, hear them immediately
 sound-cabinet stream
+
+# Generate phrases from pattern files (algorithmic composition)
+sound-cabinet generate \
+  --pattern patterns/bass/walking-jazz.yaml \
+  --key D --mode dorian \
+  --chords "Dm7 G7 Cmaj7 Am7" \
+  --voice bass --variations 5 -o generated.sc
 ```
+
+### Algorithmic generation
+
+The `generate` command composes musical phrases from YAML pattern files. Each pattern defines a reusable musical gesture through layered decomposition: rhythm (note placement), contour (relative pitch motion), and emphasis (dynamics). The generator resolves these against a key, mode, and chord progression to produce concrete `.sc` patterns.
+
+```bash
+sound-cabinet generate \
+  --pattern patterns/bass/walking-jazz.yaml \
+  --key D --mode dorian \
+  --chords "Dm7 G7 Cmaj7 Am7" \
+  --voice bass \
+  --range C2-G3 \
+  --variations 5 \
+  --seed 42 \
+  -o bass-lines.sc
+```
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--pattern` | yes | Path to a YAML pattern file |
+| `--key` | yes | Root note (C, D, Bb, F#, etc.) |
+| `--mode` | yes | Scale mode (major, minor, dorian, mixolydian, blues, etc.) |
+| `--chords` | yes | Space-separated chord progression ("Dm7 G7 Cmaj7") |
+| `--voice` | yes | Instrument name for the output patterns |
+| `--range` | no | Pitch range, e.g. C2-G3 (defaults by type: bass=C2-G3, melody=C4-C6) |
+| `--variations` | no | Number of variations to generate (default: 5) |
+| `--seed` | no | RNG seed for reproducibility (default: random) |
+| `-o` | no | Output file path (default: stdout) |
+
+The output is standard `.sc` with named patterns (`bass_a`, `bass_b`, ...) ready to import and use:
+
+```sc
+import generated/bass-lines.sc
+
+section verse = 16 beats
+  repeat pick(bass_a, bass_b, bass_c) every 4 beats
+```
+
+Starter patterns ship in `patterns/`:
+
+| Pattern | Type | Description |
+|---------|------|-------------|
+| `bass/walking-jazz` | bass | Quarter-note walking line with chromatic approach |
+| `bass/root-fifth-country` | bass | Alternating root and fifth |
+| `bass/octave-pulse` | bass | Driving eighth-note pulse on root |
+| `melody/question-phrase` | melody | Ascending phrase creating tension |
+| `melody/answer-phrase` | melody | Descending phrase resolving to root |
+| `accomp/alberti-bass` | accomp | Classical arpeggiated chord pattern |
+
+See [docs/algorithmic-generation.md](docs/algorithmic-generation.md) for the design and how to write your own patterns.
 
 ## The Score Format
 
@@ -803,9 +860,9 @@ soft down at 4.0
 soft up at 8.0
 ```
 
-### Algorithmic phrase generation
+### Algorithmic phrase generation: ornamentation pass
 
-Pattern-driven music generation that composes phrases from layered, reusable building blocks: rhythm patterns (note placement and duration within a bar), melodic contour (relative motion --- step up, leap down a 5th, approach tone), emphasis/dynamics, and scale/mode mapping. A small library of patterns produces a large number of distinct phrases through combinatorics. Ornamentation is applied as a separate pass on top of resolved phrases, controlled by a density level (0 = clean, 3 = florid/baroque). The generator outputs `.sc` files with named variations that a composer can audition and cherry-pick, or feed into `pick()` for generative streaming music.
+The base phrase generation system is implemented (`sound-cabinet generate`). What remains is the ornamentation layer: an optional post-processing pass that decorates resolved phrases with mordents, turns, trills, grace notes, and passing tones. Controlled by a density level (0 = clean, 3 = florid/baroque). Each ornament pattern specifies where it can attach (strong beats, long notes, phrase endings) and the generator applies them probabilistically.
 
 See [docs/algorithmic-generation.md](docs/algorithmic-generation.md) for the full design.
 

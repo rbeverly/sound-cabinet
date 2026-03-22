@@ -1,0 +1,20 @@
+name: Pop Verse
+type: melody
+tags: [pop, moderate, 8-bar, verse]
+complexity: moderate
+time: "4/4"
+
+motif:
+  rhythm: ["1/8", "1/8", "1/4", "1/8", "1/8"]
+  contour: [root, step_up, hold, step_down, step_up]
+  emphasis: [medium, weak, strong, weak, medium]
+
+# structure auto-generated from complexity: moderate
+# → statement, sequence_up, departure, return,
+#   statement, sequence_down, extension, resolve
+
+notes: |
+  A pop-verse motif with a syncopated, conversational rhythm.
+  The hold on beat 2 creates a "pause for breath" effect.
+  Moderate complexity produces 8 bars with departures and returns,
+  giving the melody enough development for a full verse section.

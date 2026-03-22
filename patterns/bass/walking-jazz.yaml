@@ -1,0 +1,17 @@
+name: Walking Jazz Bass
+type: bass
+tags: [jazz, walking, quarter-note]
+time: "4/4"
+
+rhythm:
+  hits: ["1/4", "1/4", "1/4", "1/4"]
+
+contour: [root, step_up, step_up, approach]
+
+emphasis: [strong, weak, weak, medium]
+
+notes: |
+  Classic jazz walking pattern. Four quarter notes per bar. The
+  'approach' on beat 4 creates a chromatic leading tone into the
+  next bar's root, providing forward motion. Works over any chord
+  progression.

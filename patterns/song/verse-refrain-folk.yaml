@@ -1,0 +1,33 @@
+name: Folk Verse-Refrain
+time: "4/4"
+
+parts:
+  verse:
+    motif:
+      # Conversational, iambic — flowing eighth notes exploring the scale
+      rhythm: ["1/8", "1/8", "1/8", "1/8", "1/4", "1/4"]
+      contour: [root, step_up, step_up, step_down, hold, step_up]
+      emphasis: [medium, weak, medium, weak, strong, medium]
+    complexity: simple
+
+  refrain:
+    motif:
+      # Declarative, emphatic — fewer, longer notes with bigger intervals
+      rhythm: ["1/4", "1/4", "1/2"]
+      contour: [leap_up_4, step_down, root]
+      emphasis: [strong, strong, strong]
+    complexity: simple
+
+arrangement:
+  - verse
+  - verse
+  - refrain
+  - verse
+  - refrain
+
+notes: |
+  A simple folk song structure. The verse motif is conversational
+  (flowing eighth notes, stepwise motion). The refrain is emphatic
+  (quarter notes and a half note, big opening leap). The contrast
+  between verse and refrain should be audible — the refrain "arrives"
+  while the verse "wanders."

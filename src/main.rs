@@ -29,6 +29,7 @@ fn main() -> Result<()> {
         "watch" => cmd_watch(&args[2..])?,
         "piano" => cmd_piano(&args[2..])?,
         "stream" => cmd_stream()?,
+        "generate" => cmd_generate(&args[2..])?,
         _ => {
             print_usage();
             return Err(anyhow!("Unknown command: {}", args[1]));
@@ -45,6 +46,8 @@ fn print_usage() {
     eprintln!("  sound-cabinet watch <score.sc>   (live reload on file save)");
     eprintln!("  sound-cabinet piano <score.sc>   (play with keyboard)");
     eprintln!("  sound-cabinet stream              (reads from stdin)");
+    eprintln!("  sound-cabinet generate --pattern <file.yaml> --key <K> --mode <M> --chords \"...\"");
+    eprintln!("                        --voice <name> [--range C2-G3] [--variations 5] [--seed 42] [-o out.sc]");
 }
 
 /// Parse a `--flag <value>` pair from args, returning the f64 value if present.
@@ -71,6 +74,61 @@ fn is_flag_value(args: &[String], candidate: &str) -> bool {
         }
     }
     false
+}
+
+/// Parse a `--flag <value>` pair from args, returning the string value if present.
+fn parse_flag_str<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    for (i, a) in args.iter().enumerate() {
+        if a == flag {
+            return args.get(i + 1).map(|s| s.as_str());
+        }
+    }
+    None
+}
+
+/// Parse a `--flag <value>` pair as u64.
+fn parse_flag_u64(args: &[String], flag: &str) -> Result<Option<u64>> {
+    for (i, a) in args.iter().enumerate() {
+        if a == flag {
+            let val = args.get(i + 1)
+                .ok_or_else(|| anyhow!("{flag} requires a number"))?;
+            return Ok(Some(val.parse().map_err(|_| anyhow!("{flag} requires a number"))?));
+        }
+    }
+    Ok(None)
+}
+
+/// Algorithmic phrase generation from YAML pattern files.
+fn cmd_generate(args: &[String]) -> Result<()> {
+    let pattern_path = parse_flag_str(args, "--pattern")
+        .ok_or_else(|| anyhow!("--pattern <file.yaml> is required"))?;
+    let key = parse_flag_str(args, "--key")
+        .ok_or_else(|| anyhow!("--key <note> is required (e.g., --key D)"))?;
+    let mode = parse_flag_str(args, "--mode")
+        .ok_or_else(|| anyhow!("--mode <mode> is required (e.g., --mode dorian)"))?;
+    let chords = parse_flag_str(args, "--chords")
+        .ok_or_else(|| anyhow!("--chords \"...\" is required (e.g., --chords \"Dm7 G7 Cmaj7\")"))?;
+    let voice = parse_flag_str(args, "--voice")
+        .ok_or_else(|| anyhow!("--voice <name> is required (e.g., --voice bass)"))?;
+
+    let range = parse_flag_str(args, "--range").map(String::from);
+    let variations = parse_flag_u64(args, "--variations")?.unwrap_or(5) as usize;
+    let seed = parse_flag_u64(args, "--seed")?.unwrap_or_else(|| rand::random());
+    let output = parse_flag_str(args, "-o").map(String::from);
+
+    let config = sound_cabinet::generate::GenerateConfig {
+        pattern_path: pattern_path.to_string(),
+        key: key.to_string(),
+        mode: mode.to_string(),
+        chords: chords.to_string(),
+        voice: voice.to_string(),
+        range,
+        variations,
+        seed,
+        output,
+    };
+
+    sound_cabinet::generate::run_generate(&config)
 }
 
 /// Parse, import, and load only definitions (voices, instruments, fx, waves, bpm)

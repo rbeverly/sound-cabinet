@@ -1,0 +1,43 @@
+name: Verse-Chorus-Bridge
+time: "4/4"
+
+parts:
+  verse:
+    motif:
+      # Narrative, rhythmically active — telling a story
+      rhythm: ["1/8", "1/8", "1/8", "1/8", "1/4"]
+      contour: [root, step_up, step_down, step_up, leap_up_2]
+      emphasis: [medium, weak, weak, medium, strong]
+    complexity: moderate
+
+  chorus:
+    motif:
+      # Singable, memorable — the hook
+      rhythm: ["1/4", "1/8", "1/8", "1/2"]
+      contour: [leap_up_4, step_up, step_down, root]
+      emphasis: [strong, medium, weak, strong]
+    complexity: simple
+
+  bridge:
+    motif:
+      # Contrasting — different harmonic color, chromatic motion
+      rhythm: ["1/8", "1/8", "1/4", "1/4"]
+      contour: [root, half_up, step_up, leap_up_3]
+      emphasis: [medium, ghost, medium, strong]
+    complexity: moderate
+
+arrangement:
+  - verse
+  - verse
+  - chorus
+  - verse
+  - chorus
+  - bridge
+  - chorus
+
+notes: |
+  Standard pop/rock song form. The verse is rhythmically active
+  and melodically exploratory. The chorus simplifies to a strong,
+  singable hook with emphasis on the opening leap. The bridge
+  introduces chromatic color (half_up) for contrast before the
+  final chorus.

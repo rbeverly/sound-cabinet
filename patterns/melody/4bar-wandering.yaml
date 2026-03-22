@@ -1,0 +1,96 @@
+name: 4-Bar Wandering
+type: melody
+tags: [4-bar, exploratory, jazz, chromatic]
+time: "4/4"
+
+# More rhythmically active, uses half-steps and wider leaps.
+# Good for jazz or impressionistic sections.
+
+rhythm:
+  hits:
+    # Bar 1
+    - "1/8"
+    - "1/8"
+    - "1/8"
+    - "1/8"
+    - "1/4"
+    - "~/4"
+    # Bar 2
+    - "1/4"
+    - "1/8"
+    - "1/8"
+    - "1/8"
+    - "1/8"
+    - "1/4"
+    # Bar 3
+    - "1/8"
+    - "1/8"
+    - "1/4"
+    - "1/4"
+    - "1/4"
+    # Bar 4
+    - "1/4"
+    - "~/4"
+    - "1/4"
+    - "1/4"
+
+contour:
+  # Bar 1: chromatic opening, then leap
+  - root
+  - half_up
+  - step_up
+  - step_down
+  - leap_up_3
+  - "~"
+  # Bar 2: descend with a chromatic passing tone
+  - step_down
+  - half_down
+  - step_up
+  - step_up
+  - leap_up_2
+  - step_down
+  # Bar 3: peak and descend
+  - step_up
+  - step_up
+  - hold
+  - step_down
+  - step_down
+  # Bar 4: settle back
+  - step_down
+  - "~"
+  - approach
+  - root
+
+emphasis:
+  # Bar 1
+  - strong
+  - ghost
+  - weak
+  - weak
+  - strong
+  - "~"
+  # Bar 2
+  - medium
+  - ghost
+  - weak
+  - medium
+  - strong
+  - weak
+  # Bar 3
+  - medium
+  - strong
+  - medium
+  - weak
+  - medium
+  # Bar 4
+  - medium
+  - "~"
+  - weak
+  - strong
+
+notes: |
+  An exploratory, jazz-influenced 4-bar melody. Uses chromatic
+  half-steps alongside diatonic motion for color. Wider leaps
+  (thirds, fourths) create melodic interest. Ghost notes add a
+  conversational, improvisatory quality. The phrase wanders but
+  still resolves to root in bar 4 via approach tone.

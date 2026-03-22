@@ -14,3 +14,5 @@ crossbeam-channel = "0.5"
 rand = "0.8"
 notify = "6"
 crossterm = "0.27"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"

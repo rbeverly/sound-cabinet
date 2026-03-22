@@ -1,0 +1,42 @@
+name: Double Refrain
+time: "4/4"
+
+parts:
+  verse:
+    motif:
+      rhythm: ["1/8", "1/8", "1/8", "1/8", "1/4", "1/4"]
+      contour: [root, step_up, step_up, step_down, hold, step_down]
+      emphasis: [medium, weak, medium, weak, strong, weak]
+    complexity: moderate
+
+  refrain_a:
+    motif:
+      # First refrain — rising, hopeful
+      rhythm: ["1/4", "1/4", "1/4", "1/4"]
+      contour: [root, leap_up_3, step_up, hold]
+      emphasis: [strong, strong, medium, strong]
+    complexity: simple
+
+  refrain_b:
+    motif:
+      # Second refrain — descending, resolving, different character
+      rhythm: ["1/4.", "1/8", "1/2"]
+      contour: [leap_up_4, step_down, root]
+      emphasis: [strong, medium, strong]
+    complexity: simple
+
+arrangement:
+  - verse
+  - verse
+  - refrain_a
+  - verse
+  - refrain_b
+  - refrain_a
+
+notes: |
+  A song with two distinct refrains. Refrain A rises (hopeful,
+  questioning). Refrain B descends (answering, resolving). The
+  verse is moderate complexity — conversational, exploratory.
+  The arrangement builds: verse establishes, refrain A questions,
+  verse continues, refrain B answers, refrain A returns for the
+  final word. This structure appears in some hymns and art songs.

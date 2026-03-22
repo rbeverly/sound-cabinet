@@ -1,0 +1,20 @@
+name: Folk Song (simple)
+type: melody
+tags: [folk, simple, 4-bar, children]
+complexity: simple
+time: "4/4"
+
+motif:
+  rhythm: ["1/4", "1/8", "1/8", "1/4", "1/4"]
+  contour: [root, step_up, step_up, leap_up_2, step_down]
+  emphasis: [strong, weak, weak, strong, medium]
+
+# structure auto-generated from complexity: simple
+# → statement, repeat, sequence_up, resolve
+
+notes: |
+  A simple folk-style motif: quarter note on root, quick ascending
+  eighth notes, a leap for the peak, then a step back down. The
+  simple complexity produces 4 bars: the motif plays twice (giving
+  the listener something to recognize), then once higher, then
+  resolves to root. Think "Twinkle Twinkle" structure.

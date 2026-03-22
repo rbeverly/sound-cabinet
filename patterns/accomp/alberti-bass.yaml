@@ -1,0 +1,18 @@
+name: Alberti Bass
+type: accomp
+tags: [classical, keyboard, arpeggiated]
+time: "4/4"
+
+rhythm:
+  hits: ["1/8", "1/8", "1/8", "1/8", "1/8", "1/8", "1/8", "1/8"]
+
+contour: [chord_low, chord_high, chord_mid, chord_high,
+          chord_low, chord_high, chord_mid, chord_high]
+
+emphasis: [strong, weak, medium, weak, strong, weak, medium, weak]
+
+notes: |
+  The classic Alberti bass accompaniment pattern from the Classical
+  era (Mozart, Haydn). Arpeggiated chord tones in a low-high-mid-high
+  pattern that creates a flowing texture beneath a melody. The chord
+  tones are automatically resolved against the active chord.

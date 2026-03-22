@@ -1,0 +1,17 @@
+name: Question Phrase (ascending)
+type: melody
+tags: [phrase, tension, ascending, 1-bar]
+time: "4/4"
+
+rhythm:
+  hits: ["1/8", "1/8", "1/4", "1/8", "1/8", "1/4"]
+
+contour: [root, step_up, leap_up_3, step_down, step_up, step_up]
+
+emphasis: [medium, weak, strong, weak, medium, strong]
+
+notes: |
+  Rising phrase that ends above where it started, creating tension
+  and expectation of a resolving 'answer' phrase. The leap on beat 2
+  provides a melodic peak, then the phrase continues upward. Pair
+  with answer-phrase-descending for antecedent-consequent structure.
