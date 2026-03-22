@@ -138,6 +138,8 @@ pub enum Command {
     MasterCompress(Vec<f64>),
     /// Master bus limiter ceiling: `master ceiling -1.0` (dBFS)
     MasterCeiling(f64),
+    /// Master output gain in dB: `master gain -6` (applied before compressor/limiter)
+    MasterGain(f64),
 }
 
 /// A complete parsed score file.

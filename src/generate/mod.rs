@@ -4,6 +4,7 @@
 //! (key, mode, chord progression, instrument range) to produce .sc output
 //! with named pattern variations.
 
+pub mod drums;
 pub mod motif;
 pub mod pattern;
 pub mod resolver;
@@ -38,6 +39,11 @@ pub fn run_generate(config: &GenerateConfig) -> Result<()> {
     // Try song file first (has "parts" key)
     if let Ok(song_file) = pattern::SongFile::load(Path::new(&config.pattern_path)) {
         return song::run_generate_song(&song_file, config);
+    }
+
+    // Try drum pattern (has "voices" key)
+    if let Ok(drum_pat) = pattern::DrumPattern::load(Path::new(&config.pattern_path)) {
+        return run_generate_drums(&drum_pat, config);
     }
 
     // Load as pattern/motif file
@@ -118,6 +124,38 @@ pub fn run_generate(config: &GenerateConfig) -> Result<()> {
         );
     } else {
         // Print to stdout
+        print!("{output}");
+    }
+
+    Ok(())
+}
+
+/// Run drum pattern generation.
+fn run_generate_drums(drum_pat: &pattern::DrumPattern, config: &GenerateConfig) -> Result<()> {
+    let time_sig = rhythm::parse_time_sig(&drum_pat.time)?;
+
+    // Get total beats from the longest voice
+    let mut total_beats = 0.0_f64;
+    for dv in &drum_pat.voices {
+        let parsed = rhythm::parse_rhythm(&dv.rhythm)?;
+        total_beats = total_beats.max(parsed.total_beats);
+    }
+
+    let variations = drums::generate_drum_variations(drum_pat, config.variations, config.seed)?;
+    let output = drums::write_drum_sc(&variations, &drum_pat.name, total_beats);
+
+    if let Some(ref path) = config.output {
+        if let Some(parent) = std::path::Path::new(path).parent() {
+            if !parent.exists() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        std::fs::write(path, &output)?;
+        eprintln!(
+            "Generated {} drum variations -> {}",
+            config.variations, path
+        );
+    } else {
         print!("{output}");
     }
 

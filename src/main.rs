@@ -150,7 +150,8 @@ fn load_definitions(score_path: &str) -> Result<Engine> {
             | Command::WaveDef { .. }
             | Command::SetBpm { .. }
             | Command::MasterCompress(_)
-            | Command::MasterCeiling(_) => {
+            | Command::MasterCeiling(_)
+            | Command::MasterGain(_) => {
                 engine.handle_command(cmd)?;
             }
             _ => {} // skip playback events, patterns, sections, etc.

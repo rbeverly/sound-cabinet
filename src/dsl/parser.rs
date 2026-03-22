@@ -237,6 +237,13 @@ fn try_parse_command(line: &str) -> Result<Option<Command>> {
                         .map_err(|_| anyhow!("Invalid number in master ceiling"))?;
                     return Ok(Some(Command::MasterCeiling(val)));
                 }
+                Rule::master_gain => {
+                    let val: f64 = inner.into_inner().next()
+                        .ok_or_else(|| anyhow!("Expected value in master gain"))?
+                        .as_str().parse()
+                        .map_err(|_| anyhow!("Invalid number in master gain"))?;
+                    return Ok(Some(Command::MasterGain(val)));
+                }
                 _ => {}
             }
         }

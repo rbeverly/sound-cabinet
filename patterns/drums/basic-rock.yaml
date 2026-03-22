@@ -1,0 +1,19 @@
+name: Basic Rock
+time: "4/4"
+
+voices:
+  - voice: kick
+    rhythm: ["1/4", "~/4", "1/4", "~/4"]
+    emphasis: [strong, "~", strong, "~"]
+
+  - voice: snare
+    rhythm: ["~/4", "1/4", "~/4", "1/4"]
+    emphasis: ["~", strong, "~", strong]
+
+  - voice: hat
+    rhythm: ["1/8", "1/8", "1/8", "1/8", "1/8", "1/8", "1/8", "1/8"]
+    emphasis: [strong, weak, medium, weak, strong, weak, medium, weak]
+
+notes: |
+  The most basic rock beat: kick on 1 and 3, snare on 2 and 4,
+  hi-hat eighth notes throughout. Works for rock, pop, folk-rock.

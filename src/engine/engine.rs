@@ -157,6 +157,9 @@ impl Engine {
             Command::MasterCeiling(db) => {
                 self.master_bus.set_ceiling(db as f32, self.sample_rate);
             }
+            Command::MasterGain(db) => {
+                self.master_bus.set_gain(db as f32);
+            }
             // Swing/humanize/with are consumed by the expander — ignore if they reach engine
             Command::SetSwing(_) | Command::SetHumanize(_) | Command::SetWith(_) => {}
             // These variants are resolved before reaching the engine

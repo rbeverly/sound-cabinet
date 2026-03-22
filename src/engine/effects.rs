@@ -925,6 +925,8 @@ pub struct MasterBus {
     compressor: MasterCompressor,
     // Limiter
     limiter: BrickwallLimiter,
+    // Output gain (linear). Applied before everything else in the chain.
+    gain: f32,
 }
 
 impl MasterBus {
@@ -942,6 +944,7 @@ impl MasterBus {
             lp_x1: 0.0, lp_x2: 0.0, lp_y1: 0.0, lp_y2: 0.0,
             compressor,
             limiter: BrickwallLimiter::new(ceiling, 0.1, sample_rate),
+            gain: 1.0,
         }
     }
 
@@ -953,6 +956,12 @@ impl MasterBus {
     /// Set compression with explicit parameters.
     pub fn set_compress_params(&mut self, threshold: f32, ratio: f32, attack: f64, release: f64, sample_rate: f64) {
         self.compressor = MasterCompressor::new(threshold, ratio, attack, release, sample_rate);
+    }
+
+    /// Set master output gain in dB (e.g., -6.0 to reduce by 6 dB).
+    /// Applied before the compressor and limiter.
+    pub fn set_gain(&mut self, db: f32) {
+        self.gain = 10.0_f32.powf(db / 20.0);
     }
 
     /// Set the limiter ceiling in dBFS (e.g., -0.3 for default, -1.0 for broadcast).
@@ -991,6 +1000,13 @@ impl MasterBus {
 
     /// Process a buffer in-place: highpass → lowpass → compressor → limiter.
     pub fn process(&mut self, buffer: &mut [f32]) {
+        // Apply master gain first (before all processing)
+        if (self.gain - 1.0).abs() > 1e-6 {
+            for sample in buffer.iter_mut() {
+                *sample *= self.gain;
+            }
+        }
+
         for sample in buffer.iter_mut() {
             // Highpass
             let hp_out = self.hp_b0 * *sample + self.hp_b1 * self.hp_x1 + self.hp_b2 * self.hp_x2

@@ -1,0 +1,19 @@
+name: Waltz
+time: "3/4"
+
+voices:
+  - voice: kick
+    rhythm: ["1/4", "~/4", "~/4"]
+    emphasis: [strong, "~", "~"]
+
+  - voice: snare
+    rhythm: ["~/4", "1/4", "1/4"]
+    emphasis: ["~", medium, weak]
+
+  - voice: hat
+    rhythm: ["1/4", "1/4", "1/4"]
+    emphasis: [strong, weak, weak]
+
+notes: |
+  Classic 3/4 waltz: kick on 1, snare on 2 and 3 (lighter on 3),
+  hat on every beat. The OOM-pah-pah pattern.

@@ -1,0 +1,20 @@
+name: Boom Bap
+time: "4/4"
+
+voices:
+  - voice: kick
+    rhythm: ["1/4", "~/8", "1/8", "~/4", "1/4"]
+    emphasis: [strong, "~", medium, "~", strong]
+
+  - voice: snare
+    rhythm: ["~/4", "1/4", "~/4", "1/4"]
+    emphasis: ["~", strong, "~", strong]
+
+  - voice: hat
+    rhythm: ["1/8", "1/8", "1/8", "1/8", "1/8", "1/8", "1/8", "1/8"]
+    emphasis: [medium, weak, medium, weak, medium, weak, medium, weak]
+
+notes: |
+  Classic hip-hop boom-bap: kick on 1, syncopated kick before 3,
+  snare on 2 and 4, steady eighth-note hats. The second kick
+  (the eighth note before beat 3) gives it the hip-hop swing.

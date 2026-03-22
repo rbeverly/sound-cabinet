@@ -1,0 +1,20 @@
+name: Bossa Nova
+time: "4/4"
+
+voices:
+  - voice: kick
+    rhythm: ["1/4.", "1/8", "~/4", "1/4"]
+    emphasis: [strong, medium, "~", medium]
+
+  - voice: snare
+    rhythm: ["~/8", "1/8", "~/4", "~/8", "1/8", "~/4"]
+    emphasis: ["~", ghost, "~", "~", ghost, "~"]
+
+  - voice: hat
+    rhythm: ["1/8", "1/8", "1/8", "1/8", "1/8", "1/8", "1/8", "1/8"]
+    emphasis: [medium, weak, medium, weak, medium, weak, medium, weak]
+
+notes: |
+  Simplified bossa nova pattern. The kick has the characteristic
+  dotted-quarter + eighth syncopation. Snare plays ghost-note
+  cross-stick hits on the offbeats. Hat keeps steady eighths.

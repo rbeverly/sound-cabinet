@@ -53,9 +53,9 @@ pub fn play_realtime(engine: Engine) -> Result<()> {
 
                 eng.render_samples(&mut buf[..frame_count]);
 
-                // Interleave mono to all output channels
+                // Interleave mono to all output channels, clamping to prevent driver clipping
                 for (i, frame) in data.chunks_mut(channels as usize).enumerate() {
-                    let sample = if i < frame_count { buf[i] } else { 0.0 };
+                    let sample = if i < frame_count { buf[i].clamp(-1.0, 1.0) } else { 0.0 };
                     for ch in frame.iter_mut() {
                         *ch = sample;
                     }
@@ -122,7 +122,7 @@ pub fn play_streaming(
                 eng.render_samples(&mut buf[..frame_count]);
 
                 for (i, frame) in data.chunks_mut(channels as usize).enumerate() {
-                    let sample = if i < frame_count { buf[i] } else { 0.0 };
+                    let sample = if i < frame_count { buf[i].clamp(-1.0, 1.0) } else { 0.0 };
                     for ch in frame.iter_mut() {
                         *ch = sample;
                     }

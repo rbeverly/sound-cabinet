@@ -226,7 +226,8 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
             | Command::PedalDown { .. }
             | Command::PedalUp { .. }
             | Command::MasterCompress(_)
-            | Command::MasterCeiling(_) => {
+            | Command::MasterCeiling(_)
+            | Command::MasterGain(_) => {
                 output.push(cmd);
             }
             Command::PlayAt { .. } => {

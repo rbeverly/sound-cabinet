@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::Result;
 use hound::{SampleFormat, WavSpec, WavWriter};
 
+use crate::engine::effects::BrickwallLimiter;
 use crate::engine::Engine;
 use crate::render::lufs::{measure_lufs, true_peak_dbfs};
 
@@ -47,14 +48,26 @@ pub fn render_to_wav(engine: &mut Engine, path: &Path, target_lufs: Option<f64>)
                 *sample *= gain_linear;
             }
 
-            // Re-measure after normalization
-            let new_lufs = measure_lufs(&all_samples, sample_rate as f64);
+            // Check if normalization pushed peaks above ceiling
             let new_peak = true_peak_dbfs(&all_samples);
-            eprintln!("  Normalized to {:.1} LUFS (gain: {:+.1} dB)", new_lufs, gain_db);
 
-            if new_peak > -0.1 {
-                eprintln!("  Warning: true peak after normalization is {:.1} dBFS (clipping risk)", new_peak);
+            if new_peak > -0.3 {
+                // Re-limit to prevent clipping
+                let ceiling = 10.0_f32.powf(-0.3 / 20.0);
+                let mut limiter = BrickwallLimiter::new(ceiling, 0.1, sample_rate as f64);
+                for chunk in all_samples.chunks_mut(1024) {
+                    limiter.process(chunk);
+                }
+                let mut tail = Vec::new();
+                limiter.flush(&mut tail);
+                all_samples.extend_from_slice(&tail);
             }
+
+            // Re-measure after normalization + limiting
+            let new_lufs = measure_lufs(&all_samples, sample_rate as f64);
+            let final_peak = true_peak_dbfs(&all_samples);
+            eprintln!("  Normalized to {:.1} LUFS (gain: {:+.1} dB)", new_lufs, gain_db);
+            eprintln!("  Final true peak: {:.1} dBFS", final_peak);
         } else {
             eprintln!("  Cannot normalize: signal is silent");
         }

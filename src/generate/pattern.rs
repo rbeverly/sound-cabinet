@@ -262,6 +262,62 @@ impl SongFile {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Drum patterns
+// ---------------------------------------------------------------------------
+
+/// A percussion pattern: multiple voices with rhythm + emphasis.
+#[derive(Debug, Deserialize)]
+pub struct DrumPattern {
+    pub name: String,
+    pub time: String,
+    pub voices: Vec<DrumVoice>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+/// A single percussion voice within a drum pattern.
+#[derive(Debug, Deserialize, Clone)]
+pub struct DrumVoice {
+    pub voice: String,
+    pub rhythm: Vec<String>,
+    #[serde(default)]
+    pub emphasis: Vec<String>,
+}
+
+impl DrumPattern {
+    /// Load from disk.
+    pub fn load(path: &Path) -> Result<Self> {
+        let contents = std::fs::read_to_string(path)
+            .map_err(|e| anyhow!("Cannot read drum pattern {}: {}", path.display(), e))?;
+        Self::from_yaml(&contents)
+    }
+
+    /// Parse from YAML string.
+    pub fn from_yaml(yaml: &str) -> Result<Self> {
+        let pattern: DrumPattern = serde_yaml::from_str(yaml)
+            .map_err(|e| anyhow!("Invalid drum YAML: {e}"))?;
+        pattern.validate()?;
+        Ok(pattern)
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.voices.is_empty() {
+            return Err(anyhow!("Drum pattern '{}': must have at least one voice", self.name));
+        }
+        for dv in &self.voices {
+            if !dv.emphasis.is_empty() && dv.emphasis.len() != dv.rhythm.len() {
+                return Err(anyhow!(
+                    "Drum pattern '{}', voice '{}': emphasis has {} entries but rhythm has {}",
+                    self.name, dv.voice, dv.emphasis.len(), dv.rhythm.len()
+                ));
+            }
+        }
+        super::rhythm::parse_time_sig(&self.time)?;
+        Ok(())
+    }
+}
+
 /// Map emphasis string to velocity (0.0 to 1.0).
 pub fn emphasis_to_velocity(s: &str) -> f64 {
     match s.trim().to_lowercase().as_str() {
