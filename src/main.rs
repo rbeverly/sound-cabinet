@@ -30,6 +30,7 @@ fn main() -> Result<()> {
         "piano" => cmd_piano(&args[2..])?,
         "stream" => cmd_stream()?,
         "generate" => cmd_generate(&args[2..])?,
+        "export" => cmd_export(&args[2..])?,
         _ => {
             print_usage();
             return Err(anyhow!("Unknown command: {}", args[1]));
@@ -48,6 +49,8 @@ fn print_usage() {
     eprintln!("  sound-cabinet stream              (reads from stdin)");
     eprintln!("  sound-cabinet generate --pattern <file.yaml> --key <K> --mode <M> --chords \"...\"");
     eprintln!("                        --voice <name> [--range C2-G3] [--variations 5] [--seed 42] [-o out.sc]");
+    eprintln!("  sound-cabinet export <score.sc> -o out.ly [--voice piano] [--source verse_a]");
+    eprintln!("                        [--format pdf] [--time 4/4] [--key Am] [--from 0 --to 32]");
 }
 
 /// Parse a `--flag <value>` pair from args, returning the f64 value if present.
@@ -99,6 +102,56 @@ fn parse_flag_u64(args: &[String], flag: &str) -> Result<Option<u64>> {
 }
 
 /// Algorithmic phrase generation from YAML pattern files.
+/// Export sheet music in LilyPond format.
+fn cmd_export(args: &[String]) -> Result<()> {
+    if args.is_empty() {
+        return Err(anyhow!(
+            "Usage: sound-cabinet export <score.sc> -o <output.ly> [--voice V] [--source S] [--format pdf]"
+        ));
+    }
+
+    let score_path = args
+        .iter()
+        .find(|a| !a.starts_with('-') && !is_flag_value(args, a))
+        .ok_or_else(|| anyhow!("Score file path required"))?
+        .clone();
+
+    let output = parse_flag_str(args, "-o")
+        .ok_or_else(|| anyhow!("-o <output> is required"))?
+        .to_string();
+
+    let format_str = parse_flag_str(args, "--format").unwrap_or("lilypond");
+    let format = match format_str {
+        "pdf" => sound_cabinet::export::ExportFormat::Pdf,
+        "ly" | "lilypond" => sound_cabinet::export::ExportFormat::Lilypond,
+        _ => return Err(anyhow!("Unknown format: {format_str} (use 'lilypond' or 'pdf')")),
+    };
+
+    // Auto-detect format from output extension
+    let format = if output.ends_with(".pdf") && format_str == "lilypond" {
+        sound_cabinet::export::ExportFormat::Pdf
+    } else {
+        format
+    };
+
+    let config = sound_cabinet::export::ExportConfig {
+        score_path,
+        output,
+        format,
+        voice_filter: parse_flag_str(args, "--voice").map(String::from),
+        source_filter: parse_flag_str(args, "--source").map(String::from),
+        from_beat: parse_flag_f64(args, "--from")?,
+        to_beat: parse_flag_f64(args, "--to")?,
+        time_sig: parse_flag_str(args, "--time")
+            .unwrap_or("4/4")
+            .to_string(),
+        key: parse_flag_str(args, "--key").map(String::from),
+        title: parse_flag_str(args, "--title").map(String::from),
+    };
+
+    sound_cabinet::export::run_export(&config)
+}
+
 fn cmd_generate(args: &[String]) -> Result<()> {
     let pattern_path = parse_flag_str(args, "--pattern")
         .ok_or_else(|| anyhow!("--pattern <file.yaml> is required"))?;
@@ -460,14 +513,22 @@ impl VelocityCurve {
     }
 }
 
-/// A recorded note event from piano mode.
-struct RecordedNote {
-    midi: i32,
-    velocity: f64,
-    /// Time in seconds since recording started.
-    timestamp: f64,
-    /// Duration in seconds (measured from note-on to note-off, or default).
-    duration_secs: f64,
+/// A recorded event from piano mode.
+enum RecordedEvent {
+    Note {
+        midi: i32,
+        velocity: f64,
+        /// Time in seconds since recording started.
+        timestamp: f64,
+        /// Duration in seconds (measured from note-on to note-off, or default).
+        duration_secs: f64,
+    },
+    PedalDown {
+        timestamp: f64,
+    },
+    PedalUp {
+        timestamp: f64,
+    },
 }
 
 fn cmd_piano(args: &[String]) -> Result<()> {
@@ -569,7 +630,7 @@ fn cmd_piano(args: &[String]) -> Result<()> {
     // Recording state
     let mut recording = false;
     let mut record_start = std::time::Instant::now();
-    let mut recorded_notes: Vec<RecordedNote> = Vec::new();
+    let mut recorded_notes: Vec<RecordedEvent> = Vec::new();
     let bpm = {
         let eng = engine.lock().unwrap();
         eng.bpm
@@ -682,7 +743,7 @@ fn cmd_piano(args: &[String]) -> Result<()> {
 
                                 if recording {
                                     let timestamp = record_start.elapsed().as_secs_f64();
-                                    recorded_notes.push(RecordedNote {
+                                    recorded_notes.push(RecordedEvent::Note {
                                         midi: note as i32,
                                         velocity: vel,
                                         timestamp,
@@ -697,9 +758,11 @@ fn cmd_piano(args: &[String]) -> Result<()> {
                                 // Update recorded duration
                                 if recording {
                                     for rec in recorded_notes.iter_mut().rev() {
-                                        if rec.midi == note as i32 {
-                                            rec.duration_secs = held_secs;
-                                            break;
+                                        if let RecordedEvent::Note { midi, duration_secs, .. } = rec {
+                                            if *midi == note as i32 {
+                                                *duration_secs = held_secs;
+                                                break;
+                                            }
                                         }
                                     }
                                 }
@@ -716,10 +779,17 @@ fn cmd_piano(args: &[String]) -> Result<()> {
                         MidiEvent::SustainPedal(down) => {
                             sustain_pedal = down;
                             if !down {
-                                // Pedal released — release all sustained notes
                                 let mut eng = engine.lock().unwrap();
                                 for note in sustained_notes.drain(..) {
                                     eng.release_note(note as u16);
+                                }
+                            }
+                            if recording {
+                                let timestamp = record_start.elapsed().as_secs_f64();
+                                if down {
+                                    recorded_notes.push(RecordedEvent::PedalDown { timestamp });
+                                } else {
+                                    recorded_notes.push(RecordedEvent::PedalUp { timestamp });
                                 }
                             }
                             let state = if down { "down" } else { "up" };
@@ -761,7 +831,7 @@ fn cmd_piano(args: &[String]) -> Result<()> {
                             } else {
                                 let filename = next_recording_filename();
                                 match save_recording(
-                                    &recorded_notes, bpm, instrument_name, &filename,
+                                    &recorded_notes, bpm, instrument_name, score_path, &filename,
                                 ) {
                                     Ok(()) => {
                                         eprint!("  -- Saved {} notes to {}\r\n",
@@ -791,6 +861,14 @@ fn cmd_piano(args: &[String]) -> Result<()> {
                                     eng.release_note(note as u16);
                                 }
                             }
+                            if recording {
+                                let timestamp = record_start.elapsed().as_secs_f64();
+                                if sustain_pedal {
+                                    recorded_notes.push(RecordedEvent::PedalDown { timestamp });
+                                } else {
+                                    recorded_notes.push(RecordedEvent::PedalUp { timestamp });
+                                }
+                            }
                             let state = if sustain_pedal { "down" } else { "up" };
                             eprint!("  [sustain {}]\r\n", state);
                         }
@@ -816,7 +894,7 @@ fn cmd_piano(args: &[String]) -> Result<()> {
 
                                     if recording {
                                         let timestamp = record_start.elapsed().as_secs_f64();
-                                        recorded_notes.push(RecordedNote {
+                                        recorded_notes.push(RecordedEvent::Note {
                                             midi,
                                             velocity: 1.0,
                                             timestamp,
@@ -938,70 +1016,120 @@ fn open_midi_input(
     Ok((rx, conn, port_name))
 }
 
-/// Save recorded notes as a .sc pattern file.
+/// Save recorded events as a .sc file with pattern + pedal events.
 fn save_recording(
-    notes: &[RecordedNote],
+    events: &[RecordedEvent],
     bpm: f64,
     instrument_name: Option<&str>,
+    score_path: &str,
     filename: &str,
 ) -> Result<()> {
-    if notes.is_empty() {
-        return Err(anyhow!("No notes to save"));
+    if events.is_empty() {
+        return Err(anyhow!("No events to save"));
     }
 
     let voice_name = instrument_name.unwrap_or("sine");
     let beats_per_sec = bpm / 60.0;
 
-    // Total duration: last note start + its duration, rounded up to whole beats
-    let last = notes.last().unwrap();
-    let total_secs = last.timestamp + last.duration_secs;
-    let total_beats = (total_secs * beats_per_sec).ceil().max(1.0);
+    // Find total duration
+    let mut max_secs = 0.0_f64;
+    for ev in events {
+        match ev {
+            RecordedEvent::Note { timestamp, duration_secs, .. } => {
+                max_secs = max_secs.max(timestamp + duration_secs);
+            }
+            RecordedEvent::PedalDown { timestamp } | RecordedEvent::PedalUp { timestamp } => {
+                max_secs = max_secs.max(*timestamp);
+            }
+        }
+    }
+    let total_beats = (max_secs * beats_per_sec).ceil().max(1.0);
 
     let mut out = String::new();
-    out.push_str(&format!("// Recorded in piano mode, bpm {}\n\n", bpm));
-    out.push_str(&format!("pattern recorded = {} beats\n", total_beats as i64));
+    out.push_str(&format!("// Recorded in piano mode, bpm {}\n", bpm));
+    out.push_str(&format!("import {}\n", score_path));
+    out.push_str(&format!("bpm {}\n\n", bpm));
 
-    for note in notes {
-        let beat = note.timestamp * beats_per_sec;
-        let dur_beats = note.duration_secs * beats_per_sec;
-        let note_name = midi_to_name(note.midi);
+    // Pedal events go outside the pattern (they're score-level commands)
+    let mut pedal_lines = Vec::new();
+    // Pattern events
+    let mut pattern_lines = Vec::new();
 
-        // Format beat offset: clean integers or 2 decimal places
-        let beat_str = if (beat - beat.round()).abs() < 0.01 {
-            format!("{}", beat.round() as i64)
-        } else {
-            format!("{:.2}", beat)
-        };
+    for ev in events {
+        match ev {
+            RecordedEvent::Note { midi, velocity, timestamp, duration_secs } => {
+                let beat = timestamp * beats_per_sec;
+                let dur_beats = duration_secs * beats_per_sec;
+                let note_name = midi_to_name(*midi);
 
-        // Format duration: round to nearest 0.25 for readability
-        let dur_str = {
-            let rounded = (dur_beats * 4.0).round() / 4.0;
-            let d = rounded.max(0.25); // minimum 1/16 note
-            if (d - d.round()).abs() < 0.01 {
-                format!("{}", d.round() as i64)
-            } else {
-                format!("{:.2}", d)
-                    .trim_end_matches('0')
-                    .trim_end_matches('.')
-                    .to_string()
+                let beat_str = format_beat(beat);
+                let dur_str = format_duration(dur_beats);
+
+                if (*velocity - 1.0).abs() < 0.01 {
+                    pattern_lines.push(format!(
+                        "  at {} play {}({}) for {} beats  // {}",
+                        beat_str, voice_name, note_name, dur_str, note_name
+                    ));
+                } else {
+                    pattern_lines.push(format!(
+                        "  at {} play {}({}) * {:.2} for {} beats  // {}",
+                        beat_str, voice_name, note_name, velocity, dur_str, note_name
+                    ));
+                }
             }
-        };
-
-        if (note.velocity - 1.0).abs() < 0.01 {
-            out.push_str(&format!(
-                "  at {} play {}({}) for {} beats  // {}\n",
-                beat_str, voice_name, note_name, dur_str, note_name
-            ));
-        } else {
-            out.push_str(&format!(
-                "  at {} play {}({}) * {:.2} for {} beats  // {}\n",
-                beat_str, voice_name, note_name, note.velocity, dur_str, note_name
-            ));
+            RecordedEvent::PedalDown { timestamp } => {
+                let beat = timestamp * beats_per_sec;
+                pedal_lines.push(format!("pedal down at {}", format_beat(beat)));
+            }
+            RecordedEvent::PedalUp { timestamp } => {
+                let beat = timestamp * beats_per_sec;
+                pedal_lines.push(format!("pedal up at {}", format_beat(beat)));
+            }
         }
     }
 
+    out.push_str(&format!("pattern recorded = {} beats\n", total_beats as i64));
+    for line in &pattern_lines {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push('\n');
+
+    // Pedal events
+    if !pedal_lines.is_empty() {
+        out.push_str("// Sustain pedal events\n");
+        for line in &pedal_lines {
+            out.push_str(line);
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+
+    out.push_str("play recorded\n");
+
     std::fs::write(filename, &out)?;
     Ok(())
+}
+
+fn format_beat(beat: f64) -> String {
+    if (beat - beat.round()).abs() < 0.01 {
+        format!("{}", beat.round() as i64)
+    } else {
+        format!("{:.2}", beat)
+    }
+}
+
+fn format_duration(dur_beats: f64) -> String {
+    let rounded = (dur_beats * 4.0).round() / 4.0;
+    let d = rounded.max(0.25);
+    if (d - d.round()).abs() < 0.01 {
+        format!("{}", d.round() as i64)
+    } else {
+        format!("{:.2}", d)
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string()
+    }
 }
 
 /// Find the next available filename like recorded_1.sc, recorded_2.sc, etc.

@@ -110,6 +110,11 @@ sound-cabinet generate \
   --key D --mode dorian \
   --chords "Dm7 G7 Cmaj7 Am7" \
   --voice bass --variations 5 -o generated.sc
+
+# Export sheet music as LilyPond (or PDF if lilypond is installed)
+sound-cabinet export song.sc -o song.ly --key Am
+sound-cabinet export song.sc -o piano-part.ly --voice piano --from 0 --to 32
+sound-cabinet export song.sc -o song.pdf --title "My Song"
 ```
 
 ### Algorithmic generation
@@ -161,6 +166,41 @@ Starter patterns ship in `patterns/`:
 | `accomp/alberti-bass` | accomp | Classical arpeggiated chord pattern |
 
 See [docs/algorithmic-generation.md](docs/algorithmic-generation.md) for the design and how to write your own patterns.
+
+### Sheet music export
+
+Export any `.sc` score as LilyPond notation for printing or sharing with musicians. The exporter extracts pitches, durations, and voice assignments from the expanded score and produces standard LilyPond `.ly` files.
+
+```bash
+# Export all voices
+sound-cabinet export song.sc -o song.ly --key Am --title "My Song"
+
+# Export one instrument only
+sound-cabinet export song.sc -o bass.ly --voice bass --key Am
+
+# Export events from a specific pattern
+sound-cabinet export song.sc -o verse.ly --source verse_a
+
+# Export a beat range (e.g., bars 1-8 in 4/4)
+sound-cabinet export song.sc -o intro.ly --from 0 --to 32
+
+# Render directly to PDF (requires LilyPond: brew install lilypond)
+sound-cabinet export song.sc -o song.pdf --key Am
+```
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `-o` | yes | Output file (.ly or .pdf) |
+| `--key` | no | Key signature (Am, D, Bb, F#m, etc.) |
+| `--voice` | no | Export only this voice/instrument |
+| `--source` | no | Export only events from this pattern name |
+| `--from` | no | Start beat |
+| `--to` | no | End beat |
+| `--time` | no | Time signature (default: 4/4) |
+| `--title` | no | Title for the score header |
+| `--format` | no | `lilypond` (default) or `pdf` |
+
+The exporter auto-detects clefs from pitch range (treble for melody, bass for low voices), quantizes timing to the 16th-note grid, fills gaps with rests, and splits notes across bar lines with ties.
 
 ## The Score Format
 

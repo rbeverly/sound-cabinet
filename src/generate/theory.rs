@@ -27,6 +27,15 @@ impl Pitch {
         440.0 * 2.0_f64.powf((self.0 as f64 - 69.0) / 12.0)
     }
 
+    /// Convert a frequency in Hz to the nearest MIDI pitch.
+    pub fn from_hz(hz: f64) -> Self {
+        if hz <= 0.0 {
+            return Pitch(0);
+        }
+        let midi = (69.0 + 12.0 * (hz / 440.0).log2()).round() as i32;
+        Pitch(midi.max(0).min(127))
+    }
+
     /// Parse a note name like "C4", "Bb3", "F#5" into a Pitch.
     pub fn from_note_name(s: &str) -> Result<Self> {
         let mut chars = s.chars();
