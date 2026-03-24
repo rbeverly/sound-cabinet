@@ -48,20 +48,19 @@ pub fn render_to_wav(engine: &mut Engine, path: &Path, target_lufs: Option<f64>)
                 *sample *= gain_linear;
             }
 
-            // Check if normalization pushed peaks above ceiling
-            let new_peak = true_peak_dbfs(&all_samples);
-
-            if new_peak > -0.3 {
-                // Re-limit to prevent clipping
-                let ceiling = 10.0_f32.powf(-0.3 / 20.0);
-                let mut limiter = BrickwallLimiter::new(ceiling, 0.1, sample_rate as f64);
-                for chunk in all_samples.chunks_mut(1024) {
-                    limiter.process(chunk);
-                }
-                let mut tail = Vec::new();
-                limiter.flush(&mut tail);
-                all_samples.extend_from_slice(&tail);
+            // Always re-limit after normalization to prevent clipping.
+            // Use -1.0 dBFS ceiling to leave headroom for inter-sample peaks
+            // (true peak can exceed sample peak by up to ~0.5 dB).
+            // TODO: upgrade to a true peak limiter with 4x oversampled detection
+            // so we can use a tighter ceiling without inter-sample clipping.
+            let ceiling = 10.0_f32.powf(-1.0 / 20.0);
+            let mut limiter = BrickwallLimiter::new(ceiling, 0.1, sample_rate as f64);
+            for chunk in all_samples.chunks_mut(1024) {
+                limiter.process(chunk);
             }
+            let mut tail = Vec::new();
+            limiter.flush(&mut tail);
+            all_samples.extend_from_slice(&tail);
 
             // Re-measure after normalization + limiting
             let new_lufs = measure_lufs(&all_samples, sample_rate as f64);

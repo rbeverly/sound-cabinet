@@ -16,6 +16,7 @@ use super::theory::PitchClass;
 #[derive(Debug, Clone)]
 pub struct DrumHit {
     pub voice: String,
+    pub pitch: String,
     pub beat_offset: f64,
     pub duration_beats: f64,
     pub velocity: f64,
@@ -46,6 +47,7 @@ pub fn expand_drum_pattern(pattern: &DrumPattern) -> Result<Vec<DrumHit>> {
 
             hits.push(DrumHit {
                 voice: dv.voice.clone(),
+                pitch: dv.pitch.clone(),
                 beat_offset: parsed.offsets[i],
                 duration_beats: hit.duration().min(0.5), // drums are short
                 velocity,
@@ -104,6 +106,7 @@ fn vary_drums(base: &[DrumHit], voices: &[DrumVoice], rng: &mut StdRng) -> Vec<D
             if hit.is_rest() && rng.gen::<f64>() < 0.15 {
                 hits.push(DrumHit {
                     voice: dv.voice.clone(),
+                    pitch: dv.pitch.clone(),
                     beat_offset: parsed.offsets[i],
                     duration_beats: 0.25,
                     velocity: 0.2, // ghost
@@ -142,13 +145,13 @@ pub fn write_drum_sc(
 
             if (hit.velocity - 1.0).abs() < 0.01 {
                 out.push_str(&format!(
-                    "  at {beat_str} play {} for {dur_str} beats\n",
-                    hit.voice
+                    "  at {beat_str} play {}({}) for {dur_str} beats\n",
+                    hit.voice, hit.pitch
                 ));
             } else {
                 out.push_str(&format!(
-                    "  at {beat_str} play {} * {vel} for {dur_str} beats\n",
-                    hit.voice,
+                    "  at {beat_str} play {}({}) * {vel} for {dur_str} beats\n",
+                    hit.voice, hit.pitch,
                     vel = writer::format_velocity_pub(hit.velocity)
                 ));
             }
@@ -174,12 +177,15 @@ name: Basic Rock
 time: "4/4"
 voices:
   - voice: kick
+    pitch: A1
     rhythm: ["1/4", "~/4", "1/4", "~/4"]
     emphasis: [strong, "~", strong, "~"]
   - voice: snare
+    pitch: G3
     rhythm: ["~/4", "1/4", "~/4", "1/4"]
     emphasis: ["~", strong, "~", strong]
   - voice: hat
+    pitch: C5
     rhythm: ["1/8", "1/8", "1/8", "1/8", "1/8", "1/8", "1/8", "1/8"]
     emphasis: [strong, weak, medium, weak, strong, weak, medium, weak]
 "#;
@@ -206,8 +212,10 @@ name: Test
 time: "4/4"
 voices:
   - voice: kick
+    pitch: A1
     rhythm: ["1/4", "~/4", "1/4", "~/4"]
   - voice: hat
+    pitch: C5
     rhythm: ["1/8", "1/8", "1/8", "1/8", "1/8", "1/8", "1/8", "1/8"]
 "#;
         let pattern = DrumPattern::from_yaml(yaml).unwrap();
@@ -228,6 +236,7 @@ name: Test
 time: "4/4"
 voices:
   - voice: kick
+    pitch: A1
     rhythm: ["1/4", "~/4", "1/4", "~/4"]
 "#;
         let pattern = DrumPattern::from_yaml(yaml).unwrap();

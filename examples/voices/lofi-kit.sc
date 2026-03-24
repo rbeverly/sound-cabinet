@@ -14,7 +14,7 @@ fx next_room = lowpass(150, 0.9, 0.2) >> degrade(0.06) >> chorus(0.03, 0.006, 0.
 
 // Chord instrument — filtered noise-like texture, more atmosphere than tone
 // Heavy lowpass turns the saw into a warm rumble that doesn't fight the melody
-instrument chord_pad = (0.15 * saw(freq) + 0.12 * triangle(freq * 1.002)) >> lowpass(500, 0.4) >> tape_room
+instrument chord_pad = (0.15 * saw(freq) + 0.12 * triangle(freq * 1.002)) >> lowpass(500, 0.4, 0.7) >> tape_room
 
 // Sub bass — sine fundamental + pink noise undertone for analog warmth
 instrument bass = (sine(freq) + 0.3 * triangle(freq * 2) + 0.02 * (pink() >> lowpass(freq * 2, 0.5))) >> lowpass(350, 0.8) >> distort(1.5) >> compress(-18, 3, 0.01, 0.15)

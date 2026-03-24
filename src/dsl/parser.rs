@@ -632,8 +632,12 @@ pub fn resolve_chord(name: &str) -> Option<Vec<f64>> {
     // Try to match quality suffix (longest first to avoid partial matches)
     // Each entry: (suffix, intervals)
     let qualities: &[(&str, &[i32])] = &[
+        // Extended chords (longest suffixes first)
+        ("mmaj7", &[0, 3, 7, 11]),        // minor-major 7th
+        ("m7b5", &[0, 3, 6, 10]),         // half-diminished (minor 7 flat 5)
         ("maj9", &[0, 4, 7, 11, 14]),
         ("min9", &[0, 3, 7, 10, 14]),
+        ("add9", &[0, 4, 7, 14]),         // major add 9
         ("maj7", &[0, 4, 7, 11]),
         ("min7", &[0, 3, 7, 10]),
         ("dim7", &[0, 3, 6, 9]),
@@ -648,9 +652,11 @@ pub fn resolve_chord(name: &str) -> Option<Vec<f64>> {
         ("aug", &[0, 4, 8]),
         ("m9", &[0, 3, 7, 10, 14]),
         ("m7", &[0, 3, 7, 10]),
+        ("m6", &[0, 3, 7, 9]),            // minor 6th
         ("m", &[0, 3, 7]),
         ("9", &[0, 4, 7, 10, 14]),
         ("7", &[0, 4, 7, 10]),
+        ("6", &[0, 4, 7, 9]),             // major 6th
     ];
 
     let (intervals, after_quality) = qualities

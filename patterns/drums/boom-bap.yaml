@@ -3,14 +3,17 @@ time: "4/4"
 
 voices:
   - voice: kick
+    pitch: A1
     rhythm: ["1/4", "~/8", "1/8", "~/4", "1/4"]
     emphasis: [strong, "~", medium, "~", strong]
 
   - voice: snare
+    pitch: G3
     rhythm: ["~/4", "1/4", "~/4", "1/4"]
     emphasis: ["~", strong, "~", strong]
 
   - voice: hat
+    pitch: C5
     rhythm: ["1/8", "1/8", "1/8", "1/8", "1/8", "1/8", "1/8", "1/8"]
     emphasis: [medium, weak, medium, weak, medium, weak, medium, weak]
 

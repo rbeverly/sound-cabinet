@@ -500,8 +500,11 @@ impl Chord {
 
         // Quality lookup (longest match first)
         let qualities: &[(&str, &[i32])] = &[
+            ("mmaj7", &[0, 3, 7, 11]),        // minor-major 7th
+            ("m7b5", &[0, 3, 6, 10]),         // half-diminished
             ("maj9", &[0, 4, 7, 11, 14]),
             ("min9", &[0, 3, 7, 10, 14]),
+            ("add9", &[0, 4, 7, 14]),         // major add 9
             ("maj7", &[0, 4, 7, 11]),
             ("min7", &[0, 3, 7, 10]),
             ("dim7", &[0, 3, 6, 9]),
@@ -516,9 +519,11 @@ impl Chord {
             ("aug", &[0, 4, 8]),
             ("m9", &[0, 3, 7, 10, 14]),
             ("m7", &[0, 3, 7, 10]),
+            ("m6", &[0, 3, 7, 9]),            // minor 6th
             ("m", &[0, 3, 7]),
             ("9", &[0, 4, 7, 10, 14]),
             ("7", &[0, 4, 7, 10]),
+            ("6", &[0, 4, 7, 9]),             // major 6th
         ];
 
         let (intervals, after_quality) = qualities

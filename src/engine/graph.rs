@@ -705,6 +705,19 @@ pub fn extract_arp(expr: &Expr) -> Option<(Option<Expr>, Vec<Expr>, Option<Expr>
 
 const OSCILLATOR_NAMES: &[&str] = &["sine", "saw", "triangle", "square", "pulse"];
 
+/// Check if an expression contains a VoiceRef("freq") — indicates an instrument template.
+/// Does NOT follow VoiceRef lookups (unlike contains_freq_var in engine.rs).
+fn contains_freq_var_inner(expr: &Expr) -> bool {
+    match expr {
+        Expr::VoiceRef(name) if name == "freq" => true,
+        Expr::FnCall { args, .. } => args.iter().any(contains_freq_var_inner),
+        Expr::Pipe(a, b) | Expr::Sum(a, b) | Expr::Sub(a, b) | Expr::Mul(a, b) | Expr::Div(a, b) => {
+            contains_freq_var_inner(a) || contains_freq_var_inner(b)
+        }
+        _ => false,
+    }
+}
+
 /// Walk an expression tree and replace every oscillator's frequency argument
 /// with the given frequency. Resolves VoiceRefs by inlining the voice expression.
 /// This lets `pluck >> arp(C4, E4, G4, 4)` substitute C4/E4/G4 into pluck's oscillators.
@@ -718,9 +731,25 @@ pub fn substitute_freq(expr: &Expr, voices: &HashMap<String, Expr>, wavetable_na
                 args: new_args,
             }
         }
+        // Handle instrument calls: piano(0) >> arp(...) — expand the instrument
+        // definition with the arp note's frequency substituted for `freq`.
+        Expr::FnCall { name, args } if voices.get(name).map_or(false, |v| contains_freq_var_inner(v)) => {
+            let voice_expr = voices.get(name).unwrap();
+            // The instrument was called with an arg (e.g. piano(0)), but we
+            // ignore it and substitute the arp frequency instead.
+            let _ = args;
+            substitute_var(voice_expr, "freq", freq)
+        }
         Expr::VoiceRef(name) => {
             if let Some(voice_expr) = voices.get(name) {
-                substitute_freq(voice_expr, voices, wavetable_names, freq)
+                // If this voice is an instrument template (contains `freq` var),
+                // substitute the frequency directly rather than recursing into
+                // substitute_freq which doesn't handle VoiceRef("freq").
+                if contains_freq_var_inner(voice_expr) {
+                    substitute_var(voice_expr, "freq", freq)
+                } else {
+                    substitute_freq(voice_expr, voices, wavetable_names, freq)
+                }
             } else {
                 expr.clone()
             }

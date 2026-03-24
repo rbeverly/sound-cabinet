@@ -497,9 +497,31 @@ voice pad = chord(Cm7) >> lowpass(800, 0.6) >> reverb(0.7, 0.5, 0.2)
 voice bright = chord(Fmaj7) >> chorus(0.012, 0.004, 0.2)
 ```
 
-Supported chord types: `maj`, `m`/`min`, `dim`, `aug`, `7`/`dom7`, `m7`/`min7`, `maj7`, `dim7`, `aug7`, `9`/`dom9`, `m9`/`min9`, `maj9`, `sus2`, `sus4`.
+Supported chord types:
 
-The root is any note letter (A-G) with optional accidental (`#`, `s`, `b`). Octave defaults to 4 but can be specified: `Cm73` for C minor 7th in octave 3.
+| Suffix | Chord | Intervals |
+|--------|-------|-----------|
+| `maj` | Major triad | root, 3, 5 |
+| `m` / `min` | Minor triad | root, b3, 5 |
+| `dim` | Diminished | root, b3, b5 |
+| `aug` | Augmented | root, 3, #5 |
+| `7` / `dom7` | Dominant 7th | root, 3, 5, b7 |
+| `maj7` | Major 7th | root, 3, 5, 7 |
+| `m7` / `min7` | Minor 7th | root, b3, 5, b7 |
+| `m7b5` | Half-diminished | root, b3, b5, b7 |
+| `dim7` | Diminished 7th | root, b3, b5, bb7 |
+| `aug7` | Augmented 7th | root, 3, #5, b7 |
+| `mmaj7` | Minor-major 7th | root, b3, 5, 7 |
+| `9` / `dom9` | Dominant 9th | root, 3, 5, b7, 9 |
+| `maj9` | Major 9th | root, 3, 5, 7, 9 |
+| `m9` / `min9` | Minor 9th | root, b3, 5, b7, 9 |
+| `add9` | Major add 9 | root, 3, 5, 9 |
+| `6` | Major 6th | root, 3, 5, 6 |
+| `m6` | Minor 6th | root, b3, 5, 6 |
+| `sus2` | Suspended 2nd | root, 2, 5 |
+| `sus4` | Suspended 4th | root, 4, 5 |
+
+The root is any note letter (A-G) with optional accidental (`#`, `s`, `b`). Append a single digit for octave (default 4): `Abmaj73` = Ab major 7th at octave 3, `Cm7` = C minor 7th at octave 4.
 
 Note: `G7` is parsed as the note G in octave 7, not a G dominant 7th chord. Use `Gdom7` for the chord.
 
@@ -517,9 +539,68 @@ at 0 play pluck >> arp(Cm7, 4) >> lowpass(1500, 0.6) for 4 beats
 at 0 play pluck >> arp(C4, Eb4, G4, Bb4, 4) >> lowpass(1500, 0.6) for 4 beats
 ```
 
-`arp(notes..., speed)` — the last argument is notes per beat. The voice to the left is the template: its oscillator frequencies are replaced by each arp note in turn. Effects to the right of the arp (like `lowpass` above) are applied to every note.
+Format: `arp(notes..., rate, options...)` — notes are frequencies or chord names, rate is notes per beat, and options control direction, octaves, gate, accent, steps, and speed.
 
-If the voice template has a frequency of `0`, that's fine — the arp substitutes it. If the voice already has a real frequency, the arp overrides it.
+Works with voices, instruments, and wavetables: `pluck >> arp(...)`, `piano >> arp(...)`, `piano(0) >> arp(...)` all work. The arp substitutes its own frequencies regardless of what the template was given.
+
+#### Direction and octave spanning
+
+```
+pluck >> arp(Cm7, 4)              // ascending (default)
+pluck >> arp(Cm7, 4, down)        // descending
+pluck >> arp(Cm7, 4, updown)      // ping-pong (up then down)
+pluck >> arp(Cm7, 4, random)      // random note each step
+
+// Octave spanning — play across multiple octaves before repeating
+pluck >> arp(Cm7, 4, up2)         // ascending across 2 octaves
+pluck >> arp(Cm7, 4, down3)       // descending across 3 octaves
+pluck >> arp(Cm7, 4, updown2)     // ping-pong across 2 octaves
+```
+
+#### Gate length
+
+Controls note duration relative to step length. Default is 1.0 (full step). Less than 1.0 creates staccato, greater than 1.0 creates legato overlap:
+
+```
+pluck >> arp(Cm7, 4, gate, 0.5)              // staccato (50% of step)
+pad >> arp(Cm7, 2, updown, gate, 1.5)        // legato (notes overlap)
+```
+
+#### Accent pattern
+
+Boosts every Nth note (1.5x gain on accented, 0.7x on unaccented):
+
+```
+pluck >> arp(Cm7, 8, accent, 4)              // accent every 4th note
+pluck >> arp(Cm7, 8, down, accent, 3)        // descending, accent every 3rd
+```
+
+#### Step pattern
+
+Rhythmic gating — `x` plays, `.` rests. The pattern cycles:
+
+```
+pluck >> arp(Cm7, 8, steps, x.x.xx.x)       // rhythmic pattern
+pluck >> arp(Cm7, 8, updown, steps, xxx.)    // 3 on, 1 off
+```
+
+#### Speed ramp
+
+Uses the range syntax (`->`) for the rate to accelerate or decelerate:
+
+```
+pluck >> arp(Cm7, 2 -> 8) for 8 beats       // accelerate: 2 to 8 notes/beat
+pluck >> arp(Cm7, 8 -> 2) for 8 beats       // decelerate
+pluck >> arp(Cm7, 2 -> 8, updown) for 8 beats  // ramp + direction
+```
+
+#### Combining options
+
+Options can be combined freely after the rate:
+
+```
+pluck >> arp(Cm7, 8, updown2, gate, 0.3, accent, 4, steps, x.xx) for 8 beats
+```
 
 ### Voice Substitution (`with`)
 
@@ -797,17 +878,6 @@ Compose multiple wave definitions into a longer repeating pattern. The fundament
 wave evolving = cycle [wonky, spiky, spiky, wonky]
 ```
 
-### Arp enhancements
-
-Direction, octave spanning, and randomization for the arpeggiator:
-
-```
-pluck >> arp(Cm7, 4, "down")       // descending
-pluck >> arp(Cm7, 4, "updown")     // ascending then descending per cycle
-pluck >> arp(Cm7, 4, "random")     // random note order each cycle
-pluck >> arp(Cm7, 4, "up2")        // ascend across 2 octaves before repeating
-```
-
 ### Tuning & microtonal
 
 Change the reference pitch from the default A4=440 Hz:
@@ -871,6 +941,10 @@ See [docs/algorithmic-generation.md](docs/algorithmic-generation.md) for the ful
 Trait-driven instrument synthesis that builds playable instruments from high-level descriptive vocabulary: `"plucked, decaying, woody, plinky"` resolves to a concrete signal chain (oscillators, filters, envelopes) through archetype templates and trait-to-parameter mapping. A small set of archetypes (plucked string, hammered string, bowed string, blown pipe, struck percussion, electronic) combined with ~30 descriptive traits produces dozens of usable instruments without requiring synthesis knowledge.
 
 See [docs/instrument-generation.md](docs/instrument-generation.md) for the full design.
+
+### True peak limiter
+
+The current `BrickwallLimiter` operates on sample values, but the reconstructed analog signal between samples can peak higher than either sample (inter-sample peaks). The `true_peak_dbfs` measurement detects these, but the limiter can't prevent them. The post-normalization limiter works around this by using a -1.0 dBFS ceiling to leave headroom, but this costs ~0.7 dB of loudness. A proper true peak limiter would oversample the detection stage (typically 4x), detect peaks in the oversampled domain, and apply gain reduction accordingly — matching what professional mastering limiters do.
 
 ### Format export (MP3, FLAC, AAC)
 

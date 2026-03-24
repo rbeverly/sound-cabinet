@@ -280,6 +280,9 @@ pub struct DrumPattern {
 #[derive(Debug, Deserialize, Clone)]
 pub struct DrumVoice {
     pub voice: String,
+    /// Default pitch for this voice (note name, e.g. "A1" for kick, "G3" for snare).
+    /// Makes percussion instruments substitutable — any instrument that takes freq works.
+    pub pitch: String,
     pub rhythm: Vec<String>,
     #[serde(default)]
     pub emphasis: Vec<String>,

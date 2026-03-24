@@ -429,24 +429,19 @@ impl Engine {
             ));
         }
 
-        // Last arg is rate (notes per beat), preceding args are frequencies
-        let rate = match arp_args.last() {
-            Some(Expr::Number(v)) => *v,
-            _ => {
-                return Err(anyhow::anyhow!(
-                    "arp: last argument (rate) must be a number"
-                ))
-            }
-        };
-        // Expand arp note args — supports individual notes (Expr::Number from note names)
-        // and chord names (Expr::VoiceRef that resolves as a chord like "Cm7")
-        let mut notes: Vec<f64> = Vec::new();
-        for arg in &arp_args[..arp_args.len() - 1] {
+        // Parse arp args: NOTES..., RATE, OPTIONS...
+        // Scan backwards to find the rate (first Number or Range from the end,
+        // skipping option keywords and their values).
+        let opts = parse_arp_options(&arp_args)?;
+
+        // Expand note args into frequencies
+        let mut base_notes: Vec<f64> = Vec::new();
+        for arg in &arp_args[..opts.notes_end] {
             match arg {
-                Expr::Number(v) => notes.push(*v),
+                Expr::Number(v) => base_notes.push(*v),
                 Expr::VoiceRef(name) => {
                     if let Some(chord_notes) = resolve_chord(name) {
-                        notes.extend(chord_notes);
+                        base_notes.extend(chord_notes);
                     } else {
                         return Err(anyhow::anyhow!(
                             "arp: '{name}' is not a known chord or note"
@@ -461,12 +456,28 @@ impl Engine {
             }
         }
 
+        if base_notes.is_empty() {
+            return Err(anyhow::anyhow!("arp: no notes provided"));
+        }
+
+        // Apply octave spanning: duplicate notes at +12, +24... semitones
+        let mut spanned_notes = base_notes.clone();
+        for oct in 1..opts.octaves {
+            for &note in &base_notes {
+                let midi = 69.0 + 12.0 * (note / 440.0).log2();
+                let shifted_midi = midi + (oct as f64 * 12.0);
+                let shifted_hz = 440.0 * 2.0_f64.powf((shifted_midi - 69.0) / 12.0);
+                spanned_notes.push(shifted_hz);
+            }
+        }
+
+        // Apply direction to build the note sequence
+        let sequence = build_arp_sequence(&spanned_notes, &opts.direction);
+
         // Extract swell from the post-chain if present
         let swell = post_chain.as_ref().and_then(|pc| extract_swell(pc));
         let clean_post = post_chain.map(|pc| strip_swell(&pc));
-        // Drop the post-chain if it was only swell (strip_swell returns the inner expr)
         let clean_post = clean_post.and_then(|pc| {
-            // If stripping swell left us with a pass-through equivalent, discard it
             if matches!(&pc, Expr::FnCall { name, .. } if name == "swell") {
                 None
             } else {
@@ -474,20 +485,77 @@ impl Engine {
             }
         });
 
-        let step_beats = 1.0 / rate;
-        let step_samples = self.beats_to_samples(step_beats);
-        let total_steps = (duration_beats * rate).round() as usize;
+        // Speed ramp: accumulate beat positions with variable rate
+        let rate_start = opts.rate_start;
+        let rate_end = opts.rate_end.unwrap_or(rate_start);
+        let has_ramp = opts.rate_end.is_some();
 
+        // Estimate total steps from average rate (or exact for fixed rate)
+        let avg_rate = (rate_start + rate_end) / 2.0;
+        let total_steps = (duration_beats * avg_rate).round() as usize;
+
+        // For random direction, we need an RNG per cycle
+        let mut rng_state: u64 = 42; // deterministic seed
+
+        // Pre-compute beat offsets for each step (handles speed ramp)
+        let mut beat_offsets: Vec<f64> = Vec::with_capacity(total_steps);
+        let mut cursor_beat = 0.0;
         for i in 0..total_steps {
-            let freq = notes[i % notes.len()];
-            let start = base_start + (i as u64) * step_samples;
-            let end = start + step_samples;
-            let dur_secs = step_beats * 60.0 / self.bpm;
+            if cursor_beat >= duration_beats {
+                break;
+            }
+            beat_offsets.push(cursor_beat);
 
-            // Build the note expression: substitute freq into voice template,
-            // or use default triangle+decay if no voice was provided.
-            // Use substitute_var for instrument templates (contain VoiceRef("freq")),
-            // substitute_freq for plain voices (only replaces oscillator args).
+            // Interpolate rate at this step
+            let frac = if total_steps > 1 { i as f64 / (total_steps - 1) as f64 } else { 0.0 };
+            let current_rate = if has_ramp {
+                rate_start + (rate_end - rate_start) * frac
+            } else {
+                rate_start
+            };
+            cursor_beat += 1.0 / current_rate;
+        }
+
+        let actual_steps = beat_offsets.len();
+
+        // Track the note index separately (skipped steps don't advance note)
+        let mut note_idx: usize = 0;
+        let seq_len = sequence.len();
+
+        for i in 0..actual_steps {
+            // Step pattern: check if this step should sound
+            if let Some(ref pattern) = opts.step_pattern {
+                if !pattern[i % pattern.len()] {
+                    continue; // silent step, don't advance note_idx
+                }
+            }
+
+            // Get frequency from sequence (or randomize)
+            let freq = if opts.direction == ArpDirection::Random {
+                // Simple deterministic pseudo-random using step index
+                rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                let rand_idx = (rng_state >> 33) as usize % sequence.len();
+                sequence[rand_idx]
+            } else {
+                sequence[note_idx % seq_len]
+            };
+            note_idx += 1;
+
+            let beat_offset = beat_offsets[i];
+            let start = base_start + self.beats_to_samples(beat_offset);
+
+            // Gate: control note duration relative to step
+            let step_beats = if i + 1 < actual_steps {
+                beat_offsets[i + 1] - beat_offset
+            } else {
+                duration_beats - beat_offset
+            };
+            let note_beats = step_beats * opts.gate;
+            let note_samples = self.beats_to_samples(note_beats);
+            let end = start + note_samples;
+            let dur_secs = note_beats * 60.0 / self.bpm;
+
+            // Build the note expression
             let note_expr = if let Some(ref voice_template) = pre_chain {
                 if contains_freq_var(voice_template, &self.voices) {
                     substitute_var(voice_template, "freq", freq)
@@ -496,7 +564,6 @@ impl Engine {
                     substitute_freq(voice_template, &self.voices, &wt_names, freq)
                 }
             } else {
-                // Default voice: triangle oscillator with decay
                 Expr::Pipe(
                     Box::new(Expr::FnCall {
                         name: "triangle".to_string(),
@@ -509,7 +576,6 @@ impl Engine {
                 )
             };
 
-            // Pipe through the post-processing chain if present
             let full_expr = if let Some(ref post) = clean_post {
                 Expr::Pipe(Box::new(note_expr), Box::new(post.clone()))
             } else {
@@ -518,9 +584,9 @@ impl Engine {
 
             let net = build_graph(&full_expr, &self.voices, &self.wavetables, self.sample_rate, Some(dur_secs))?;
 
-            // Compute per-step swell envelope value and bake it as a gain multiplier
+            // Swell envelope gain
             let sub_swell_gain = swell.map(|(attack, release)| {
-                let t_start = (i as f64) * step_beats * 60.0 / self.bpm;
+                let t_start = beat_offset * 60.0 / self.bpm;
                 let total_dur = duration_beats * 60.0 / self.bpm;
                 let fade_in = (t_start / attack).min(1.0);
                 let fade_start = (total_dur - release).max(0.0);
@@ -533,8 +599,14 @@ impl Engine {
                 fade_in.min(fade_out)
             });
 
-            // Per-step gain from swell envelope (if present)
-            let step_gain = sub_swell_gain.unwrap_or(1.0) as f32;
+            // Accent: boost every Nth step
+            let accent_gain = if let Some(n) = opts.accent_every {
+                if i % n == 0 { 1.5 } else { 0.7 }
+            } else {
+                1.0
+            };
+
+            let step_gain = sub_swell_gain.unwrap_or(1.0) as f32 * accent_gain as f32;
 
             self.schedule.push(ScheduledEvent {
                 start_sample: start,
@@ -543,7 +615,7 @@ impl Engine {
                 net,
                 swell: None,
                 gain: step_gain,
-                source: None, // arp sub-events don't carry individual provenance
+                source: None,
                 logged: false,
                 bus_name: None,
                 sidechain: None,
@@ -679,6 +751,231 @@ fn samples_to_beats_static(sample: u64, sample_rate: f64, tempo_map: &[(f64, f64
         beat = seg_end;
     }
     beat
+}
+
+// ---------------------------------------------------------------------------
+// Arp options parsing
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq)]
+enum ArpDirection {
+    Up,
+    Down,
+    UpDown,
+    Random,
+}
+
+#[derive(Debug)]
+struct ArpOptions {
+    notes_end: usize,     // index in arp_args where notes end (exclusive)
+    rate_start: f64,
+    rate_end: Option<f64>, // Some for speed ramp
+    direction: ArpDirection,
+    octaves: u32,
+    gate: f64,
+    accent_every: Option<usize>,
+    step_pattern: Option<Vec<bool>>,
+}
+
+/// Known option keywords for arp (identifiers that are NOT chord names).
+fn is_arp_option(name: &str) -> bool {
+    matches!(
+        name,
+        "up" | "down" | "updown" | "random" | "gate" | "accent" | "steps"
+    ) || is_direction_with_octave(name).is_some()
+}
+
+/// Parse direction keywords with optional octave suffix: "up2", "down3", "updown2".
+fn is_direction_with_octave(name: &str) -> Option<(ArpDirection, u32)> {
+    for (prefix, dir) in &[
+        ("updown", ArpDirection::UpDown),
+        ("down", ArpDirection::Down),
+        ("up", ArpDirection::Up),
+    ] {
+        if let Some(suffix) = name.strip_prefix(prefix) {
+            if suffix.is_empty() {
+                return Some((dir.clone(), 1));
+            }
+            if let Ok(oct) = suffix.parse::<u32>() {
+                if oct >= 1 && oct <= 4 {
+                    return Some((dir.clone(), oct));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Parse arp arguments into notes boundary, rate, and options.
+///
+/// Format: arp(NOTES..., RATE, OPTIONS...)
+/// - NOTES: Number (frequencies) or VoiceRef (chord names)
+/// - RATE: Number or Range (for speed ramp)
+/// - OPTIONS: direction (up/down/updown/random/up2/down3...),
+///   gate + Number, accent + Number, steps + identifier
+fn parse_arp_options(args: &[Expr]) -> Result<ArpOptions> {
+    let mut opts = ArpOptions {
+        notes_end: 0,
+        rate_start: 4.0,
+        rate_end: None,
+        direction: ArpDirection::Up,
+        octaves: 1,
+        gate: 1.0,
+        accent_every: None,
+        step_pattern: None,
+    };
+
+    // Scan backwards to find the rate. Skip option keywords and their values.
+    // The rate is the first Number or Range we hit (scanning backwards past options).
+    let mut rate_idx = None;
+    let mut i = args.len();
+    while i > 0 {
+        i -= 1;
+        match &args[i] {
+            Expr::VoiceRef(name) if is_arp_option(name) => {
+                // This is an option keyword. "gate", "accent", "steps" consume
+                // the next arg (already skipped by the caller below).
+                continue;
+            }
+            Expr::Number(_) | Expr::Range(_, _) => {
+                // Check if this number is a value for gate/accent (preceded by keyword)
+                if i > 0 {
+                    if let Expr::VoiceRef(prev) = &args[i - 1] {
+                        if prev == "gate" || prev == "accent" {
+                            // This number is a parameter value, not the rate
+                            i -= 1; // skip the keyword too
+                            continue;
+                        }
+                    }
+                }
+                // This is the rate
+                rate_idx = Some(i);
+                break;
+            }
+            _ => {
+                // VoiceRef that's not an option keyword — could be a chord name.
+                // If we haven't found rate yet, keep scanning.
+                // But if it's before any options, it's a note.
+                // Actually if we encounter a non-option VoiceRef while scanning
+                // backwards, we've passed all options and this is in the notes zone.
+                // The rate must be right after this.
+                // Check the next element (i+1):
+                if i + 1 < args.len() {
+                    if let Expr::Number(_) | Expr::Range(_, _) = &args[i + 1] {
+                        rate_idx = Some(i + 1);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let rate_idx = rate_idx.ok_or_else(|| anyhow::anyhow!("arp: could not find rate argument"))?;
+
+    // Extract rate
+    match &args[rate_idx] {
+        Expr::Number(v) => opts.rate_start = *v,
+        Expr::Range(start, end) => {
+            opts.rate_start = *start;
+            opts.rate_end = Some(*end);
+        }
+        _ => unreachable!(),
+    }
+
+    opts.notes_end = rate_idx;
+
+    // Parse options (everything after rate)
+    let option_args = &args[rate_idx + 1..];
+    let mut oi = 0;
+    while oi < option_args.len() {
+        match &option_args[oi] {
+            Expr::VoiceRef(name) => {
+                let name = name.as_str();
+                if name == "random" {
+                    opts.direction = ArpDirection::Random;
+                } else if let Some((dir, oct)) = is_direction_with_octave(name) {
+                    opts.direction = dir;
+                    opts.octaves = oct;
+                } else if name == "gate" {
+                    oi += 1;
+                    if let Some(Expr::Number(v)) = option_args.get(oi) {
+                        opts.gate = *v;
+                    } else {
+                        return Err(anyhow::anyhow!("arp: 'gate' requires a number"));
+                    }
+                } else if name == "accent" {
+                    oi += 1;
+                    if let Some(Expr::Number(v)) = option_args.get(oi) {
+                        opts.accent_every = Some(*v as usize);
+                    } else {
+                        return Err(anyhow::anyhow!("arp: 'accent' requires a number"));
+                    }
+                } else if name == "steps" {
+                    oi += 1;
+                    if let Some(Expr::VoiceRef(pattern)) = option_args.get(oi) {
+                        let parsed: Vec<bool> = pattern
+                            .chars()
+                            .filter_map(|c| match c {
+                                'x' | 'X' => Some(true),
+                                '.' => Some(false),
+                                _ => None,
+                            })
+                            .collect();
+                        if parsed.is_empty() {
+                            return Err(anyhow::anyhow!(
+                                "arp: 'steps' pattern must contain x (play) and . (rest)"
+                            ));
+                        }
+                        opts.step_pattern = Some(parsed);
+                    } else {
+                        return Err(anyhow::anyhow!(
+                            "arp: 'steps' requires a pattern like x.x.xx.x"
+                        ));
+                    }
+                } else {
+                    return Err(anyhow::anyhow!(
+                        "arp: unknown option '{name}'"
+                    ));
+                }
+            }
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "arp: unexpected argument after rate"
+                ));
+            }
+        }
+        oi += 1;
+    }
+
+    Ok(opts)
+}
+
+/// Build the note sequence after applying direction.
+fn build_arp_sequence(notes: &[f64], direction: &ArpDirection) -> Vec<f64> {
+    match direction {
+        ArpDirection::Up => notes.to_vec(),
+        ArpDirection::Down => {
+            let mut seq = notes.to_vec();
+            seq.reverse();
+            seq
+        }
+        ArpDirection::UpDown => {
+            if notes.len() <= 1 {
+                return notes.to_vec();
+            }
+            // Up then down, dropping duplicates at turnaround points
+            let mut seq = notes.to_vec();
+            for i in (1..notes.len() - 1).rev() {
+                seq.push(notes[i]);
+            }
+            seq
+        }
+        ArpDirection::Random => {
+            // For random, the sequence is just the base notes —
+            // randomization happens per-step in the scheduling loop.
+            notes.to_vec()
+        }
+    }
 }
 
 /// Check if an expression tree contains VoiceRef("freq"), either directly
