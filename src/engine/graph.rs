@@ -186,16 +186,20 @@ fn build_fn_call(
                 None
             };
 
+            // Nyquist safety: clamp filter cutoff to prevent biquad instability
+            let nyquist = (sample_rate * 0.45) as f32; // leave margin below sr/2
+
             if let Some(mix_val) = mix {
                 // Use LeakyFilter: custom one-pole lowpass with internal dry/wet blend
-                let freq = expect_number(&args, 0, name)? as f32;
+                let freq = (expect_number(&args, 0, name)? as f32).min(nyquist);
                 let mut net = Net::wrap(Box::new(An(LeakyFilter::new(freq, mix_val))));
                 net.set_sample_rate(sample_rate);
                 Ok(net)
             } else if let Some(Expr::Range(start, end)) = args.first() {
                 // Dynamic lowpass: (signal | cutoff_sweep) >> lowpass_q(q)
-                let start = *start;
-                let end = *end;
+                let nyq = nyquist as f64;
+                let start = (*start).min(nyq);
+                let end = (*end).min(nyq);
                 let dur = duration_secs.unwrap_or(4.0);
                 let sweep = Net::wrap(Box::new(envelope(move |t: f64| {
                     let frac = (t / dur).min(1.0);
@@ -208,7 +212,7 @@ fn build_fn_call(
                 Ok(net)
             } else {
                 // Static lowpass (original behavior)
-                let freq = expect_number(&args, 0, name)? as f32;
+                let freq = (expect_number(&args, 0, name)? as f32).min(nyquist);
                 let mut net = Net::wrap(Box::new(lowpass_hz(freq, q)));
                 net.set_sample_rate(sample_rate);
                 Ok(net)
@@ -216,10 +220,12 @@ fn build_fn_call(
         }
         "highpass" => {
             let q = expect_number(&args, 1, name)? as f32;
+            let nyquist = (sample_rate * 0.45) as f32;
 
             if let Some(Expr::Range(start, end)) = args.first() {
-                let start = *start;
-                let end = *end;
+                let nyq = nyquist as f64;
+                let start = (*start).min(nyq);
+                let end = (*end).min(nyq);
                 let dur = duration_secs.unwrap_or(4.0);
                 let sweep = Net::wrap(Box::new(envelope(move |t: f64| {
                     let frac = (t / dur).min(1.0);
@@ -233,7 +239,7 @@ fn build_fn_call(
                 net.set_sample_rate(sample_rate);
                 Ok(net)
             } else {
-                let freq = expect_number(&args, 0, name)? as f32;
+                let freq = (expect_number(&args, 0, name)? as f32).min(nyquist);
                 let mut net = Net::wrap(Box::new(highpass_hz(freq, q)));
                 net.set_sample_rate(sample_rate);
                 Ok(net)
@@ -243,7 +249,8 @@ fn build_fn_call(
         // Bandpass filter: passes a frequency band, cuts above and below
         // bandpass(center_freq, q) — higher q = narrower band
         "bandpass" => {
-            let freq = expect_number(&args, 0, name)? as f32;
+            let nyquist = (sample_rate * 0.45) as f32;
+            let freq = (expect_number(&args, 0, name)? as f32).min(nyquist);
             let q = expect_number(&args, 1, name)? as f32;
             let mut net = Net::wrap(Box::new(bandpass_hz(freq, q)));
             net.set_sample_rate(sample_rate);
@@ -433,7 +440,8 @@ fn build_fn_call(
         // eq(freq, gain_db, "low")  — low shelf
         // eq(freq, gain_db, "high") — high shelf
         "eq" => {
-            let freq = expect_number(args, 0, name)? as f32;
+            let nyquist = (sample_rate * 0.45) as f32;
+            let freq = (expect_number(args, 0, name)? as f32).min(nyquist);
             let gain_db = expect_number(args, 1, name)? as f32;
 
             // Third arg: number → peak with Q, string → shelf type

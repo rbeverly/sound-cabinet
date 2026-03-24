@@ -855,6 +855,13 @@ impl MasterCompressor {
     pub fn process(&mut self, buffer: &mut [f32]) {
         for sample in buffer.iter_mut() {
             let x = *sample;
+
+            // Guard: NaN/Inf would poison envelope state permanently
+            if !x.is_finite() {
+                *sample = 0.0;
+                continue;
+            }
+
             let x_sq = x * x;
 
             // RMS envelope follower (track squared signal, compare in dB domain)
@@ -864,6 +871,13 @@ impl MasterCompressor {
             } else {
                 self.envelope_sq = self.release_coeff * self.envelope_sq
                     + (1.0 - self.release_coeff) * x_sq;
+            }
+
+            // Safety: if envelope went bad, reset it
+            if !self.envelope_sq.is_finite() {
+                self.envelope_sq = 0.0;
+                *sample = 0.0;
+                continue;
             }
 
             // Convert RMS to dB (RMS = sqrt(envelope_sq), dB = 20*log10(rms))
@@ -1008,6 +1022,13 @@ impl MasterBus {
         }
 
         for sample in buffer.iter_mut() {
+            // Guard: if input is NaN/Inf (e.g. from an oscillator above Nyquist),
+            // replace with silence to prevent poisoning the filter state.
+            if !sample.is_finite() {
+                *sample = 0.0;
+                continue;
+            }
+
             // Highpass
             let hp_out = self.hp_b0 * *sample + self.hp_b1 * self.hp_x1 + self.hp_b2 * self.hp_x2
                 - self.hp_a1 * self.hp_y1 - self.hp_a2 * self.hp_y2;
@@ -1024,7 +1045,15 @@ impl MasterBus {
             self.lp_y2 = self.lp_y1;
             self.lp_y1 = lp_out;
 
-            *sample = lp_out;
+            // Guard filter output: if filters produced NaN (unstable coefficients),
+            // reset filter state and output silence for this sample.
+            if !lp_out.is_finite() {
+                self.hp_x1 = 0.0; self.hp_x2 = 0.0; self.hp_y1 = 0.0; self.hp_y2 = 0.0;
+                self.lp_x1 = 0.0; self.lp_x2 = 0.0; self.lp_y1 = 0.0; self.lp_y2 = 0.0;
+                *sample = 0.0;
+            } else {
+                *sample = lp_out;
+            }
         }
 
         // Compressor (crest factor reduction)

@@ -692,17 +692,23 @@ This is the foundation for generative music — pipe output from an LLM or any p
 
 ## Piano Mode
 
-Play any instrument or custom waveform live with your keyboard:
+Play any instrument or custom waveform live with your keyboard or a MIDI controller:
 
 ```bash
 sound-cabinet piano examples/voices/concerto2-kit.sc piano
 sound-cabinet piano examples/wave-test.sc spike
 sound-cabinet piano examples/voices/lofi-kit.sc mel
+
+# With MIDI keyboard (auto-detects if connected)
+sound-cabinet piano examples/voices/concerto2-kit.sc piano --midi
+
+# Specific MIDI port (by index)
+sound-cabinet piano examples/voices/concerto2-kit.sc piano --midi 0
 ```
 
 The first argument is a score file (loads its instrument/voice/fx/wave definitions). The optional second argument is the instrument or wave name to play. Without it, a default sine+decay tone is used.
 
-The keyboard maps two chromatic octaves (C3–C5) across your QWERTY layout — the same layout as GarageBand. Press Esc or Ctrl+C to exit.
+The QWERTY keyboard maps two chromatic octaves (C3-C5) across your layout — the same as GarageBand. A MIDI keyboard provides the full range with velocity sensitivity. If a MIDI device is connected, it's auto-detected — both keyboard and MIDI work simultaneously. Press Esc or Ctrl+C to exit.
 
 ## Examples
 

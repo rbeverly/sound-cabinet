@@ -424,11 +424,27 @@ fn cmd_piano(args: &[String]) -> Result<()> {
     use sound_cabinet::dsl::Command;
 
     if args.is_empty() {
-        return Err(anyhow!("Usage: sound-cabinet piano <score.sc> [instrument-name]"));
+        return Err(anyhow!(
+            "Usage: sound-cabinet piano <score.sc> [instrument-name] [--midi [port]]"
+        ));
     }
 
+    // Parse args: score path, optional instrument name, optional --midi flag
     let score_path = &args[0];
-    let instrument_name = args.get(1).map(|s| s.as_str());
+    let midi_flag = args.iter().any(|a| a == "--midi");
+    let midi_port: Option<usize> = if midi_flag {
+        // Check if --midi is followed by a number
+        args.iter()
+            .position(|a| a == "--midi")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|s| s.parse().ok())
+    } else {
+        None
+    };
+    let instrument_name = args
+        .get(1)
+        .filter(|a| !a.starts_with('-') && !is_flag_value(args, a))
+        .map(|s| s.as_str());
 
     // Load definitions from the score file
     let engine = load_definitions(score_path)?;
@@ -445,8 +461,32 @@ fn cmd_piano(args: &[String]) -> Result<()> {
         }
     });
 
-    // Determine default note duration in beats (notes play for this long then decay)
+    // Determine default note duration in beats
     let note_duration_beats = 2.0;
+
+    // Try to open MIDI input.
+    // IMPORTANT: _midi_conn must be kept alive — dropping it closes the connection.
+    let (midi_rx, _midi_conn) = if midi_flag {
+        match open_midi_input(midi_port) {
+            Ok((rx, conn, port_name)) => {
+                eprintln!("MIDI connected: {}", port_name);
+                (Some(rx), Some(conn))
+            }
+            Err(e) => {
+                eprintln!("MIDI: {} (keyboard only)", e);
+                (None, None)
+            }
+        }
+    } else {
+        // Auto-detect: try to open, silently fall back to keyboard
+        match open_midi_input(None) {
+            Ok((rx, conn, port_name)) => {
+                eprintln!("MIDI auto-detected: {}", port_name);
+                (Some(rx), Some(conn))
+            }
+            Err(_) => (None, None),
+        }
+    };
 
     eprintln!("Piano mode — {}", score_path);
     if let Some(name) = instrument_name {
@@ -461,64 +501,101 @@ fn cmd_piano(args: &[String]) -> Result<()> {
     eprintln!("│ z│ x │ c │ v │ b │ n │ m │ ,│  │ q│ w │ e │ r │ t │ y │ u │ i│");
     eprintln!("│C3│D3 │E3 │F3 │G3 │A3 │B3 │C4│  │C4│D4 │E4 │F4 │G4 │A4 │B4 │C5│");
     eprintln!("└──┴───┴───┴───┴───┴───┴───┴──┘  └──┴───┴───┴───┴───┴───┴───┴──┘");
+    if midi_rx.is_some() {
+        eprintln!("MIDI keyboard active — full range available.");
+    }
     eprintln!();
     eprintln!("Press keys to play. Esc or Ctrl+C to quit.");
 
     // Enter raw terminal mode
     terminal::enable_raw_mode()?;
 
+    // Helper closure to play a note given MIDI number and velocity
+    let play_note =
+        |engine: &Arc<Mutex<sound_cabinet::engine::Engine>>,
+         midi: i32,
+         velocity: f64,
+         inst_name: Option<&str>| {
+            let freq = midi_to_hz(midi);
+            let name = midi_to_name(midi);
+
+            // Clamp to safe range. Instruments often use lowpass(freq * N) which
+            // pushes the filter cutoff above Nyquist and causes NaN. A 10 kHz limit
+            // keeps freq*4 = 40 kHz still safe for coefficient calculation.
+            if freq > 10000.0 || freq < 16.0 {
+                eprint!("  {} ({:.1} Hz) — out of range, skipped\r\n", name, freq);
+                return;
+            }
+
+            let expr = if let Some(inst_name) = inst_name {
+                sound_cabinet::dsl::ast::Expr::FnCall {
+                    name: inst_name.to_string(),
+                    args: vec![sound_cabinet::dsl::ast::Expr::Number(freq)],
+                }
+            } else {
+                sound_cabinet::dsl::ast::Expr::Pipe(
+                    Box::new(sound_cabinet::dsl::ast::Expr::FnCall {
+                        name: "sine".to_string(),
+                        args: vec![sound_cabinet::dsl::ast::Expr::Number(freq)],
+                    }),
+                    Box::new(sound_cabinet::dsl::ast::Expr::FnCall {
+                        name: "decay".to_string(),
+                        args: vec![sound_cabinet::dsl::ast::Expr::Number(6.0)],
+                    }),
+                )
+            };
+
+            // Apply velocity as gain: wrap expr in multiplication
+            let expr = if (velocity - 1.0).abs() > 0.01 {
+                sound_cabinet::dsl::ast::Expr::Mul(
+                    Box::new(expr),
+                    Box::new(sound_cabinet::dsl::ast::Expr::Number(velocity)),
+                )
+            } else {
+                expr
+            };
+
+            let mut eng = engine.lock().unwrap();
+            eng.handle_command_relative(Command::PlayAt {
+                beat: 0.0,
+                expr,
+                duration_beats: note_duration_beats,
+                source: None,
+            })
+            .unwrap_or_else(|e| {
+                let _ = e;
+            });
+
+            eprint!("  {} ({:.1} Hz) vel {:.0}%\r\n", name, freq, velocity * 100.0);
+        };
+
     let result = (|| -> Result<()> {
         loop {
+            // Check MIDI events (non-blocking)
+            if let Some(ref rx) = midi_rx {
+                while let Ok((midi_note, velocity)) = rx.try_recv() {
+                    if velocity > 0 {
+                        // Note-on: velocity 1-127 mapped to 0.0-1.0
+                        let vel = velocity as f64 / 127.0;
+                        play_note(&engine, midi_note as i32, vel, instrument_name);
+                    }
+                    // Note-off (velocity 0) is ignored — decay handles note ending
+                }
+            }
+
+            // Check keyboard events (50ms poll)
             if event::poll(Duration::from_millis(50))? {
                 if let Event::Key(KeyEvent { code, modifiers, .. }) = event::read()? {
-                    // Exit on Esc or Ctrl+C
                     if code == KeyCode::Esc
-                        || (code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL))
+                        || (code == KeyCode::Char('c')
+                            && modifiers.contains(KeyModifiers::CONTROL))
                     {
                         break;
                     }
 
                     if let KeyCode::Char(c) = code {
                         if let Some(midi) = key_to_midi(c) {
-                            let freq = midi_to_hz(midi);
-                            let name = midi_to_name(midi);
-
-                            // Build the expression for this note
-                            let expr = if let Some(inst_name) = instrument_name {
-                                // instrument(freq)
-                                sound_cabinet::dsl::ast::Expr::FnCall {
-                                    name: inst_name.to_string(),
-                                    args: vec![sound_cabinet::dsl::ast::Expr::Number(freq)],
-                                }
-                            } else {
-                                // Default: sine(freq) with decay
-                                sound_cabinet::dsl::ast::Expr::Pipe(
-                                    Box::new(sound_cabinet::dsl::ast::Expr::FnCall {
-                                        name: "sine".to_string(),
-                                        args: vec![sound_cabinet::dsl::ast::Expr::Number(freq)],
-                                    }),
-                                    Box::new(sound_cabinet::dsl::ast::Expr::FnCall {
-                                        name: "decay".to_string(),
-                                        args: vec![sound_cabinet::dsl::ast::Expr::Number(6.0)],
-                                    }),
-                                )
-                            };
-
-                            // Schedule the note relative to current playback position
-                            let mut eng = engine.lock().unwrap();
-                            eng.handle_command_relative(Command::PlayAt {
-                                beat: 0.0,
-                                expr,
-                                duration_beats: note_duration_beats,
-                                source: None,
-                            })
-                            .unwrap_or_else(|e| {
-                                // Can't easily print in raw mode, just ignore
-                                let _ = e;
-                            });
-
-                            // Print the note name (raw mode needs \r\n)
-                            eprint!("  {} ({:.1} Hz)\r\n", name, freq);
+                            play_note(&engine, midi, 1.0, instrument_name);
                         }
                     }
                 }
@@ -535,6 +612,82 @@ fn cmd_piano(args: &[String]) -> Result<()> {
     let _ = audio_thread.join();
 
     result
+}
+
+/// Open a MIDI input connection. Returns a channel receiver for (note, velocity) events,
+/// the connection handle (must be kept alive), and the port name.
+fn open_midi_input(
+    port_index: Option<usize>,
+) -> Result<(
+    crossbeam_channel::Receiver<(u8, u8)>,
+    midir::MidiInputConnection<()>,
+    String,
+)> {
+    let midi_in = midir::MidiInput::new("sound-cabinet")
+        .map_err(|e| anyhow!("Cannot initialize MIDI: {e}"))?;
+
+    let ports = midi_in.ports();
+    if ports.is_empty() {
+        return Err(anyhow!("No MIDI input devices found"));
+    }
+
+    // Select port
+    let port = if let Some(idx) = port_index {
+        ports
+            .get(idx)
+            .ok_or_else(|| {
+                let names: Vec<String> = ports
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        format!("  {}: {}", i, midi_in.port_name(p).unwrap_or_default())
+                    })
+                    .collect();
+                anyhow!(
+                    "MIDI port {} not found. Available ports:\n{}",
+                    idx,
+                    names.join("\n")
+                )
+            })?
+    } else {
+        &ports[0]
+    };
+
+    let port_name = midi_in
+        .port_name(port)
+        .unwrap_or_else(|_| "Unknown".to_string());
+
+    let (tx, rx) = crossbeam_channel::unbounded::<(u8, u8)>();
+
+    // MIDI callback: parse note-on/note-off messages and send through channel
+    let conn = midi_in
+        .connect(
+            port,
+            "sound-cabinet-in",
+            move |_timestamp, message, _data| {
+                if message.len() >= 3 {
+                    let status = message[0] & 0xF0;
+                    let note = message[1];
+                    let velocity = message[2];
+
+                    match status {
+                        0x90 => {
+                            // Note-on (velocity 0 = note-off per MIDI spec)
+                            let _ = tx.send((note, velocity));
+                        }
+                        0x80 => {
+                            // Note-off
+                            let _ = tx.send((note, 0));
+                        }
+                        _ => {} // Ignore CC, pitch bend, etc. for now
+                    }
+                }
+            },
+            (),
+        )
+        .map_err(|e| anyhow!("Cannot connect to MIDI port '{}': {e}", port_name))?;
+
+    Ok((rx, conn, port_name))
 }
 
 /// Stream mode: read lines from stdin, play in real-time.

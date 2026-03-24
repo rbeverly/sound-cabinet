@@ -333,6 +333,13 @@ impl Engine {
                 };
 
                 let out = event.net.get_mono();
+                // Guard: if a voice produces NaN/Inf (e.g. filter instability
+                // from extreme frequencies), kill the event immediately.
+                // A NaN voice never recovers — cut it off to protect the mix.
+                if !out.is_finite() {
+                    event.end_sample = pos; // mark as finished
+                    break; // stop processing this event for the rest of the buffer
+                }
                 let sample = out * anti_click * swell_env * event.gain * sc_gain;
                 buffer[i] += sample;
 
