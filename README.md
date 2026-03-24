@@ -708,7 +708,20 @@ sound-cabinet piano examples/voices/concerto2-kit.sc piano --midi 0
 
 The first argument is a score file (loads its instrument/voice/fx/wave definitions). The optional second argument is the instrument or wave name to play. Without it, a default sine+decay tone is used.
 
-The QWERTY keyboard maps two chromatic octaves (C3-C5) across your layout — the same as GarageBand. A MIDI keyboard provides the full range with velocity sensitivity. If a MIDI device is connected, it's auto-detected — both keyboard and MIDI work simultaneously. Press Esc or Ctrl+C to exit.
+The QWERTY keyboard maps two chromatic octaves (C3-C5) across your layout — the same as GarageBand. A MIDI keyboard provides the full range with velocity sensitivity. If a MIDI device is connected, it's auto-detected — both keyboard and MIDI work simultaneously.
+
+#### Recording
+
+Capture what you play as `.sc` patterns with timing and velocity:
+
+| Key | Action |
+|-----|--------|
+| F1 | Start/stop recording (with metronome click) |
+| F2 | Save recording to `recorded_N.sc` |
+| F3 | Discard current recording |
+| Esc | Quit piano mode |
+
+While recording, a metronome click sounds on each beat. Notes are timestamped and saved with beat offsets relative to the BPM. The output is a standard `.sc` pattern you can import into a score.
 
 ## Examples
 

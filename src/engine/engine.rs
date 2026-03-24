@@ -28,6 +28,13 @@ struct ScheduledEvent {
     bus_name: Option<String>,
     /// Sidechain config: duck this event's output based on a bus envelope.
     sidechain: Option<SidechainConfig>,
+    /// Live note-off support: when Some, the event is fading out.
+    /// Value is the sample position where release started.
+    release_at: Option<u64>,
+    /// Release duration in samples. Default ~50ms for clean fade.
+    release_samples: u64,
+    /// Unique ID for matching note-on to note-off (MIDI note number, or 0 for score events).
+    note_id: u16,
 }
 
 /// The central audio engine. Manages voice definitions, scheduled events,
@@ -127,6 +134,9 @@ impl Engine {
                         logged: false,
                         bus_name,
                         sidechain,
+                        release_at: None,
+                        release_samples: (self.sample_rate * 0.05) as u64,
+                        note_id: 0,
                     });
                 }
             }
@@ -214,11 +224,45 @@ impl Engine {
                         logged: false,
                         bus_name,
                         sidechain,
+                        release_at: None,
+                        release_samples: (self.sample_rate * 0.05) as u64,
+                        note_id: 0,
                     });
                 }
             }
             other => self.handle_command(other)?,
         }
+        Ok(())
+    }
+
+    /// Schedule a live note that plays indefinitely until release_note() is called.
+    /// Used by piano mode for MIDI input where duration is unknown at note-on time.
+    /// `note_id` is typically the MIDI note number, used to match note-off to note-on.
+    pub fn play_live_note(&mut self, expr: Expr, note_id: u16) -> Result<()> {
+        // Schedule for 30 seconds max (safety limit, release_note will end it sooner)
+        let duration_beats = 30.0 * self.bpm / 60.0;
+        let duration_secs = 30.0;
+        let start_sample = self.current_sample;
+        let end_sample = start_sample + (duration_secs * self.sample_rate) as u64;
+
+        let net = build_graph(&expr, &self.voices, &self.wavetables, self.sample_rate, Some(duration_secs))?;
+
+        self.schedule.push(ScheduledEvent {
+            start_sample,
+            end_sample,
+            duration_secs,
+            net,
+            swell: None,
+            gain: 1.0,
+            source: None,
+            logged: false,
+            bus_name: None,
+            sidechain: None,
+            release_at: None,
+            release_samples: (self.sample_rate * 0.08) as u64,
+            note_id,
+        });
+
         Ok(())
     }
 
@@ -332,6 +376,19 @@ impl Engine {
                     1.0
                 };
 
+                // Release envelope: fade out when note-off has been received
+                let release_env = if let Some(release_start) = event.release_at {
+                    if pos >= release_start {
+                        let into_release = (pos - release_start) as f32;
+                        let total = std::cmp::max(event.release_samples, 1) as f32;
+                        (1.0 - into_release / total).max(0.0)
+                    } else {
+                        1.0
+                    }
+                } else {
+                    1.0
+                };
+
                 let out = event.net.get_mono();
                 // Guard: if a voice produces NaN/Inf (e.g. filter instability
                 // from extreme frequencies), kill the event immediately.
@@ -340,7 +397,7 @@ impl Engine {
                     event.end_sample = pos; // mark as finished
                     break; // stop processing this event for the rest of the buffer
                 }
-                let sample = out * anti_click * swell_env * event.gain * sc_gain;
+                let sample = out * anti_click * swell_env * release_env * event.gain * sc_gain;
                 buffer[i] += sample;
 
                 // Track bus peak level
@@ -381,6 +438,22 @@ impl Engine {
     /// Returns true when all scheduled events have finished playing.
     pub fn is_finished(&self) -> bool {
         self.schedule.is_empty()
+    }
+
+    /// Trigger note-off for a live note. Starts the release fade on all events
+    /// matching the given note_id. Safe to call if no matching events exist.
+    pub fn release_note(&mut self, note_id: u16) {
+        let current = self.current_sample;
+        let release_dur = (self.sample_rate * 0.08) as u64; // 80ms release fade
+        for event in &mut self.schedule {
+            if event.note_id == note_id && event.release_at.is_none() {
+                event.release_at = Some(current);
+                event.release_samples = release_dur;
+                // Set end_sample to current + release, so the event gets cleaned up
+                // after the fade completes
+                event.end_sample = current + release_dur;
+            }
+        }
     }
 
     /// Set master bus compression amount (0.0 = off, 1.0 = default, 2.0 = heavy).
@@ -626,6 +699,9 @@ impl Engine {
                 logged: false,
                 bus_name: None,
                 sidechain: None,
+                release_at: None,
+                release_samples: (self.sample_rate * 0.05) as u64,
+                note_id: 0,
             });
         }
 

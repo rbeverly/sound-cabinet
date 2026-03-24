@@ -418,6 +418,58 @@ fn midi_to_name(midi: i32) -> String {
 }
 
 /// Live piano mode: play an instrument with your keyboard.
+/// Velocity curve for MIDI input.
+#[derive(Debug, Clone, Copy)]
+enum VelocityCurve {
+    /// Raw MIDI velocity mapped linearly (v / 127).
+    Linear,
+    /// Gentle boost to quiet notes. Good for stiff keys.
+    Soft,
+    /// Strong boost — light taps produce near-full volume.
+    SuperSoft,
+    /// Requires harder presses for volume. Good for overly sensitive controllers.
+    Hard,
+    /// All notes play at full velocity regardless of input.
+    Full,
+}
+
+impl VelocityCurve {
+    fn parse(s: &str) -> Result<Self> {
+        match s.to_lowercase().as_str() {
+            "linear" => Ok(VelocityCurve::Linear),
+            "soft" => Ok(VelocityCurve::Soft),
+            "supersoft" | "super-soft" | "super_soft" => Ok(VelocityCurve::SuperSoft),
+            "hard" => Ok(VelocityCurve::Hard),
+            "full" => Ok(VelocityCurve::Full),
+            _ => Err(anyhow!(
+                "Unknown velocity curve '{}'. Options: linear, soft, supersoft, hard, full", s
+            )),
+        }
+    }
+
+    /// Map raw MIDI velocity (1-127) to gain (0.0-1.0).
+    fn apply(self, raw: u8) -> f64 {
+        let v = raw as f64 / 127.0; // 0.0 to 1.0 linear
+        match self {
+            VelocityCurve::Linear => v,
+            VelocityCurve::Soft => v.powf(0.5),         // square root — boosts quiet
+            VelocityCurve::SuperSoft => v.powf(0.25),    // fourth root — strong boost
+            VelocityCurve::Hard => v.powf(2.0),          // square — suppresses quiet
+            VelocityCurve::Full => 1.0,                   // always max
+        }
+    }
+}
+
+/// A recorded note event from piano mode.
+struct RecordedNote {
+    midi: i32,
+    velocity: f64,
+    /// Time in seconds since recording started.
+    timestamp: f64,
+    /// Duration in seconds (measured from note-on to note-off, or default).
+    duration_secs: f64,
+}
+
 fn cmd_piano(args: &[String]) -> Result<()> {
     use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
     use crossterm::terminal;
@@ -425,21 +477,25 @@ fn cmd_piano(args: &[String]) -> Result<()> {
 
     if args.is_empty() {
         return Err(anyhow!(
-            "Usage: sound-cabinet piano <score.sc> [instrument-name] [--midi [port]]"
+            "Usage: sound-cabinet piano <score.sc> [instrument-name] [--midi [port]] [--velocity <curve>]"
         ));
     }
 
-    // Parse args: score path, optional instrument name, optional --midi flag
+    // Parse args: score path, optional instrument name, optional flags
     let score_path = &args[0];
     let midi_flag = args.iter().any(|a| a == "--midi");
     let midi_port: Option<usize> = if midi_flag {
-        // Check if --midi is followed by a number
         args.iter()
             .position(|a| a == "--midi")
             .and_then(|i| args.get(i + 1))
             .and_then(|s| s.parse().ok())
     } else {
         None
+    };
+    let velocity_curve = if let Some(curve_str) = parse_flag_str(args, "--velocity") {
+        VelocityCurve::parse(curve_str)?
+    } else {
+        VelocityCurve::Linear
     };
     let instrument_name = args
         .get(1)
@@ -461,8 +517,10 @@ fn cmd_piano(args: &[String]) -> Result<()> {
         }
     });
 
-    // Determine default note duration in beats
-    let note_duration_beats = 2.0;
+    // How long the DSP graph stays alive per note. Longer = notes can ring
+    // longer (actual sound length is shaped by the instrument's decay).
+    // 8 beats gives room for sustained notes without wasting too many resources.
+    let note_duration_beats = 8.0;
 
     // Try to open MIDI input.
     // IMPORTANT: _midi_conn must be kept alive — dropping it closes the connection.
@@ -502,84 +560,172 @@ fn cmd_piano(args: &[String]) -> Result<()> {
     eprintln!("│C3│D3 │E3 │F3 │G3 │A3 │B3 │C4│  │C4│D4 │E4 │F4 │G4 │A4 │B4 │C5│");
     eprintln!("└──┴───┴───┴───┴───┴───┴───┴──┘  └──┴───┴───┴───┴───┴───┴───┴──┘");
     if midi_rx.is_some() {
-        eprintln!("MIDI keyboard active — full range available.");
+        eprintln!("MIDI keyboard active — full range available. Velocity: {:?}", velocity_curve);
     }
     eprintln!();
+    eprintln!("F1 = start/stop recording, F2 = save, F3 = discard, F4 = sustain pedal");
     eprintln!("Press keys to play. Esc or Ctrl+C to quit.");
+
+    // Recording state
+    let mut recording = false;
+    let mut record_start = std::time::Instant::now();
+    let mut recorded_notes: Vec<RecordedNote> = Vec::new();
+    let bpm = {
+        let eng = engine.lock().unwrap();
+        eng.bpm
+    };
+
+    // Track active MIDI notes for duration measurement: midi_note -> start time
+    let mut active_notes: std::collections::HashMap<u8, std::time::Instant> = std::collections::HashMap::new();
+    // Sustain pedal state
+    let mut sustain_pedal = false;
+    // Notes held by sustain pedal: will get note-off when pedal is released
+    let mut sustained_notes: Vec<u8> = Vec::new();
+
+    // Metronome: schedule a click on each beat while recording.
+    let beat_interval = Duration::from_secs_f64(60.0 / bpm);
+    let mut next_click = std::time::Instant::now();
 
     // Enter raw terminal mode
     terminal::enable_raw_mode()?;
 
-    // Helper closure to play a note given MIDI number and velocity
-    let play_note =
-        |engine: &Arc<Mutex<sound_cabinet::engine::Engine>>,
-         midi: i32,
-         velocity: f64,
-         inst_name: Option<&str>| {
-            let freq = midi_to_hz(midi);
+    /// Build an expression for a note.
+    fn build_note_expr(
+        midi: i32,
+        velocity: f64,
+        inst_name: Option<&str>,
+    ) -> Option<sound_cabinet::dsl::ast::Expr> {
+        let freq = midi_to_hz(midi);
+
+        if freq > 10000.0 || freq < 16.0 {
             let name = midi_to_name(midi);
+            eprint!("  {} ({:.1} Hz) — out of range, skipped\r\n", name, freq);
+            return None;
+        }
 
-            // Clamp to safe range. Instruments often use lowpass(freq * N) which
-            // pushes the filter cutoff above Nyquist and causes NaN. A 10 kHz limit
-            // keeps freq*4 = 40 kHz still safe for coefficient calculation.
-            if freq > 10000.0 || freq < 16.0 {
-                eprint!("  {} ({:.1} Hz) — out of range, skipped\r\n", name, freq);
-                return;
+        let expr = if let Some(inst_name) = inst_name {
+            sound_cabinet::dsl::ast::Expr::FnCall {
+                name: inst_name.to_string(),
+                args: vec![sound_cabinet::dsl::ast::Expr::Number(freq)],
             }
-
-            let expr = if let Some(inst_name) = inst_name {
-                sound_cabinet::dsl::ast::Expr::FnCall {
-                    name: inst_name.to_string(),
+        } else {
+            sound_cabinet::dsl::ast::Expr::Pipe(
+                Box::new(sound_cabinet::dsl::ast::Expr::FnCall {
+                    name: "sine".to_string(),
                     args: vec![sound_cabinet::dsl::ast::Expr::Number(freq)],
-                }
-            } else {
-                sound_cabinet::dsl::ast::Expr::Pipe(
-                    Box::new(sound_cabinet::dsl::ast::Expr::FnCall {
-                        name: "sine".to_string(),
-                        args: vec![sound_cabinet::dsl::ast::Expr::Number(freq)],
-                    }),
-                    Box::new(sound_cabinet::dsl::ast::Expr::FnCall {
-                        name: "decay".to_string(),
-                        args: vec![sound_cabinet::dsl::ast::Expr::Number(6.0)],
-                    }),
-                )
-            };
-
-            // Apply velocity as gain: wrap expr in multiplication
-            let expr = if (velocity - 1.0).abs() > 0.01 {
-                sound_cabinet::dsl::ast::Expr::Mul(
-                    Box::new(expr),
-                    Box::new(sound_cabinet::dsl::ast::Expr::Number(velocity)),
-                )
-            } else {
-                expr
-            };
-
-            let mut eng = engine.lock().unwrap();
-            eng.handle_command_relative(Command::PlayAt {
-                beat: 0.0,
-                expr,
-                duration_beats: note_duration_beats,
-                source: None,
-            })
-            .unwrap_or_else(|e| {
-                let _ = e;
-            });
-
-            eprint!("  {} ({:.1} Hz) vel {:.0}%\r\n", name, freq, velocity * 100.0);
+                }),
+                Box::new(sound_cabinet::dsl::ast::Expr::FnCall {
+                    name: "decay".to_string(),
+                    args: vec![sound_cabinet::dsl::ast::Expr::Number(6.0)],
+                }),
+            )
         };
+
+        let expr = if (velocity - 1.0).abs() > 0.01 {
+            sound_cabinet::dsl::ast::Expr::Mul(
+                Box::new(expr),
+                Box::new(sound_cabinet::dsl::ast::Expr::Number(velocity)),
+            )
+        } else {
+            expr
+        };
+
+        Some(expr)
+    }
 
     let result = (|| -> Result<()> {
         loop {
+            // Metronome: play a click on each beat while recording
+            if recording && std::time::Instant::now() >= next_click {
+                let mut eng = engine.lock().unwrap();
+                eng.handle_command_relative(Command::PlayAt {
+                    beat: 0.0,
+                    expr: sound_cabinet::dsl::ast::Expr::Mul(
+                        Box::new(sound_cabinet::dsl::ast::Expr::Pipe(
+                            Box::new(sound_cabinet::dsl::ast::Expr::FnCall {
+                                name: "sine".to_string(),
+                                args: vec![sound_cabinet::dsl::ast::Expr::Number(1000.0)],
+                            }),
+                            Box::new(sound_cabinet::dsl::ast::Expr::FnCall {
+                                name: "decay".to_string(),
+                                args: vec![sound_cabinet::dsl::ast::Expr::Number(80.0)],
+                            }),
+                        )),
+                        Box::new(sound_cabinet::dsl::ast::Expr::Number(0.3)),
+                    ),
+                    duration_beats: 0.25,
+                    source: None,
+                })
+                .unwrap_or_else(|e| { let _ = e; });
+                next_click += beat_interval;
+            }
+
             // Check MIDI events (non-blocking)
             if let Some(ref rx) = midi_rx {
-                while let Ok((midi_note, velocity)) = rx.try_recv() {
-                    if velocity > 0 {
-                        // Note-on: velocity 1-127 mapped to 0.0-1.0
-                        let vel = velocity as f64 / 127.0;
-                        play_note(&engine, midi_note as i32, vel, instrument_name);
+                while let Ok(midi_event) = rx.try_recv() {
+                    match midi_event {
+                        MidiEvent::NoteOn { note, velocity } => {
+                            let vel = velocity_curve.apply(velocity);
+                            active_notes.insert(note, std::time::Instant::now());
+
+                            if let Some(expr) = build_note_expr(note as i32, vel, instrument_name) {
+                                let name = midi_to_name(note as i32);
+                                let freq = midi_to_hz(note as i32);
+
+                                let mut eng = engine.lock().unwrap();
+                                eng.play_live_note(expr, note as u16)
+                                    .unwrap_or_else(|e| { let _ = e; });
+
+                                let rec_marker = if recording { " REC" } else { "" };
+                                eprint!("  {} ({:.1} Hz) vel {:.0}%{}\r\n",
+                                    name, freq, vel * 100.0, rec_marker);
+
+                                if recording {
+                                    let timestamp = record_start.elapsed().as_secs_f64();
+                                    recorded_notes.push(RecordedNote {
+                                        midi: note as i32,
+                                        velocity: vel,
+                                        timestamp,
+                                        duration_secs: 1.0, // default, updated on note-off
+                                    });
+                                }
+                            }
+                        }
+                        MidiEvent::NoteOff { note } => {
+                            if let Some(start_time) = active_notes.remove(&note) {
+                                let held_secs = start_time.elapsed().as_secs_f64();
+                                // Update recorded duration
+                                if recording {
+                                    for rec in recorded_notes.iter_mut().rev() {
+                                        if rec.midi == note as i32 {
+                                            rec.duration_secs = held_secs;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if sustain_pedal {
+                                    // Don't release yet — pedal holds it
+                                    sustained_notes.push(note);
+                                } else {
+                                    // Release the note immediately
+                                    let mut eng = engine.lock().unwrap();
+                                    eng.release_note(note as u16);
+                                }
+                            }
+                        }
+                        MidiEvent::SustainPedal(down) => {
+                            sustain_pedal = down;
+                            if !down {
+                                // Pedal released — release all sustained notes
+                                let mut eng = engine.lock().unwrap();
+                                for note in sustained_notes.drain(..) {
+                                    eng.release_note(note as u16);
+                                }
+                            }
+                            let state = if down { "down" } else { "up" };
+                            eprint!("  [sustain {}]\r\n", state);
+                        }
                     }
-                    // Note-off (velocity 0) is ignored — decay handles note ending
                 }
             }
 
@@ -593,10 +739,95 @@ fn cmd_piano(args: &[String]) -> Result<()> {
                         break;
                     }
 
-                    if let KeyCode::Char(c) = code {
-                        if let Some(midi) = key_to_midi(c) {
-                            play_note(&engine, midi, 1.0, instrument_name);
+                    match code {
+                        // F1: toggle recording
+                        KeyCode::F(1) => {
+                            if recording {
+                                recording = false;
+                                eprint!("  -- Recording stopped ({} notes)\r\n", recorded_notes.len());
+                            } else {
+                                recording = true;
+                                recorded_notes.clear();
+                                record_start = std::time::Instant::now();
+                                next_click = std::time::Instant::now() + beat_interval;
+                                eprint!("  -- Recording started (bpm {})\r\n", bpm);
+                            }
                         }
+
+                        // F2: save recording to file
+                        KeyCode::F(2) => {
+                            if recorded_notes.is_empty() {
+                                eprint!("  -- Nothing to save\r\n");
+                            } else {
+                                let filename = next_recording_filename();
+                                match save_recording(
+                                    &recorded_notes, bpm, instrument_name, &filename,
+                                ) {
+                                    Ok(()) => {
+                                        eprint!("  -- Saved {} notes to {}\r\n",
+                                            recorded_notes.len(), filename);
+                                    }
+                                    Err(e) => {
+                                        eprint!("  -- Save failed: {}\r\n", e);
+                                    }
+                                }
+                            }
+                        }
+
+                        // F3: discard recording
+                        KeyCode::F(3) => {
+                            let count = recorded_notes.len();
+                            recorded_notes.clear();
+                            recording = false;
+                            eprint!("  -- Discarded {} notes\r\n", count);
+                        }
+
+                        // F4: toggle sustain pedal (keyboard substitute)
+                        KeyCode::F(4) => {
+                            sustain_pedal = !sustain_pedal;
+                            if !sustain_pedal {
+                                let mut eng = engine.lock().unwrap();
+                                for note in sustained_notes.drain(..) {
+                                    eng.release_note(note as u16);
+                                }
+                            }
+                            let state = if sustain_pedal { "down" } else { "up" };
+                            eprint!("  [sustain {}]\r\n", state);
+                        }
+
+                        KeyCode::Char(c) => {
+                            if let Some(midi) = key_to_midi(c) {
+                                if let Some(expr) = build_note_expr(midi, 1.0, instrument_name) {
+                                    let name = midi_to_name(midi);
+                                    let freq = midi_to_hz(midi);
+
+                                    let mut eng = engine.lock().unwrap();
+                                    // Keyboard: use fixed duration since we don't get key-up
+                                    eng.handle_command_relative(Command::PlayAt {
+                                        beat: 0.0,
+                                        expr,
+                                        duration_beats: note_duration_beats,
+                                        source: None,
+                                    })
+                                    .unwrap_or_else(|e| { let _ = e; });
+
+                                    let rec_marker = if recording { " REC" } else { "" };
+                                    eprint!("  {} ({:.1} Hz){}\r\n", name, freq, rec_marker);
+
+                                    if recording {
+                                        let timestamp = record_start.elapsed().as_secs_f64();
+                                        recorded_notes.push(RecordedNote {
+                                            midi,
+                                            velocity: 1.0,
+                                            timestamp,
+                                            duration_secs: note_duration_beats * 60.0 / bpm,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+
+                        _ => {}
                     }
                 }
             }
@@ -614,12 +845,20 @@ fn cmd_piano(args: &[String]) -> Result<()> {
     result
 }
 
-/// Open a MIDI input connection. Returns a channel receiver for (note, velocity) events,
+/// MIDI message types we care about.
+#[derive(Debug)]
+enum MidiEvent {
+    NoteOn { note: u8, velocity: u8 },
+    NoteOff { note: u8 },
+    SustainPedal(bool), // true = down, false = up
+}
+
+/// Open a MIDI input connection. Returns a channel receiver for MIDI events,
 /// the connection handle (must be kept alive), and the port name.
 fn open_midi_input(
     port_index: Option<usize>,
 ) -> Result<(
-    crossbeam_channel::Receiver<(u8, u8)>,
+    crossbeam_channel::Receiver<MidiEvent>,
     midir::MidiInputConnection<()>,
     String,
 )> {
@@ -657,9 +896,9 @@ fn open_midi_input(
         .port_name(port)
         .unwrap_or_else(|_| "Unknown".to_string());
 
-    let (tx, rx) = crossbeam_channel::unbounded::<(u8, u8)>();
+    let (tx, rx) = crossbeam_channel::unbounded::<MidiEvent>();
 
-    // MIDI callback: parse note-on/note-off messages and send through channel
+    // MIDI callback: parse messages and send through channel
     let conn = midi_in
         .connect(
             port,
@@ -667,19 +906,28 @@ fn open_midi_input(
             move |_timestamp, message, _data| {
                 if message.len() >= 3 {
                     let status = message[0] & 0xF0;
-                    let note = message[1];
-                    let velocity = message[2];
+                    let byte1 = message[1];
+                    let byte2 = message[2];
 
                     match status {
+                        0x90 if byte2 > 0 => {
+                            let _ = tx.send(MidiEvent::NoteOn {
+                                note: byte1,
+                                velocity: byte2,
+                            });
+                        }
                         0x90 => {
-                            // Note-on (velocity 0 = note-off per MIDI spec)
-                            let _ = tx.send((note, velocity));
+                            // Note-on with velocity 0 = note-off per MIDI spec
+                            let _ = tx.send(MidiEvent::NoteOff { note: byte1 });
                         }
                         0x80 => {
-                            // Note-off
-                            let _ = tx.send((note, 0));
+                            let _ = tx.send(MidiEvent::NoteOff { note: byte1 });
                         }
-                        _ => {} // Ignore CC, pitch bend, etc. for now
+                        0xB0 if byte1 == 64 => {
+                            // CC 64 = sustain pedal (>= 64 = on, < 64 = off)
+                            let _ = tx.send(MidiEvent::SustainPedal(byte2 >= 64));
+                        }
+                        _ => {}
                     }
                 }
             },
@@ -688,6 +936,84 @@ fn open_midi_input(
         .map_err(|e| anyhow!("Cannot connect to MIDI port '{}': {e}", port_name))?;
 
     Ok((rx, conn, port_name))
+}
+
+/// Save recorded notes as a .sc pattern file.
+fn save_recording(
+    notes: &[RecordedNote],
+    bpm: f64,
+    instrument_name: Option<&str>,
+    filename: &str,
+) -> Result<()> {
+    if notes.is_empty() {
+        return Err(anyhow!("No notes to save"));
+    }
+
+    let voice_name = instrument_name.unwrap_or("sine");
+    let beats_per_sec = bpm / 60.0;
+
+    // Total duration: last note start + its duration, rounded up to whole beats
+    let last = notes.last().unwrap();
+    let total_secs = last.timestamp + last.duration_secs;
+    let total_beats = (total_secs * beats_per_sec).ceil().max(1.0);
+
+    let mut out = String::new();
+    out.push_str(&format!("// Recorded in piano mode, bpm {}\n\n", bpm));
+    out.push_str(&format!("pattern recorded = {} beats\n", total_beats as i64));
+
+    for note in notes {
+        let beat = note.timestamp * beats_per_sec;
+        let dur_beats = note.duration_secs * beats_per_sec;
+        let note_name = midi_to_name(note.midi);
+
+        // Format beat offset: clean integers or 2 decimal places
+        let beat_str = if (beat - beat.round()).abs() < 0.01 {
+            format!("{}", beat.round() as i64)
+        } else {
+            format!("{:.2}", beat)
+        };
+
+        // Format duration: round to nearest 0.25 for readability
+        let dur_str = {
+            let rounded = (dur_beats * 4.0).round() / 4.0;
+            let d = rounded.max(0.25); // minimum 1/16 note
+            if (d - d.round()).abs() < 0.01 {
+                format!("{}", d.round() as i64)
+            } else {
+                format!("{:.2}", d)
+                    .trim_end_matches('0')
+                    .trim_end_matches('.')
+                    .to_string()
+            }
+        };
+
+        if (note.velocity - 1.0).abs() < 0.01 {
+            out.push_str(&format!(
+                "  at {} play {}({}) for {} beats  // {}\n",
+                beat_str, voice_name, note_name, dur_str, note_name
+            ));
+        } else {
+            out.push_str(&format!(
+                "  at {} play {}({}) * {:.2} for {} beats  // {}\n",
+                beat_str, voice_name, note_name, note.velocity, dur_str, note_name
+            ));
+        }
+    }
+
+    std::fs::write(filename, &out)?;
+    Ok(())
+}
+
+/// Find the next available filename like recorded_1.sc, recorded_2.sc, etc.
+fn next_recording_filename() -> String {
+    let mut n = 1;
+    loop {
+        let name = format!("recorded_{}.sc", n);
+        if !std::path::Path::new(&name).exists() {
+            return name;
+        }
+        n += 1;
+    }
 }
 
 /// Stream mode: read lines from stdin, play in real-time.
