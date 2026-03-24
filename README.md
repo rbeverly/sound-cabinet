@@ -989,6 +989,39 @@ soft down at 4.0
 soft up at 8.0
 ```
 
+### Recording quantize / grid align
+
+Post-processing for piano mode recordings. Snaps raw timestamped note events to the nearest grid division (1/4, 1/8, 1/16), producing clean score-ready patterns from human performance. Includes swing detection — if offbeats consistently land at 0.67 instead of 0.5, represent as `swing 0.67` rather than snapping straight.
+
+```bash
+sound-cabinet quantize recorded_1.sc --grid 1/8 -o quantized.sc
+sound-cabinet quantize recorded_1.sc --grid 1/8 --detect-swing -o quantized.sc
+```
+
+### Standalone gate function
+
+A `gate(duration)` effect that truncates notes to a fixed length, independent of the arpeggiator. Useful for rhythmic chopping of pads, drones, or any sustained sound:
+
+```
+pad(Cm7) >> gate(0.5) for 4 beats    // quarter-note chops
+drone(A2) >> gate(0.125) for 8 beats  // sixteenth-note stutter
+```
+
+### Melody pattern discovery
+
+Systematic mining of music theory for reusable melodic contour patterns. Analyze established melodic archetypes from folk, classical, jazz, and pop traditions and encode them as YAML pattern files. Focus areas: pentatonic motion (most universal), common cadential figures, question/answer pairs in different cultural contexts, and multi-bar arc shapes (4-bar and 8-bar periods). The goal is a library large enough that combinatorics produces meaningfully different melodies across runs.
+
+### Metronome mode
+
+A standalone metronome click for practice and recording, available both as a piano mode feature and as a standalone command:
+
+```bash
+sound-cabinet metronome 120              // click at 120 BPM
+sound-cabinet metronome 120 --time 3/4   // waltz time
+```
+
+In piano mode, the metronome activates automatically during recording (F1) and stops when recording stops.
+
 ### Algorithmic phrase generation: ornamentation pass
 
 The base phrase generation system is implemented (`sound-cabinet generate`). What remains is the ornamentation layer: an optional post-processing pass that decorates resolved phrases with mordents, turns, trills, grace notes, and passing tones. Controlled by a density level (0 = clean, 3 = florid/baroque). Each ornament pattern specifies where it can attach (strong beats, long notes, phrase endings) and the generator applies them probabilistically.
@@ -1021,20 +1054,312 @@ The `loudness(freq)` function is implemented as an explicit pipe-chain effect. A
 
 Render to `.mid` instead of `.wav` so compositions can be brought into a DAW with real instruments. The arp and note-name infrastructure already maps cleanly to MIDI events. Combined with the existing `midi2sc.py` importer, this creates a round-trip: MIDI → .sc (edit/compose) → MIDI (produce in DAW).
 
-### MIDI keyboard support
+### Stereo output and panning
 
-Connect a physical MIDI keyboard for live playing with velocity sensitivity, pedal support, and mod wheel. Uses the `midir` crate to listen for MIDI note-on/note-off events. Would enable real velocity values (instead of uniform volume) and CC data (sustain pedal, expression).
+The engine is currently mono-only. Adding stereo would transform the output quality — instruments placed in the stereo field sound like a real mix instead of a monophonic demo. Requires changing the render pipeline from single-channel to dual-channel buffers and adding a `pan(position)` effect (-1.0 = hard left, 0.0 = center, 1.0 = hard right):
 
-### Note-on / note-off engine support
+```
+instrument wide_pad = saw(freq) >> lowpass(2000, 0.5) >> pan(0.3)
+instrument bass = sine(freq) >> decay(8) >> pan(0.0)   // center
+```
 
-The engine currently schedules notes with fixed durations. For realistic live playing, instruments need two distinct behaviors:
+The master bus, limiter, compressor, and WAV writer all need stereo versions. LUFS measurement already handles stereo per the ITU-R BS.1770-4 spec.
 
-- **Percussive** (piano, plucked strings): key down fires a single impulse, note decays naturally, key up activates damper (fast fade)
-- **Sustained** (organ, synth pad): key down starts continuous generation, key up stops it with a release envelope
+### Sample playback
 
-This requires adding a note-off event type to the engine's scheduling system, enabling proper key-duration-sensitive playback in piano mode and MIDI input.
+Load audio files and trigger them as voices, instead of synthesizing everything. Unlocks realistic drums, vocal chops, field recordings, found sound, and any sample-based workflow:
+
+```
+sample clap = "samples/clap.wav"
+sample vocal = "samples/hook.wav"
+
+at 0 play clap for 0.5 beats
+at 4 play vocal for 8 beats
+```
+
+Would support WAV and potentially FLAC. Pitch-shifting samples by varying playback speed (like a sampler) is a natural extension.
+
+### Automation curves
+
+Parameter changes over time beyond the existing `Range(start, end)` linear sweep. Custom envelope shapes for filter sweeps, volume fades, pan motion, and any numeric parameter:
+
+```
+// Linear ramp (already works)
+sine(0) >> lowpass(200 -> 8000, 0.7) for 8 beats
+
+// Future: named automation curves
+curve filter_sweep = [0: 200, 2: 8000, 4: 2000, 8: 200]
+sine(0) >> lowpass(filter_sweep, 0.7) for 8 beats
+```
+
+Could also support common curve shapes: exponential, logarithmic, S-curve, step.
+
+### Time signature in the DSL
+
+Add `time 3/4` (or `time 6/8`, `time 5/4`, etc.) as a score directive. Currently time signature is only available as a CLI flag for the export command. Adding it to the language would improve pattern alignment, bar line placement in exports, and enable mixed meter:
+
+```
+time 3/4
+bpm 120
+play waltz_pattern
+```
+
+### Key signature in the DSL
+
+Add `key Am` or `key D major` as a score directive. Would inform the generator (no need for `--key` flag), the exporter (auto-detect for sheet music), and enable automatic transposition:
+
+```
+key A minor
+bpm 92
+play verse
+```
+
+### Transpose
+
+Shift a pattern or entire section up or down by semitones or scale degrees. Essential for reusing melodic material at different pitches — the core technique behind variations, modulations, and building sections from a single theme:
+
+```
+play verse
+play verse transpose +5          // up 5 semitones
+play chorus transpose -2          // down 2 semitones
+play bridge transpose up 3        // up 3 scale degrees (diatonic)
+```
+
+### Mixer / levels command
+
+Set relative volumes per voice without editing every `play` line. Separates composition from mixing:
+
+```
+mix bass 0.6, melody 1.0, drums 0.8, pad 0.3
+```
+
+Or per-voice gain in a section:
+
+```
+section verse = 16 beats
+  repeat bass_pattern every 4 beats gain 0.5
+  repeat melody_pattern every 4 beats gain 1.0
+```
+
+### TUI visualization
+
+A terminal UI during playback showing scrolling beat position, active voices, level meters, and waveform. Currently `play -v` just prints text lines. A curses-based display with real-time VU meters would make playback feel more like a DAW and help with mixing decisions.
+
+### Score linting and validation
+
+Catch common mistakes before playback: overlapping notes on the same voice, notes outside an instrument's practical range, missing voice definitions, unused patterns, tempo changes that would cause timing issues. Run automatically or as a command:
+
+```bash
+sound-cabinet lint song.sc
+```
+
+### Count-in for recording
+
+Four metronome clicks before recording starts in piano mode, so the player is on the beat from the first note. Tiny feature, huge usability improvement. Configurable count-in length (1 bar, 2 bars).
+
+### Harmonic analysis
+
+Analyze an existing `.sc` file and report the chord progression, key center, scale usage, and voice ranges. Useful for understanding what the algorithmic generator produced, or for analyzing imported MIDI:
+
+```bash
+sound-cabinet analyze song.sc
+# Key: A minor (strong), BPM: 92
+# Chords: Am | Dm | Em | Am | (repeating)
+# Voices: melody (C4-E5), bass (A1-G3), drums (percussion)
+```
+
+### Style presets for generation
+
+Predefined combinations of patterns, tempos, and song structures for common genres:
+
+```bash
+sound-cabinet generate --style jazz --key Dm --chords "Dm7 G7 Cmaj7 Am7" -o jazz.sc
+sound-cabinet generate --style folk --key G --chords "G C D G" -o folk.sc
+```
+
+Each style selects appropriate melody patterns, bass patterns, drum patterns, complexity levels, and song structure (AABA vs verse-chorus-bridge, etc.).
+
+### Counterpoint checker
+
+Flag parallel fifths, parallel octaves, voice crossing, and other voice-leading issues between generated parts. Run as a post-generation validation:
+
+```bash
+sound-cabinet check-counterpoint song.sc
+# Warning: parallel fifths between bass and melody at beat 12
+# Warning: voice crossing at beat 24 (bass above melody)
+```
+
+### A/B auditioning
+
+Play two generated variations back-to-back for quick comparison. Pick the one that sounds better without manually editing score files:
+
+```bash
+sound-cabinet audition bass_a.sc bass_b.sc
+# Playing A... (press 1 to keep A, 2 to keep B, space to replay)
+```
+
+### Chorus, flanger, and phaser
+
+Modulated delay effects common in synth sounds and guitar processing. Chorus thickens a signal by mixing it with slightly detuned delayed copies. Flanger creates a sweeping comb filter. Phaser uses all-pass filters for phase cancellation sweeps:
+
+```
+pad(Cm7) >> chorus(0.5, 0.3)          // rate, depth
+lead(freq) >> flanger(0.2, 0.7)       // rate, feedback
+keys(freq) >> phaser(0.3, 4)          // rate, stages
+```
+
+### Tremolo and vibrato
+
+Amplitude modulation (tremolo) and pitch modulation (vibrato) — basic expressive tools for any instrument:
+
+```
+violin(freq) >> vibrato(5.0, 0.02)    // 5 Hz rate, 2% depth
+rhodes(freq) >> tremolo(4.0, 0.3)     // 4 Hz rate, 30% depth
+```
+
+### Tape stop and speed effects
+
+Playback speed manipulation for transitions and sound design. Tape stop gradually slows to silence, tape start speeds up from silence, and variable speed creates DJ-style effects:
+
+```
+at 32 play melody >> tape_stop(2.0) for 2 beats   // slow to halt over 2 beats
+```
+
+### Freeze / flatten randomization
+
+Export a deterministic, fully-expanded version of a score with all randomness resolved: `pick` choices made, `humanize` offsets baked in, `swing` applied to beat positions, `shuffle` order fixed. The output is a flat `.sc` file that plays identically every time. Use `--seed` to generate multiple frozen variations and pick the best one:
+
+```bash
+sound-cabinet freeze song.sc -o frozen-v1.sc --seed 42
+sound-cabinet freeze song.sc -o frozen-v2.sc --seed 99
+sound-cabinet freeze song.sc -o frozen-v3.sc --seed 7
+```
+
+The frozen file is also easier to hand-edit since all timing is explicit and all choices are resolved.
+
+### Loop recording / overdub
+
+Record a loop (e.g., 4 bars), then play it back while recording a second layer on top. Build up arrangements in real-time like a loop pedal. Each layer is saved as a separate pattern, and the final result is a composite score:
+
+```bash
+sound-cabinet piano voices/kit.sc piano --midi --loop 4
+# F1 to start recording layer 1, F1 again to loop and start layer 2...
+```
+
+### Punch-in / punch-out recording
+
+Re-record just a specific beat range of an existing recording without touching the rest. Standard DAW workflow for fixing mistakes:
+
+```bash
+sound-cabinet punch recorded_1.sc --from 8 --to 12 --midi
+```
+
+### Repeat with variation
+
+Introduce small random changes on each repeat of a pattern, making repetition sound more natural without manually creating variations:
+
+```
+play verse vary 0.2    // 20% variation intensity
+play chorus vary 0.1   // subtle changes
+```
+
+Variation types: timing jitter, occasional note substitution (neighboring scale degree), octave displacement, velocity changes.
+
+### Modulation / key change
+
+Shift the key center mid-song for dramatic effect — the classic "pump-up" key change before a final chorus:
+
+```
+key A minor
+play verse
+play chorus
+modulate +2          // up a whole step to B minor
+play chorus          // now in new key
+```
+
+### Tempo curves
+
+Smooth accelerando and ritardando, not just discrete BPM jumps:
+
+```
+bpm 80 -> 120 over 16 beats   // accelerando
+bpm 120 -> 80 over 8 beats    // ritardando
+```
+
+### ADSR envelope generator
+
+Explicit attack-decay-sustain-release envelope as a standalone shaping tool, unified and separate from the current `decay()` and `swell()`:
+
+```
+pad(freq) >> adsr(0.1, 0.3, 0.6, 0.5) for 4 beats
+// attack=0.1s, decay=0.3s, sustain=60%, release=0.5s
+```
+
+### Ring modulation
+
+Multiply two signals together for metallic and bell-like tones. `sine(440) * sine(60)` technically works but a dedicated effect is clearer and enables modulator frequency as a parameter:
+
+```
+voice(freq) >> ringmod(60)     // modulate with 60 Hz
+```
+
+### Noise burst / transient shaper
+
+Tools for designing percussion from scratch. A short noise burst shaped by a fast envelope is how most synthetic drums are built:
+
+```
+noise() >> transient(0.001, 0.05) >> highpass(2000) for 0.25 beats  // hi-hat
+noise() >> transient(0.001, 0.3) >> lowpass(200) for 0.5 beats      // kick body
+```
+
+### ABC notation export
+
+A simpler alternative to LilyPond for folk music communities and quick sharing. ABC notation is plain text, widely supported by online renderers, and requires no software installation:
+
+```bash
+sound-cabinet export song.sc -o song.abc --format abc
+```
+
+### Import audio for reference
+
+Load a reference track alongside your composition for A/B level comparison during mixing. The reference isn't part of the score — it's a mixing aid:
+
+```bash
+sound-cabinet play song.sc --reference reference-track.wav
+# Press R to toggle between your mix and the reference
+```
+
+### Undo in watch mode
+
+When a file save introduces a syntax error, automatically fall back to the last working version instead of going silent. Show the error but keep playing the previous good version until the error is fixed.
+
+### Bookmark / cue points
+
+Named positions in the score for quick navigation during playback, instead of remembering beat numbers:
+
+```
+mark "chorus" at 32
+mark "bridge" at 64
+mark "outro" at 96
+```
+
+```bash
+sound-cabinet play song.sc --from chorus
+```
+
+### Project templates
+
+Scaffold a new project directory with voice definitions, empty patterns, and a song structure ready to fill in:
+
+```bash
+sound-cabinet init my-song --template pop
+sound-cabinet init my-song --template jazz
+sound-cabinet init my-song --template ambient
+```
+
+Creates `my-song/` with `song.sc`, `voices/`, `patterns/`, and a starter structure for the chosen genre.
 
 ### VST3/AU plugin export
 
-Compile Sound Cabinet instruments and effect chains into native DAW plugins (VST3 for cross-platform, Audio Unit for Logic/GarageBand). The Rust `nih-plug` framework provides the plugin host wrapper — the core work is packaging a fundsp signal graph as a plugin that accepts MIDI input and produces audio. This would let instruments built in Sound Cabinet run natively inside Logic, Ableton, GarageBand, etc.
+Compile Sound Cabinet instruments and effect chains into native DAW plugins (VST3 for cross-platform, Audio Unit for Logic/GarageBand). The Rust `nih-plug` framework provides the plugin host wrapper — the core work is packaging a fundsp signal graph as a plugin that accepts MIDI input and produces audio. This would let instruments built in Sound Cabinet run natively inside Logic, Ableman, GarageBand, etc.
 
