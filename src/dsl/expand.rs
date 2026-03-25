@@ -172,6 +172,9 @@ fn expand_pattern_events(events: &[PatternEvent], base_beat: f64, swing: f64, hu
                 beat = (beat + offset).max(0.0);
             }
 
+            // Capture original voice label BEFORE substitution
+            let voice_label = crate::dsl::parser::extract_voice_label(&e.expr);
+
             // Apply voice substitution from with_map
             let expr = if with_map.is_empty() {
                 e.expr.clone()
@@ -184,6 +187,7 @@ fn expand_pattern_events(events: &[PatternEvent], base_beat: f64, swing: f64, hu
                 expr,
                 duration_beats: e.duration_beats,
                 source: source.clone(),
+                voice_label,
             }
         })
         .collect()
@@ -451,6 +455,7 @@ mod tests {
                 expr: Expr::VoiceRef("x".into()),
                 duration_beats: 2.0,
                 source: None,
+                voice_label: None,
             }],
         };
 

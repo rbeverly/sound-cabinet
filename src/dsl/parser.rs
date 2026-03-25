@@ -190,20 +190,14 @@ fn try_parse_command(line: &str) -> Result<Option<Command>> {
     // Pedal events
     if let Ok(pairs) = ScoreParser::parse(Rule::pedal_down_stmt, line) {
         for pair in pairs {
-            let beat: f64 = pair.into_inner().next()
-                .ok_or_else(|| anyhow!("Expected beat in pedal down"))?
-                .as_str().parse()
-                .map_err(|_| anyhow!("Invalid number in pedal down statement"))?;
-            return Ok(Some(Command::PedalDown { beat }));
+            let (voices, beat) = parse_pedal_inner(pair)?;
+            return Ok(Some(Command::PedalDown { beat, voices }));
         }
     }
     if let Ok(pairs) = ScoreParser::parse(Rule::pedal_up_stmt, line) {
         for pair in pairs {
-            let beat: f64 = pair.into_inner().next()
-                .ok_or_else(|| anyhow!("Expected beat in pedal up"))?
-                .as_str().parse()
-                .map_err(|_| anyhow!("Invalid number in pedal up statement"))?;
-            return Ok(Some(Command::PedalUp { beat }));
+            let (voices, beat) = parse_pedal_inner(pair)?;
+            return Ok(Some(Command::PedalUp { beat, voices }));
         }
     }
 
@@ -281,6 +275,51 @@ fn try_parse_command(line: &str) -> Result<Option<Command>> {
     }
 
     Err(anyhow!("Unrecognized line: {line}"))
+}
+
+/// Parse a pedal statement's inner pairs: optional voice list + beat number.
+fn parse_pedal_inner(pair: Pair<Rule>) -> Result<(Vec<String>, f64)> {
+    let mut voices = Vec::new();
+    let mut beat = None;
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::pedal_voices => {
+                for v in inner.into_inner() {
+                    if v.as_rule() == Rule::ident {
+                        voices.push(v.as_str().to_string());
+                    }
+                }
+            }
+            Rule::number => {
+                beat = Some(inner.as_str().parse::<f64>()
+                    .map_err(|_| anyhow!("Invalid number in pedal statement"))?);
+            }
+            _ => {}
+        }
+    }
+
+    let beat = beat.ok_or_else(|| anyhow!("Expected beat position in pedal statement"))?;
+    Ok((voices, beat))
+}
+
+/// Extract the outermost voice/instrument name from an expression.
+/// Used to populate `voice_label` on PlayAt commands.
+pub fn extract_voice_label(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::FnCall { name, .. } => Some(name.clone()),
+        Expr::VoiceRef(name) => Some(name.clone()),
+        Expr::Pipe(left, _) => extract_voice_label(left),
+        Expr::Mul(left, right) => {
+            // Skip the gain side (Number), extract from the voice side
+            match (left.as_ref(), right.as_ref()) {
+                (Expr::Number(_), other) | (other, Expr::Number(_)) => extract_voice_label(other),
+                _ => extract_voice_label(left).or_else(|| extract_voice_label(right)),
+            }
+        }
+        Expr::Sum(left, _) => extract_voice_label(left),
+        _ => None,
+    }
 }
 
 /// Extract a wave_def pair into a WaveDef command.
@@ -525,11 +564,13 @@ fn parse_at(pair: Pair<Rule>) -> Result<Command> {
     let beat: f64 = inner.next().unwrap().as_str().parse()?;
     let expr = parse_expr(inner.next().unwrap())?;
     let duration_beats: f64 = inner.next().unwrap().as_str().parse()?;
+    let voice_label = extract_voice_label(&expr);
     Ok(Command::PlayAt {
         beat,
         expr,
         duration_beats,
         source: None,
+        voice_label,
     })
 }
 

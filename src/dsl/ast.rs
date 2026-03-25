@@ -94,6 +94,10 @@ pub enum Command {
         duration_beats: f64,
         /// Provenance: which pattern/section/voice produced this event (for verbose output).
         source: Option<String>,
+        /// The as-played voice name, preserved across `with` substitution.
+        /// E.g., if `with duelingpiano1 = piano`, this is "duelingpiano1" even
+        /// though `expr` resolves to the `piano` instrument.
+        voice_label: Option<String>,
     },
     /// Import another .sc file: `import voices/kick.sc`
     Import { path: String },
@@ -121,10 +125,11 @@ pub enum Command {
     },
     /// Define a named wavetable: `wave wonky = [0.0, 0.3, ...]`
     WaveDef { name: String, samples: Vec<f64> },
-    /// Sustain pedal down: `pedal down at 4.0`
-    PedalDown { beat: f64 },
-    /// Sustain pedal up: `pedal up at 8.0`
-    PedalUp { beat: f64 },
+    /// Sustain pedal down: `pedal down at 4.0` or `pedal down piano at 4.0`
+    /// or `pedal down [piano, strings] at 4.0`
+    PedalDown { beat: f64, voices: Vec<String> },
+    /// Sustain pedal up: `pedal up at 4.0` or `pedal up piano at 4.0`
+    PedalUp { beat: f64, voices: Vec<String> },
     /// Set swing amount: `swing 0.6` (0.5 = straight, 0.67 = triplet feel)
     SetSwing(f64),
     /// Set humanize jitter: `humanize 10` (±ms random timing offset)

@@ -716,6 +716,7 @@ fn cmd_piano(args: &[String]) -> Result<()> {
                     ),
                     duration_beats: 0.25,
                     source: None,
+                    voice_label: None,
                 })
                 .unwrap_or_else(|e| { let _ = e; });
                 next_click += beat_interval;
@@ -886,6 +887,7 @@ fn cmd_piano(args: &[String]) -> Result<()> {
                                         expr,
                                         duration_beats: note_duration_beats,
                                         source: None,
+                                        voice_label: None,
                                     })
                                     .unwrap_or_else(|e| { let _ = e; });
 
@@ -1199,6 +1201,7 @@ fn cmd_stream() -> Result<()> {
                         expr,
                         duration_beats,
                         source: None,
+                        voice_label: None,
                     })
                     .unwrap_or_else(|e| eprintln!("Engine error: {e}"));
                 }

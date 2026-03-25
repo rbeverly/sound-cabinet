@@ -17,6 +17,9 @@ pub struct NoteEvent {
     pub duration_beats: f64,
     /// Voice or instrument name (e.g., "piano", "bass", "kick").
     pub voice_name: String,
+    /// The as-played voice label, preserved across `with` substitution.
+    /// E.g., "duelingpiano1" even if it resolves to "piano".
+    pub voice_label: Option<String>,
     /// Gain/velocity multiplier extracted from the expression.
     pub velocity: f64,
     /// Provenance: which pattern/section produced this event.
@@ -57,6 +60,7 @@ pub fn extract_notes(commands: &[Command]) -> ExtractedScore {
                 expr,
                 duration_beats,
                 source,
+                voice_label,
             } => {
                 let (voice_name, freq_hz, gain) = extract_voice_and_freq(expr);
                 let pitch = freq_hz.map(Pitch::from_hz);
@@ -66,6 +70,7 @@ pub fn extract_notes(commands: &[Command]) -> ExtractedScore {
                     pitch,
                     duration_beats: *duration_beats,
                     voice_name,
+                    voice_label: voice_label.clone(),
                     velocity: gain,
                     source: source.clone(),
                 });
@@ -76,13 +81,13 @@ pub fn extract_notes(commands: &[Command]) -> ExtractedScore {
                     bpm: *bpm,
                 });
             }
-            Command::PedalDown { beat } => {
+            Command::PedalDown { beat, .. } => {
                 pedals.push(PedalEvent {
                     beat: *beat,
                     down: true,
                 });
             }
-            Command::PedalUp { beat } => {
+            Command::PedalUp { beat, .. } => {
                 pedals.push(PedalEvent {
                     beat: *beat,
                     down: false,
@@ -244,12 +249,14 @@ mod tests {
                 },
                 duration_beats: 1.0,
                 source: Some("verse_a".to_string()),
+                voice_label: None,
             },
             Command::PlayAt {
                 beat: 1.0,
                 expr: Expr::VoiceRef("kick".to_string()),
                 duration_beats: 0.5,
                 source: Some("drums_a".to_string()),
+                voice_label: None,
             },
         ];
 

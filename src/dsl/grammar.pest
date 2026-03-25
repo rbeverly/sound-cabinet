@@ -26,9 +26,10 @@ master_compress = { "compress" ~ number ~ number? ~ number? ~ number? }
 master_ceiling = { "ceiling" ~ number }
 master_gain = { "gain" ~ number }
 
-// Sustain pedal: pedal down at 4.0 / pedal up at 8.0
-pedal_down_stmt = { "pedal" ~ "down" ~ "at" ~ number }
-pedal_up_stmt = { "pedal" ~ "up" ~ "at" ~ number }
+// Sustain pedal: pedal down at 4.0 / pedal down piano at 4.0 / pedal down [piano, strings] at 4.0
+pedal_down_stmt = { "pedal" ~ "down" ~ pedal_voices? ~ "at" ~ number }
+pedal_up_stmt = { "pedal" ~ "up" ~ pedal_voices? ~ "at" ~ number }
+pedal_voices = { "[" ~ ident ~ ("," ~ ident)* ~ "]" | ident }
 
 // BPM: bpm 120
 bpm_stmt = { "bpm" ~ number }

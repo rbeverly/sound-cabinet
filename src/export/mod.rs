@@ -50,7 +50,11 @@ pub fn run_export(config: &ExportConfig) -> Result<()> {
     let mut notes = extracted.notes;
 
     if let Some(ref voice) = config.voice_filter {
-        notes.retain(|n| n.voice_name == *voice);
+        notes.retain(|n| {
+            // Match against voice_label first (preserves names across `with` substitution),
+            // then fall back to the resolved voice_name.
+            n.voice_label.as_deref() == Some(voice.as_str()) || n.voice_name == *voice
+        });
     }
     if let Some(ref source) = config.source_filter {
         notes.retain(|n| {

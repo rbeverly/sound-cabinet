@@ -35,6 +35,8 @@ struct ScheduledEvent {
     release_samples: u64,
     /// Unique ID for matching note-on to note-off (MIDI note number, or 0 for score events).
     note_id: u16,
+    /// Voice label from `PlayAt`, used by pedal voice filtering.
+    voice_label: Option<String>,
 }
 
 /// The central audio engine. Manages voice definitions, scheduled events,
@@ -47,8 +49,8 @@ pub struct Engine {
     wavetables: HashMap<String, Vec<f64>>,
     schedule: Vec<ScheduledEvent>,
     current_sample: u64,
-    pedal_windows: Vec<(u64, u64)>,
-    pedal_pending: Option<u64>,
+    pedal_windows: Vec<(u64, u64, Vec<String>)>,
+    pedal_pending: Option<(u64, Vec<String>)>,
     /// Tempo map: list of (beat, bpm) pairs for mid-score tempo changes.
     /// Used by beats_to_samples to integrate over tempo segments.
     tempo_map: Vec<(f64, f64)>,
@@ -105,6 +107,7 @@ impl Engine {
                 expr,
                 duration_beats,
                 source,
+                voice_label,
             } => {
                 let start_sample = self.beats_to_samples(beat);
 
@@ -137,17 +140,18 @@ impl Engine {
                         release_at: None,
                         release_samples: (self.sample_rate * 0.05) as u64,
                         note_id: 0,
+                        voice_label,
                     });
                 }
             }
-            Command::PedalDown { beat } => {
+            Command::PedalDown { beat, voices } => {
                 let sample = self.beats_to_samples(beat);
-                self.pedal_pending = Some(sample);
+                self.pedal_pending = Some((sample, voices));
             }
-            Command::PedalUp { beat } => {
+            Command::PedalUp { beat, voices: _ } => {
                 let up_sample = self.beats_to_samples(beat);
-                if let Some(down_sample) = self.pedal_pending.take() {
-                    self.pedal_windows.push((down_sample, up_sample));
+                if let Some((down_sample, voices)) = self.pedal_pending.take() {
+                    self.pedal_windows.push((down_sample, up_sample, voices));
                 }
             }
             Command::MasterCompress(params) => {
@@ -195,6 +199,7 @@ impl Engine {
                 expr,
                 duration_beats,
                 source,
+                voice_label,
             } => {
                 let offset = self.beats_to_samples(beat);
                 let start_sample = self.current_sample + offset;
@@ -227,6 +232,7 @@ impl Engine {
                         release_at: None,
                         release_samples: (self.sample_rate * 0.05) as u64,
                         note_id: 0,
+                        voice_label,
                     });
                 }
             }
@@ -261,6 +267,7 @@ impl Engine {
             release_at: None,
             release_samples: (self.sample_rate * 0.08) as u64,
             note_id,
+            voice_label: None,
         });
 
         Ok(())
@@ -274,9 +281,16 @@ impl Engine {
             return;
         }
         for event in &mut self.schedule {
-            for &(down, up) in &self.pedal_windows {
-                if down <= event.end_sample && event.end_sample <= up {
-                    event.end_sample = up;
+            for (down, up, voices) in &self.pedal_windows {
+                // If voices is non-empty, only apply pedal to events with a matching voice_label.
+                if !voices.is_empty() {
+                    match &event.voice_label {
+                        Some(label) if voices.contains(label) => {}
+                        _ => continue,
+                    }
+                }
+                if *down <= event.end_sample && event.end_sample <= *up {
+                    event.end_sample = *up;
                     break;
                 }
             }
@@ -702,6 +716,7 @@ impl Engine {
                 release_at: None,
                 release_samples: (self.sample_rate * 0.05) as u64,
                 note_id: 0,
+                voice_label: None,
             });
         }
 
