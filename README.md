@@ -101,6 +101,12 @@ sound-cabinet watch examples/demo.sc
 # Piano mode — play any instrument live with your keyboard
 sound-cabinet piano examples/voices/concerto2-kit.sc piano
 
+# Piano mode with MIDI keyboard
+sound-cabinet piano voices/kit.sc piano --midi
+
+# MIDI with velocity curve (options: linear, soft, supersoft, hard, full)
+sound-cabinet piano voices/kit.sc piano --midi --velocity supersoft
+
 # Stream mode — type lines or pipe them in, hear them immediately
 sound-cabinet stream
 
@@ -749,6 +755,23 @@ sound-cabinet piano examples/voices/concerto2-kit.sc piano --midi 0
 The first argument is a score file (loads its instrument/voice/fx/wave definitions). The optional second argument is the instrument or wave name to play. Without it, a default sine+decay tone is used.
 
 The QWERTY keyboard maps two chromatic octaves (C3-C5) across your layout — the same as GarageBand. A MIDI keyboard provides the full range with velocity sensitivity. If a MIDI device is connected, it's auto-detected — both keyboard and MIDI work simultaneously.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--midi` | Explicitly connect to MIDI (auto-detected if present) |
+| `--velocity <curve>` | Velocity response curve for MIDI input |
+
+Velocity curves:
+
+| Curve | Description |
+|-------|-------------|
+| `linear` | 1:1 velocity mapping (default) |
+| `soft` | Light touches produce more volume |
+| `supersoft` | Very light touches still produce full volume |
+| `hard` | Requires harder presses for volume |
+| `full` | All notes play at full velocity regardless of input |
 
 #### Recording
 
