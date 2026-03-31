@@ -23,6 +23,56 @@ pub enum Expr {
     Range(f64, f64),
 }
 
+impl std::fmt::Display for Expr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Expr::Number(v) => {
+                if (*v - v.round()).abs() < 1e-10 {
+                    write!(f, "{}", *v as i64)
+                } else {
+                    write!(f, "{}", v)
+                }
+            }
+            Expr::FnCall { name, args } => {
+                write!(f, "{name}(")?;
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{arg}")?;
+                }
+                write!(f, ")")
+            }
+            Expr::VoiceRef(name) => write!(f, "{name}"),
+            Expr::Pipe(a, b) => write!(f, "{a} >> {b}"),
+            Expr::Sum(a, b) => write!(f, "{a} + {b}"),
+            Expr::Mul(a, b) => write!(f, "{a} * {b}"),
+            Expr::Div(a, b) => write!(f, "{a} / {b}"),
+            Expr::Sub(a, b) => write!(f, "{a} - {b}"),
+            Expr::Range(start, end) => write!(f, "{start} -> {end}"),
+        }
+    }
+}
+
+/// A reference to a pattern — either by name or as a sample (slice) of a pattern.
+#[derive(Debug, Clone)]
+pub enum PatternRef {
+    /// A simple name reference: `play melody`
+    Name(String),
+    /// A sampled slice: `play sample(melody, 8, 16)` or `play sample(melody, 16)`
+    Sample { name: String, start: f64, end: Option<f64> },
+}
+
+impl PatternRef {
+    /// Get the base pattern name.
+    pub fn name(&self) -> &str {
+        match self {
+            PatternRef::Name(n) => n,
+            PatternRef::Sample { name, .. } => name,
+        }
+    }
+}
+
 /// A single event within a pattern — beat offset is relative to pattern start.
 #[derive(Debug, Clone)]
 pub struct PatternEvent {
@@ -37,10 +87,33 @@ pub type WithMap = HashMap<String, String>;
 /// A placement within a section.
 #[derive(Debug, Clone)]
 pub enum SectionEntry {
-    /// `repeat boom_bap every 4 beats [with {kick = 808}]`
-    RepeatEvery { name: String, every_beats: f64, with_map: Option<WithMap> },
-    /// `play jazz_chords [with {melody = rhodes}]`
-    Play { name: String, with_map: Option<WithMap> },
+    /// `repeat boom_bap [every 4 beats] [from 8] [to 32] [with {kick = 808}]`
+    RepeatEvery {
+        pattern: PatternRef,
+        every_beats: Option<f64>,
+        from_beat: Option<f64>,
+        to_beat: Option<f64>,
+        with_map: Option<WithMap>,
+    },
+    /// `play jazz_chords [from 8] [with {melody = rhodes}]`
+    Play { pattern: PatternRef, with_map: Option<WithMap> },
+    /// `at 8 play fill [with {...}]`
+    AtPlay { beat: f64, pattern: PatternRef, with_map: Option<WithMap> },
+    /// `at 16 repeat hats [every 1 beat] [from 16] [to 32] [with {...}]`
+    AtRepeat {
+        beat: f64,
+        pattern: PatternRef,
+        every_beats: Option<f64>,
+        from_beat: Option<f64>,
+        to_beat: Option<f64>,
+        with_map: Option<WithMap>,
+    },
+    /// `sequence bass_sparse, bass_active [with {...}]`
+    Sequence { patterns: Vec<PatternRef>, with_map: Option<WithMap> },
+    /// `repeat 4 { pick [...] }` inside a section
+    RepeatBlock { count: u32, body: Vec<RepeatBody> },
+    /// `at 0 play sine(440) >> lowpass(800) for 2 beats` — inline event inside a section
+    InlineEvent { beat: f64, expr: Expr, duration_beats: f64, voice_label: Option<String> },
 }
 
 /// A weighted choice for `pick`.
@@ -112,12 +185,12 @@ pub enum Command {
     /// Define a named section that composes patterns
     SectionDef {
         name: String,
-        duration_beats: f64,
+        duration_beats: Option<f64>,
         entries: Vec<SectionEntry>,
         with_map: Option<WithMap>,
     },
     /// Top-level sequential play: `play intro`
-    PlaySequential { name: String },
+    PlaySequential { pattern: PatternRef },
     /// Repeat block: `repeat 4 { ... }`
     RepeatBlock {
         count: u32,

@@ -6,8 +6,8 @@ use pest_derive::Parser;
 use std::collections::HashMap;
 
 use super::ast::{
-    Command, DefKind, Expr, PatternEvent, RepeatBody, Script, SectionEntry, WeightedChoice,
-    WithMap,
+    Command, DefKind, Expr, PatternEvent, PatternRef, RepeatBody, Script, SectionEntry,
+    WeightedChoice, WithMap,
 };
 
 #[derive(Parser)]
@@ -27,7 +27,7 @@ enum Block {
     },
     Section {
         header: String,
-        body: Vec<String>,
+        body: Vec<SectionBodyItem>,
     },
     Repeat {
         header: String,
@@ -68,19 +68,39 @@ fn group_blocks(input: &str) -> Result<Vec<Block>> {
                 }
             }
             blocks.push(Block::Pattern { header, body });
-        } else if trimmed.starts_with("section ") && trimmed.contains('=') {
+        } else if trimmed.starts_with("section ") {
             let header = trimmed.to_string();
-            let mut body = Vec::new();
+            let mut body: Vec<SectionBodyItem> = Vec::new();
             i += 1;
             while i < lines.len() {
                 let bline = lines[i];
-                if bline.trim().is_empty() || bline.trim().starts_with("//") {
+                let btrimmed = bline.trim();
+                if btrimmed.is_empty() || btrimmed.starts_with("//") {
                     i += 1;
                     continue;
                 }
                 if bline.starts_with(' ') || bline.starts_with('\t') {
-                    body.push(bline.trim().to_string());
-                    i += 1;
+                    // Check for nested repeat block: "repeat N {"
+                    if btrimmed.starts_with("repeat ") && btrimmed.ends_with('{') {
+                        let rh = btrimmed.to_string();
+                        let mut rb = Vec::new();
+                        i += 1;
+                        while i < lines.len() {
+                            let rline = lines[i].trim();
+                            if rline == "}" {
+                                i += 1;
+                                break;
+                            }
+                            if !rline.is_empty() && !rline.starts_with("//") {
+                                rb.push(rline.to_string());
+                            }
+                            i += 1;
+                        }
+                        body.push(SectionBodyItem::RepeatBlock { header: rh, body: rb });
+                    } else {
+                        body.push(SectionBodyItem::Line(btrimmed.to_string()));
+                        i += 1;
+                    }
                 } else {
                     break;
                 }
@@ -161,8 +181,8 @@ fn try_parse_command(line: &str) -> Result<Option<Command>> {
     if line.starts_with("play ") && !line.contains(" for ") {
         if let Ok(pairs) = ScoreParser::parse(Rule::play_stmt, line) {
             for pair in pairs {
-                let name = pair.into_inner().next().unwrap().as_str().to_string();
-                return Ok(Some(Command::PlaySequential { name }));
+                let pref = parse_pattern_ref(pair.into_inner().next().unwrap())?;
+                return Ok(Some(Command::PlaySequential { pattern: pref }));
             }
         }
     }
@@ -447,43 +467,44 @@ fn parse_pattern_def(header: &str, body: &[String]) -> Result<Command> {
     })
 }
 
-fn parse_section_def(header: &str, body: &[String]) -> Result<Command> {
+fn parse_section_def(header: &str, body: &[SectionBodyItem]) -> Result<Command> {
     let pairs = ScoreParser::parse(Rule::section_header, header)
         .map_err(|e| anyhow!("Section header parse error:\n{e}"))?;
 
     let pair = pairs.into_iter().next().unwrap();
     let mut inner = pair.into_inner();
     let name = inner.next().unwrap().as_str().to_string();
-    let duration_beats: f64 = inner.next().unwrap().as_str().parse()?;
-    // Skip beat_unit, then check for optional with_clause on section header
-    let section_with = parse_optional_with(&mut inner);
+
+    // Duration is optional: check if next token is a number (duration) or with_clause
+    let mut duration_beats: Option<f64> = None;
+    let mut section_with: Option<WithMap> = None;
+
+    for token in inner {
+        match token.as_rule() {
+            Rule::number => {
+                duration_beats = Some(token.as_str().parse()?);
+            }
+            Rule::beat_unit => {} // skip
+            Rule::with_clause => {
+                section_with = parse_with_clause(token);
+            }
+            _ => {}
+        }
+    }
 
     let mut entries = Vec::new();
-    for line in body {
-        if line.starts_with("repeat ") {
-            let entry_pairs = ScoreParser::parse(Rule::section_entry_repeat, line)
-                .map_err(|e| anyhow!("Section repeat entry parse error:\n{e}"))?;
-            let entry_pair = entry_pairs.into_iter().next().unwrap();
-            let mut ei = entry_pair.into_inner();
-            let entry_name = ei.next().unwrap().as_str().to_string();
-            let every_beats: f64 = ei.next().unwrap().as_str().parse()?;
-            // Skip beat_unit, check for optional with_clause
-            let entry_with = parse_optional_with(&mut ei);
-            entries.push(SectionEntry::RepeatEvery {
-                name: entry_name,
-                every_beats,
-                with_map: entry_with,
-            });
-        } else if line.starts_with("play ") {
-            let entry_pairs = ScoreParser::parse(Rule::section_entry_play, line)
-                .map_err(|e| anyhow!("Section play entry parse error:\n{e}"))?;
-            let entry_pair = entry_pairs.into_iter().next().unwrap();
-            let mut ei = entry_pair.into_inner();
-            let entry_name = ei.next().unwrap().as_str().to_string();
-            let entry_with = parse_optional_with(&mut ei);
-            entries.push(SectionEntry::Play { name: entry_name, with_map: entry_with });
-        } else {
-            return Err(anyhow!("Unrecognized section entry: {line}"));
+    for item in body {
+        match item {
+            SectionBodyItem::Line(line) => {
+                let entry = parse_section_entry(line)?;
+                entries.push(entry);
+            }
+            SectionBodyItem::RepeatBlock { header: rh, body: rb } => {
+                let repeat_cmd = parse_repeat_block(rh, rb)?;
+                if let Command::RepeatBlock { count, body: repeat_body } = repeat_cmd {
+                    entries.push(SectionEntry::RepeatBlock { count, body: repeat_body });
+                }
+            }
         }
     }
 
@@ -493,6 +514,197 @@ fn parse_section_def(header: &str, body: &[String]) -> Result<Command> {
         entries,
         with_map: section_with,
     })
+}
+
+/// Items collected from a section body — either a single line or a nested repeat block.
+#[derive(Debug)]
+enum SectionBodyItem {
+    Line(String),
+    RepeatBlock { header: String, body: Vec<String> },
+}
+
+/// Parse a `pattern_ref` pair into a `PatternRef`.
+fn parse_pattern_ref(pair: Pair<Rule>) -> Result<PatternRef> {
+    match pair.as_rule() {
+        Rule::pattern_ref => {
+            let inner = pair.into_inner().next().unwrap();
+            parse_pattern_ref(inner)
+        }
+        Rule::sample_call => {
+            let mut inner = pair.into_inner();
+            let name = inner.next().unwrap().as_str().to_string();
+            let start: f64 = inner.next().unwrap().as_str().parse()?;
+            let end: Option<f64> = inner.next().map(|p| p.as_str().parse()).transpose()?;
+            Ok(PatternRef::Sample { name, start, end })
+        }
+        Rule::ident => {
+            Ok(PatternRef::Name(pair.as_str().to_string()))
+        }
+        _ => Err(anyhow!("Unexpected rule in pattern_ref: {:?}", pair.as_rule())),
+    }
+}
+
+/// Parse a single section entry line.
+fn parse_section_entry(line: &str) -> Result<SectionEntry> {
+    if line.starts_with("at ") {
+        // at N play X ... or at N repeat X ...
+        if line.contains(" play ") {
+            // Check if this is a full inline expression (has "for N beats")
+            // or a pattern reference (just a name)
+            if line.contains(" for ") && line.contains(" beats") {
+                // Full inline expression: at 0 play sine(440) >> lowpass(800) for 2 beats
+                let at_pairs = ScoreParser::parse(Rule::at_stmt, line)
+                    .map_err(|e| anyhow!("Section inline event parse error:\n{e}"))?;
+                let at_pair = at_pairs.into_iter().next().unwrap();
+                let parsed = parse_at(at_pair)?;
+                if let Command::PlayAt { beat, expr, duration_beats, source, voice_label } = parsed {
+                    return Ok(SectionEntry::InlineEvent { beat, expr, duration_beats, voice_label });
+                }
+                unreachable!()
+            } else {
+                // Pattern reference: at 8 play my_pattern
+                let entry_pairs = ScoreParser::parse(Rule::section_entry_at_play, line)
+                    .map_err(|e| anyhow!("Section entry parse error:\n{e}\n  Hint: 'at' inside sections positions a pattern by name: at 8 play my_pattern\n  For inline expressions, include 'for N beats': at 0 play sine(440) for 2 beats"))?;
+                let entry_pair = entry_pairs.into_iter().next().unwrap();
+                let mut ei = entry_pair.into_inner();
+                let beat: f64 = ei.next().unwrap().as_str().parse()?;
+                let pref = parse_pattern_ref(ei.next().unwrap())?;
+                let entry_with = parse_optional_with(&mut ei);
+                Ok(SectionEntry::AtPlay { beat, pattern: pref, with_map: entry_with })
+            }
+        } else if line.contains(" repeat ") {
+            let entry_pairs = ScoreParser::parse(Rule::section_entry_at_repeat, line)
+                .map_err(|e| anyhow!("Section entry parse error:\n{e}"))?;
+            let entry_pair = entry_pairs.into_iter().next().unwrap();
+            let mut ei = entry_pair.into_inner();
+            let beat: f64 = ei.next().unwrap().as_str().parse()?;
+            let pref = parse_pattern_ref(ei.next().unwrap())?;
+            let (every, from, to) = parse_repeat_modifiers(&mut ei);
+            let entry_with = parse_optional_with(&mut ei);
+            Ok(SectionEntry::AtRepeat {
+                beat,
+                pattern: pref,
+                every_beats: every,
+                from_beat: from,
+                to_beat: to,
+                with_map: entry_with,
+            })
+        } else {
+            Err(anyhow!(
+                "Unrecognized section entry: {line}\n  Hint: Inside sections, use 'at N play <pattern_name>' or 'at N repeat <pattern_name> every N beats'.\n  If you want to play a raw expression, wrap it in a pattern first."
+            ))
+        }
+    } else if line.starts_with("repeat ") {
+        let entry_pairs = ScoreParser::parse(Rule::section_entry_repeat, line)
+            .map_err(|e| anyhow!("Section repeat entry parse error:\n{e}"))?;
+        let entry_pair = entry_pairs.into_iter().next().unwrap();
+        let mut ei = entry_pair.into_inner();
+        let pref = parse_pattern_ref(ei.next().unwrap())?;
+        let (every, from, to) = parse_repeat_modifiers(&mut ei);
+        let entry_with = parse_optional_with(&mut ei);
+        Ok(SectionEntry::RepeatEvery {
+            pattern: pref,
+            every_beats: every,
+            from_beat: from,
+            to_beat: to,
+            with_map: entry_with,
+        })
+    } else if line.starts_with("play ") {
+        let entry_pairs = ScoreParser::parse(Rule::section_entry_play, line)
+            .map_err(|e| anyhow!("Section play entry parse error:\n{e}"))?;
+        let entry_pair = entry_pairs.into_iter().next().unwrap();
+        let mut ei = entry_pair.into_inner();
+        let pref = parse_pattern_ref(ei.next().unwrap())?;
+        // Check for play_from modifier: "play melody from 8" => AtPlay
+        let mut play_from_beat: Option<f64> = None;
+        let mut remaining_pairs: Vec<Pair<Rule>> = Vec::new();
+        for p in ei {
+            if p.as_rule() == Rule::play_from {
+                let num = p.into_inner().next().unwrap();
+                play_from_beat = Some(num.as_str().parse()?);
+            } else {
+                remaining_pairs.push(p);
+            }
+        }
+        let entry_with = {
+            let mut iter = remaining_pairs.into_iter().peekable();
+            let mut wm = None;
+            for p in iter {
+                if p.as_rule() == Rule::with_clause {
+                    wm = parse_with_clause(p);
+                }
+            }
+            wm
+        };
+        if let Some(beat) = play_from_beat {
+            Ok(SectionEntry::AtPlay { beat, pattern: pref, with_map: entry_with })
+        } else {
+            Ok(SectionEntry::Play { pattern: pref, with_map: entry_with })
+        }
+    } else if line.starts_with("sequence ") {
+        let entry_pairs = ScoreParser::parse(Rule::section_entry_sequence, line)
+            .map_err(|e| anyhow!("Section sequence entry parse error:\n{e}"))?;
+        let entry_pair = entry_pairs.into_iter().next().unwrap();
+        let mut patterns = Vec::new();
+        let mut entry_with = None;
+        for token in entry_pair.into_inner() {
+            match token.as_rule() {
+                Rule::pattern_ref => {
+                    patterns.push(parse_pattern_ref(token)?);
+                }
+                Rule::with_clause => entry_with = parse_with_clause(token),
+                _ => {}
+            }
+        }
+        Ok(SectionEntry::Sequence { patterns, with_map: entry_with })
+    } else if line.starts_with("pattern ") {
+        Err(anyhow!(
+            "Can't nest a pattern inside a section.\n  Hint: Define the pattern separately (outside the section), then reference it by name:\n    pattern my_pat = 4 beats\n      at 0 play ... for ...\n    section my_section = 16 beats\n      repeat my_pat every 4 beats"
+        ))
+    } else {
+        Err(anyhow!(
+            "Unrecognized section entry: {line}\n  Hint: Section entries must be one of:\n    play <pattern_name>\n    repeat <pattern_name> [every N beats] [from N] [to N]\n    at N play <pattern_name>\n    at N repeat <pattern_name> [every N beats] [from N] [to N]\n    sequence <name1>, <name2>, ..."
+        ))
+    }
+}
+
+/// Parse repeat modifiers (every, from, to/until) from remaining pairs.
+fn parse_repeat_modifiers(pairs: &mut pest::iterators::Pairs<Rule>) -> (Option<f64>, Option<f64>, Option<f64>) {
+    let mut every = None;
+    let mut from = None;
+    let mut to = None;
+
+    for pair in pairs {
+        match pair.as_rule() {
+            Rule::repeat_modifier => {
+                let inner = pair.into_inner().next().unwrap();
+                match inner.as_rule() {
+                    Rule::repeat_every => {
+                        let num = inner.into_inner().next().unwrap();
+                        every = Some(num.as_str().parse().unwrap_or(4.0));
+                    }
+                    Rule::repeat_from => {
+                        let num = inner.into_inner().next().unwrap();
+                        from = Some(num.as_str().parse().unwrap_or(0.0));
+                    }
+                    Rule::repeat_to => {
+                        let num = inner.into_inner().next().unwrap();
+                        to = Some(num.as_str().parse().unwrap_or(0.0));
+                    }
+                    _ => {}
+                }
+            }
+            _ => break, // stop at with_clause or anything else
+        }
+    }
+
+    (every, from, to)
+}
+
+/// Parse a with_clause pair into a WithMap.
+fn parse_with_clause(pair: pest::iterators::Pair<Rule>) -> Option<WithMap> {
+    let map = parse_mappings(pair.into_inner());
+    if map.is_empty() { None } else { Some(map) }
 }
 
 fn parse_repeat_block(header: &str, body: &[String]) -> Result<Command> {
@@ -928,7 +1140,7 @@ section verse = 16 beats
                 ..
             } => {
                 assert_eq!(name, "verse");
-                assert_eq!(*duration_beats, 16.0);
+                assert_eq!(*duration_beats, Some(16.0));
                 assert_eq!(entries.len(), 2);
             }
             _ => panic!("Expected SectionDef"),
@@ -971,7 +1183,7 @@ repeat 4 {
     fn test_parse_play_sequential() {
         let script = parse_script("play intro\n").unwrap();
         match &script.commands[0] {
-            Command::PlaySequential { name } => assert_eq!(name, "intro"),
+            Command::PlaySequential { pattern } => assert_eq!(pattern.name(), "intro"),
             _ => panic!("Expected PlaySequential"),
         }
     }

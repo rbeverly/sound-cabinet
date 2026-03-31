@@ -517,10 +517,40 @@ fn build_fn_call(
                         return Ok(net);
                     }
                 }
+                // Multi-note: instrument(C4, E4, G4) — sum instances at each frequency
+                if args.len() > 1 {
+                    // Check if all args are numbers or note names
+                    let freqs: Vec<f64> = args.iter().filter_map(|a| {
+                        match a {
+                            Expr::Number(v) => Some(*v),
+                            _ => None,
+                        }
+                    }).collect();
+
+                    if freqs.len() == args.len() {
+                        let scale = 1.0 / freqs.len() as f32;
+                        let mut net = Net::wrap(Box::new(dc(0.0)));
+                        net.set_sample_rate(sample_rate);
+                        for freq in &freqs {
+                            let substituted = substitute_var(template, "freq", *freq);
+                            let note_net = build_graph_inner(&substituted, voices, wavetables, sample_rate, duration_secs, depth + 1)?;
+                            let mut gain = Net::wrap(Box::new(dc(scale)));
+                            gain.set_sample_rate(sample_rate);
+                            net = net + (note_net * gain);
+                        }
+                        return Ok(net);
+                    }
+                }
+
                 // Single frequency
                 let freq = expect_number(args, 0, name)?;
                 let substituted = substitute_var(template, "freq", freq);
                 build_graph_inner(&substituted, voices, wavetables, sample_rate, duration_secs, depth + 1)
+            } else if name == "bus" || name == "sidechain" || name == "swell" {
+                // bus() and sidechain() are metadata extracted before graph building.
+                // If they reach here (e.g., inside a voice definition), pass through
+                // as a unity gain (no-op). The actual behavior is handled in render_samples.
+                Ok(Net::wrap(Box::new(pass())))
             } else {
                 Err(anyhow!("Unknown DSP function: {name}"))
             }

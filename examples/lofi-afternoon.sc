@@ -3,6 +3,18 @@
 
 import voices/lofi-kit.sc
 
+// Mix levels
+normalize chord_pad 0.2
+normalize bass 0.3
+normalize mel 0.35
+normalize pad 0.2
+normalize kick 0.15
+normalize snare 0.2
+normalize ghost_snare 0.15
+
+master compress 1.0
+master gain -3
+
 bpm 75
 humanize 6
 

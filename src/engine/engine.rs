@@ -8,6 +8,22 @@ use crate::dsl::parser::resolve_chord;
 use crate::engine::effects::MasterBus;
 use crate::engine::graph::{build_graph, extract_arp, extract_bus, extract_sidechain, extract_swell, strip_bus, strip_sidechain, strip_swell, substitute_freq, substitute_var, SidechainConfig};
 
+/// Built-in function names that should not be shadowed by voice/instrument/wave definitions.
+fn is_reserved_name(name: &str) -> bool {
+    matches!(
+        name,
+        "sine" | "saw" | "triangle" | "square" | "pulse"
+            | "noise" | "white" | "pink" | "brown"
+            | "lowpass" | "highpass" | "bandpass" | "allpass"
+            | "decay" | "swell"
+            | "reverb" | "delay" | "chorus" | "distort" | "vibrato"
+            | "compress" | "crush" | "decimate" | "degrade"
+            | "lfo" | "eq" | "gain" | "loudness"
+            | "arp" | "chord" | "bus" | "sidechain"
+            | "noise_gate" | "bit_crush"
+    )
+}
+
 /// A scheduled playback event with absolute sample positions.
 struct ScheduledEvent {
     start_sample: u64,
@@ -199,6 +215,42 @@ impl Engine {
         }
     }
 
+    /// Resolve VoiceRefs in an expression by inlining voice definitions.
+    /// This allows extractors (bus, sidechain, swell) to find these markers
+    /// even when they're defined inside a voice rather than at the play site.
+    fn resolve_expr_shallow(&self, expr: &Expr) -> Expr {
+        match expr {
+            Expr::VoiceRef(name) => {
+                if let Some(voice_expr) = self.voices.get(name) {
+                    self.resolve_expr_shallow(voice_expr)
+                } else {
+                    expr.clone()
+                }
+            }
+            Expr::Pipe(a, b) => Expr::Pipe(
+                Box::new(self.resolve_expr_shallow(a)),
+                Box::new(self.resolve_expr_shallow(b)),
+            ),
+            Expr::Mul(a, b) => Expr::Mul(
+                Box::new(self.resolve_expr_shallow(a)),
+                Box::new(self.resolve_expr_shallow(b)),
+            ),
+            Expr::Sum(a, b) => Expr::Sum(
+                Box::new(self.resolve_expr_shallow(a)),
+                Box::new(self.resolve_expr_shallow(b)),
+            ),
+            Expr::FnCall { name, args } => {
+                // For instrument calls like piano(C4), resolve the name
+                if let Some(voice_expr) = self.voices.get(name) {
+                    self.resolve_expr_shallow(voice_expr)
+                } else {
+                    expr.clone()
+                }
+            }
+            _ => expr.clone(),
+        }
+    }
+
     /// Get per-voice VU meter states (instantaneous with decay).
     pub fn voice_vu(&self) -> &HashMap<String, VuMeter> {
         &self.voice_vu
@@ -228,10 +280,16 @@ impl Engine {
     pub fn handle_command(&mut self, cmd: Command) -> Result<()> {
         match cmd {
             Command::VoiceDef { name, expr, kind } => {
+                if is_reserved_name(&name) {
+                    eprintln!("Warning: '{}' is a built-in function name. Defining a {} with this name will shadow the built-in and may cause unexpected behavior.", name, kind);
+                }
                 self.voice_kinds.insert(name.clone(), kind);
                 self.voices.insert(name, expr);
             }
             Command::WaveDef { name, samples } => {
+                if is_reserved_name(&name) {
+                    eprintln!("Warning: '{}' is a built-in function name. Defining a wave with this name will shadow the built-in.", name);
+                }
                 self.wavetables.insert(name, samples);
             }
             Command::SetBpm { bpm, at_beat } => {
@@ -261,9 +319,12 @@ impl Engine {
                     let duration_samples = self.beats_to_samples(duration_beats);
                     let end_sample = start_sample + duration_samples;
                     let duration_secs = duration_beats * 60.0 / self.bpm;
-                    let swell = extract_swell(&expr);
-                    let bus_name = extract_bus(&expr);
-                    let sidechain = extract_sidechain(&expr);
+                    // Resolve top-level VoiceRefs so extractors can find
+                    // bus/sidechain/swell inside voice definitions
+                    let resolved = self.resolve_expr_shallow(&expr);
+                    let swell = extract_swell(&resolved);
+                    let bus_name = extract_bus(&resolved);
+                    let sidechain = extract_sidechain(&resolved);
                     let clean_expr = strip_sidechain(&strip_bus(&strip_swell(&expr)));
 
                     let net =
@@ -356,9 +417,12 @@ impl Engine {
                     let duration_samples = self.beats_to_samples(duration_beats);
                     let end_sample = start_sample + duration_samples;
                     let duration_secs = duration_beats * 60.0 / self.bpm;
-                    let swell = extract_swell(&expr);
-                    let bus_name = extract_bus(&expr);
-                    let sidechain = extract_sidechain(&expr);
+                    // Resolve top-level VoiceRefs so extractors can find
+                    // bus/sidechain/swell inside voice definitions
+                    let resolved = self.resolve_expr_shallow(&expr);
+                    let swell = extract_swell(&resolved);
+                    let bus_name = extract_bus(&resolved);
+                    let sidechain = extract_sidechain(&resolved);
                     let clean_expr = strip_sidechain(&strip_bus(&strip_swell(&expr)));
 
                     let net =
@@ -691,10 +755,12 @@ impl Engine {
             &[261.63] // Voices are fixed — just test once
         };
 
-        let test_duration = 0.25; // seconds per test tone
+        let test_duration = 0.5; // seconds per test tone (long enough for decay instruments)
         let test_samples = (test_duration * self.sample_rate) as usize;
-        let mut total_sum_sq = 0.0_f64;
-        let mut total_count = 0u64;
+        // Window size for peak RMS measurement (~50ms) — captures the attack portion
+        // which is what humans perceive as the instrument's loudness
+        let window_size = (0.05 * self.sample_rate) as usize;
+        let mut best_window_rms = 0.0_f64;
 
         for &freq in test_freqs {
             // For instruments, substitute freq variable
@@ -718,30 +784,49 @@ impl Engine {
             net.set_sample_rate(self.sample_rate);
             net.allocate();
 
-            // Render test samples
+            // Render all test samples into a buffer
+            let mut samples = Vec::with_capacity(test_samples);
             for _ in 0..test_samples {
                 let out = net.get_mono();
-                if out.is_finite() {
-                    total_sum_sq += (out as f64) * (out as f64);
-                    total_count += 1;
+                samples.push(if out.is_finite() { out as f64 } else { 0.0 });
+            }
+
+            // Find the loudest window (sliding window peak RMS)
+            // This captures the attack portion rather than averaging over
+            // the full duration including decay tail
+            if samples.len() >= window_size {
+                let mut window_sum_sq: f64 = samples[..window_size].iter().map(|s| s * s).sum();
+                let mut max_sum_sq = window_sum_sq;
+
+                for i in 1..=(samples.len() - window_size) {
+                    // Slide: remove old sample, add new sample
+                    let old = samples[i - 1];
+                    let new = samples[i + window_size - 1];
+                    window_sum_sq += new * new - old * old;
+                    if window_sum_sq > max_sum_sq {
+                        max_sum_sq = window_sum_sq;
+                    }
+                }
+
+                let window_rms = (max_sum_sq / window_size as f64).sqrt();
+                if window_rms > best_window_rms {
+                    best_window_rms = window_rms;
                 }
             }
         }
 
-        if total_count == 0 {
-            eprintln!("  normalize {name}: no valid output — skipping");
-            return Ok(());
-        }
-
-        let measured_rms = (total_sum_sq / total_count as f64).sqrt();
-        if measured_rms < 1e-10 {
+        if best_window_rms < 1e-10 {
             eprintln!("  normalize {name}: instrument is silent — skipping");
             return Ok(());
         }
 
+        let measured_rms = best_window_rms;
+
         // Target RMS: the target level (0.0-1.0) maps to linear amplitude.
         // 1.0 = 0 dBFS, 0.5 = -6 dB, 0.25 = -12 dB, etc.
-        let target_rms = target.max(0.001).min(1.0);
+        // Floor at 1e-8 (~-160 dBFS) to prevent divide-by-zero.
+        // Ambient textures may legitimately need very low levels (e.g., 0.0001 = -80 dB).
+        let target_rms = target.max(1e-8).min(1.0);
         let correction = target_rms / measured_rms;
 
         // Apply correction: wrap the instrument's expression in a gain multiplier
@@ -1291,19 +1376,19 @@ fn parse_arp_options(args: &[Expr]) -> Result<ArpOptions> {
                             .chars()
                             .filter_map(|c| match c {
                                 'x' | 'X' => Some(true),
-                                '.' => Some(false),
+                                '_' | '.' => Some(false),
                                 _ => None,
                             })
                             .collect();
                         if parsed.is_empty() {
                             return Err(anyhow::anyhow!(
-                                "arp: 'steps' pattern must contain x (play) and . (rest)"
+                                "arp: 'steps' pattern must contain x (play) and _ (rest)"
                             ));
                         }
                         opts.step_pattern = Some(parsed);
                     } else {
                         return Err(anyhow::anyhow!(
-                            "arp: 'steps' requires a pattern like x.x.xx.x"
+                            "arp: 'steps' requires a pattern like x_x_xx_x"
                         ));
                     }
                 } else {

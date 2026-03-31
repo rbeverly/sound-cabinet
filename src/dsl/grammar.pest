@@ -55,13 +55,35 @@ file_path   = @{ (!NEWLINE ~ !(" ") ~ ANY)+ }
 pattern_header = { "pattern" ~ ident ~ "=" ~ number ~ beat_unit ~ pattern_modifier* }
 pattern_modifier = { ("swing" ~ number) | ("humanize" ~ number) }
 
-// Section header: section verse = 16 beats [with {kick = 808, snare = clap}]
-section_header = { "section" ~ ident ~ "=" ~ number ~ beat_unit ~ with_clause? }
+// Section header: section verse = 16 beats [with {kick = 808}]
+// Duration is optional: section verse [with {...}] computes length from contents
+section_header = { "section" ~ ident ~ ("=" ~ number ~ beat_unit)? ~ with_clause? }
 
-// Section entry: repeat boom_bap every 4 beats [with {kick = 808}]
-section_entry_repeat = { "repeat" ~ ident ~ "every" ~ number ~ beat_unit ~ with_clause? }
-// Section entry: play jazz_chords [with {melody = rhodes}]
-section_entry_play = { "play" ~ ident ~ with_clause? }
+// Pattern reference: either a name or sample(name, start, end)
+pattern_ref = { sample_call | ident }
+sample_call = { "sample" ~ "(" ~ ident ~ "," ~ number ~ ("," ~ number)? ~ ")" }
+
+// Section entry: repeat boom_bap every 4 beats [from 8] [to 32] [with {kick = 808}]
+section_entry_repeat = { "repeat" ~ pattern_ref ~ repeat_modifier* ~ with_clause? }
+repeat_modifier = { repeat_every | repeat_from | repeat_to }
+repeat_every = { "every" ~ number ~ beat_unit }
+repeat_from = { "from" ~ number }
+repeat_to = { ("to" | "until") ~ number }
+
+// Section entry: at 8 play pattern [with {...}]
+section_entry_at_play = { "at" ~ number ~ "play" ~ pattern_ref ~ with_clause? }
+// Section entry: at 16 repeat hats every 1 beat [from 16] [to 32] [with {...}]
+section_entry_at_repeat = { "at" ~ number ~ "repeat" ~ pattern_ref ~ repeat_modifier* ~ with_clause? }
+
+// Section entry: sequence bass_sparse, bass_active [with {...}]
+section_entry_sequence = { "sequence" ~ pattern_ref ~ ("," ~ pattern_ref)* ~ with_clause? }
+
+// Section entry: play jazz_chords [from 8] [with {melody = rhodes}]
+section_entry_play = { "play" ~ pattern_ref ~ play_from? ~ with_clause? }
+play_from = { "from" ~ number }
+
+// Top-level play: play intro  or  play sample(melody, 0, 16)
+play_stmt = { "play" ~ pattern_ref }
 
 // Voice substitution: with {kick = 808_kick, snare = clap}
 with_clause = { "with" ~ "{" ~ mapping ~ ("," ~ mapping)* ~ "}" }
@@ -77,9 +99,6 @@ weighted_item = { ident ~ (":" ~ number)? }
 
 // Shuffle: shuffle [a, b, c]
 shuffle_stmt = { "shuffle" ~ "[" ~ ident ~ ("," ~ ident)* ~ "]" }
-
-// Top-level play: play intro
-play_stmt = { "play" ~ ident }
 
 // Expressions — operator precedence: pipe (lowest) > sum > mul/div (highest)
 expr      = { pipe_expr }

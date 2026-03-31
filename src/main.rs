@@ -31,6 +31,7 @@ fn main() -> Result<()> {
         "stream" => cmd_stream()?,
         "generate" => cmd_generate(&args[2..])?,
         "profile" => cmd_profile(&args[2..])?,
+        "freeze" => cmd_freeze(&args[2..])?,
         "export" => cmd_export(&args[2..])?,
         _ => {
             print_usage();
@@ -49,6 +50,7 @@ fn print_usage() {
     eprintln!("  sound-cabinet piano <score.sc>   (play with keyboard)");
     eprintln!("  sound-cabinet stream              (reads from stdin)");
     eprintln!("  sound-cabinet profile <score.sc>    (analyze per-voice levels)");
+    eprintln!("  sound-cabinet freeze <score.sc>     (expand to flat .sc, resolve all randomness)");
     eprintln!("  sound-cabinet generate --pattern <file.yaml> --key <K> --mode <M> --chords \"...\"");
     eprintln!("                        --voice <name> [--range C2-G3] [--variations 5] [--seed 42] [-o out.sc]");
     eprintln!("  sound-cabinet export <score.sc> -o out.ly [--voice piano] [--source verse_a]");
@@ -170,6 +172,139 @@ fn cmd_profile(args: &[String]) -> Result<()> {
 
     eprintln!();
     Ok(())
+}
+
+/// Freeze a score: expand all patterns, sections, picks, shuffles, and humanize
+/// into a flat list of absolute PlayAt events. Outputs valid .sc that plays identically.
+fn cmd_freeze(args: &[String]) -> Result<()> {
+    use sound_cabinet::dsl::Command;
+    use rand::SeedableRng;
+
+    if args.is_empty() {
+        return Err(anyhow!("Usage: sound-cabinet freeze <score.sc> [-o <output.sc>] [--seed <N>]"));
+    }
+
+    let seed = parse_flag_u64(args, "--seed")?;
+    let output_path = parse_flag_str(args, "-o");
+    let score_path = args.iter()
+        .find(|a| !a.starts_with('-') && !is_flag_value(args, a))
+        .ok_or_else(|| anyhow!("Usage: sound-cabinet freeze <score.sc> [-o <output.sc>] [--seed <N>]"))?;
+
+    let source = std::fs::read_to_string(score_path)?;
+    let script = parse_script(&source)?;
+    let base_dir = Path::new(score_path.as_str()).parent().unwrap_or(Path::new("."));
+    let script = resolve_imports(script, base_dir)?;
+
+    let script = if let Some(s) = seed {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(s);
+        expand_script(script, &mut rng)?
+    } else {
+        expand_script(script, &mut rand::thread_rng())?
+    };
+
+    let mut out = String::new();
+    out.push_str(&format!("// Frozen from {}\n", score_path));
+    if let Some(s) = seed {
+        out.push_str(&format!("// Seed: {s}\n"));
+    }
+    out.push('\n');
+
+    for cmd in &script.commands {
+        match cmd {
+            Command::VoiceDef { name, expr, kind } => {
+                out.push_str(&format!("{kind} {name} = {expr}\n"));
+            }
+            Command::WaveDef { name, samples } => {
+                let vals: Vec<String> = samples.iter().map(|v| format!("{v}")).collect();
+                out.push_str(&format!("wave {name} = [{}]\n", vals.join(", ")));
+            }
+            Command::SetBpm { bpm, at_beat } => {
+                if let Some(beat) = at_beat {
+                    if *beat > 0.0 {
+                        out.push_str(&format!("// tempo change at beat {beat}\n"));
+                    }
+                }
+                out.push_str(&format!("bpm {bpm}\n"));
+            }
+            Command::PlayAt { beat, expr, duration_beats, source, voice_label } => {
+                let beat_str = format_beat_freeze(*beat);
+                let dur_str = format_beat_freeze(*duration_beats);
+                let mut comment_parts = Vec::new();
+                if let Some(s) = source {
+                    comment_parts.push(s.clone());
+                }
+                if let Some(v) = voice_label {
+                    if source.as_deref() != Some(v.as_str()) {
+                        comment_parts.push(format!("voice:{v}"));
+                    }
+                }
+                let comment = if comment_parts.is_empty() {
+                    String::new()
+                } else {
+                    format!("  // {}", comment_parts.join(", "))
+                };
+                out.push_str(&format!("at {beat_str} play {expr} for {dur_str} beats{comment}\n"));
+            }
+            Command::PedalDown { beat, voices } => {
+                if voices.is_empty() {
+                    out.push_str(&format!("pedal down at {}\n", format_beat_freeze(*beat)));
+                } else if voices.len() == 1 {
+                    out.push_str(&format!("pedal down {} at {}\n", voices[0], format_beat_freeze(*beat)));
+                } else {
+                    out.push_str(&format!("pedal down [{}] at {}\n", voices.join(", "), format_beat_freeze(*beat)));
+                }
+            }
+            Command::PedalUp { beat, voices } => {
+                if voices.is_empty() {
+                    out.push_str(&format!("pedal up at {}\n", format_beat_freeze(*beat)));
+                } else if voices.len() == 1 {
+                    out.push_str(&format!("pedal up {} at {}\n", voices[0], format_beat_freeze(*beat)));
+                } else {
+                    out.push_str(&format!("pedal up [{}] at {}\n", voices.join(", "), format_beat_freeze(*beat)));
+                }
+            }
+            Command::MasterCompress(params) => {
+                let vals: Vec<String> = params.iter().map(|v| format!("{v}")).collect();
+                out.push_str(&format!("master compress {}\n", vals.join(" ")));
+            }
+            Command::MasterCeiling(db) => {
+                out.push_str(&format!("master ceiling {db}\n"));
+            }
+            Command::MasterGain(db) => {
+                out.push_str(&format!("master gain {db}\n"));
+            }
+            Command::Normalize { name, target } => {
+                out.push_str(&format!("normalize {name} {target}\n"));
+            }
+            _ => {} // patterns, sections, etc. are already expanded
+        }
+    }
+
+    if let Some(path) = output_path {
+        std::fs::write(path, &out)?;
+        eprintln!("Frozen to {path}");
+    } else {
+        print!("{out}");
+    }
+
+    Ok(())
+}
+
+/// Format a beat value cleanly for freeze output.
+fn format_beat_freeze(beat: f64) -> String {
+    if (beat - beat.round()).abs() < 1e-10 {
+        format!("{}", beat.round() as i64)
+    } else if (beat * 100.0 - (beat * 100.0).round()).abs() < 1e-8 {
+        format!("{:.2}", beat)
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string()
+    } else {
+        format!("{:.4}", beat)
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string()
+    }
 }
 
 /// Parse a `--flag <value>` pair from args, returning the f64 value if present.

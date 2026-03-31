@@ -11,6 +11,45 @@ import voices/instruments.sc
 import voices/organic-kit.sc
 import voices/drive-kit.sc
 
+// Mix levels — instruments from instruments.sc
+normalize rhodes 0.3
+normalize tine 0.3
+normalize glass 0.3
+normalize muted_piano 0.3
+normalize vibes 0.3
+normalize pluck_bass 0.3
+normalize fm_bass 0.3
+normalize warm_pad 0.2
+// instruments from organic-kit.sc
+normalize pluck 0.3
+normalize thumb 0.3
+normalize shimmer 0.2
+normalize deep 0.3
+normalize atmos 0.2
+normalize silk 0.2
+// instruments from drive-kit.sc
+normalize supersaw 0.35
+normalize syn_pluck 0.3
+normalize saw_bass 0.3
+normalize massive 0.2
+normalize soft_pad 0.2
+// voices from organic-kit.sc
+normalize dk 0.12
+normalize sn 0.18
+normalize rim 0.15
+normalize ht 0.12
+normalize oht 0.15
+// voices from drive-kit.sc
+normalize kick4 0.12
+normalize clap 0.18
+normalize chh 0.1
+normalize ohh 0.12
+normalize ride 0.12
+normalize impact 0.15
+
+master compress 1.0
+master gain -3
+
 // ============================================================
 // SHARED — the harmonic DNA
 // ============================================================

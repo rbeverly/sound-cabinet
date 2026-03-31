@@ -3,6 +3,29 @@
 
 import voices/instruments.sc
 
+// Mix levels
+normalize rhodes 0.3
+normalize lofi_keys 0.3
+normalize tine 0.3
+normalize glass 0.3
+normalize nylon 0.3
+normalize steel 0.3
+normalize harp 0.3
+normalize pizz 0.3
+normalize marimba 0.3
+normalize vibes 0.3
+normalize kalimba 0.3
+normalize music_box 0.3
+normalize glock 0.3
+normalize sub 0.3
+normalize analog_bass 0.3
+normalize pluck_bass 0.3
+normalize fm_bass 0.3
+normalize warm_pad 0.2
+normalize strings 0.2
+
+master compress 1.0
+
 bpm 90
 humanize 5
 
@@ -58,12 +81,9 @@ pattern pad_demo = 16 beats
   at 8  play 0.15 * strings(G3) >> swell(1.0, 1.0) for 8 beats
 
 // -- Arrangement --
+// Each 16-beat demo plays back-to-back so you hear each family in turn
 
-section demo = 80 beats
-  play keys_demo
-  play pluck_demo
-  play mallet_demo
-  play bass_demo
-  play pad_demo
+section demo
+  sequence keys_demo, pluck_demo, mallet_demo, bass_demo, pad_demo
 
 play demo

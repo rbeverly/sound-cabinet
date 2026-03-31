@@ -13,6 +13,13 @@ fx wide = chorus(0.015, 0.005, 0.3) >> reverb(0.9, 0.6, 0.4)
 
 instrument keys = (0.4 * saw(freq) >> lowpass(freq * 4, 0.7) >> decay(8)) + (1.5 * saw(freq) + 0.3 * saw(freq * 2)) >> lowpass(freq * 1.2, 0.6) >> chorus(0.016, 0.006, 0.1) >> decay(2.5) >> hall
 
+// Mix levels
+normalize keys 0.3
+normalize kick 0.15
+
+master compress 1.0
+master gain -3
+
 // --- Voices (using fx chains) ---
 
 // Warm pad with vibrato and hall reverb

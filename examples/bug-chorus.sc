@@ -37,7 +37,7 @@ voice night_air = 0.02 * noise() >> highpass(2000, 0.5) >> lowpass(7000, 0.4)
 
 bpm 72
 
-// --- Single continuous pattern ---
+// --- Single continuous section ---
 // Each voice spans the entire track as one event so oscillator phases
 // never reset. Staggered swell envelopes create the build-up/fade shape.
 //
@@ -48,16 +48,13 @@ bpm 72
 //  48-80   full: all steady — listen to the shimmer
 //  80-96   fade: staggered fade-out
 
-pattern bug_track = 96 beats
+section main
   // Center: fades in over first 8s, fades out over last 10s
   at 0 play bug_center >> swell(8.0, 10.0) for 96 beats
   // Bright: enters at beat 16, fades in 6s, fades out over last 7s
   at 32 play bug_bright >> swell(6.0, 7.0) for 64 beats
   // Dark: enters at beat 32, fades in 5s, fades out over last 4s (drops first)
   at 64 play bug_dark >> swell(5.0, 4.0) for 32 beats
-
-section main = 96 beats
-  play bug_track
 
 // --- Arrangement ---
 // 96 beats @ 72 BPM ≈ 80s ≈ ~1:20

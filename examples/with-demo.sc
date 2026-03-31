@@ -5,6 +5,10 @@ bpm 120
 
 import voices/instruments.sc
 
+// Mix levels — instruments from instruments.sc
+normalize rhodes 0.3
+normalize kalimba 0.3
+
 // Two styles of kick, snare, and hat
 voice kick_a = (0.7 * sine(A1) + 0.3 * sine(A2) >> decay(30) + 0.15 * (noise() >> lowpass(200, 0.5) >> decay(60))) >> decay(10) >> compress(-12, 4, 0.001, 0.05)
 voice kick_b = 0.6 * sine(G1) >> decay(8) >> distort(1.5)
@@ -15,6 +19,15 @@ voice hat_b = 0.06 * noise() >> bandpass(6000, 2.0) >> decay(25)
 
 // Synth lead
 instrument synth_lead = (0.3 * saw(freq) + 0.2 * pulse(freq, 0.3)) >> lowpass(freq * 4, 0.7) >> decay(6)
+
+// Mix levels — local voices and instruments
+normalize kick_a 0.15
+normalize kick_b 0.15
+normalize snare_a 0.18
+normalize snare_b 0.18
+normalize synth_lead 0.35
+
+master compress 1.0
 
 // A drum pattern using placeholder names
 pattern beat = 4 beats

@@ -4,6 +4,24 @@
 
 import voices/organic-kit.sc
 
+// Mix levels
+normalize pluck 0.1
+normalize thumb 0.3
+normalize shimmer 0.2
+normalize deep 0.2
+normalize atmos 0.2
+normalize silk 0.2
+normalize dk 0.085
+normalize sn 0.07
+normalize rim 0.045
+normalize ht 0.03
+normalize oht 0.06
+normalize hum 0.001866
+normalize air 0.00025
+
+master compress 1.0
+master gain -3
+
 bpm 98
 humanize 6
 
@@ -195,11 +213,13 @@ section wind_down = 32 beats
   play bass_a
   play texture
   play melody_pluck
+  repeat beat_full from 8
 
 // Outro — pads and texture fading
 section outro = 32 beats
   play chords_a
   play texture
+  repeat shakers to 30
 
 // ============================================================
 // ARRANGEMENT
