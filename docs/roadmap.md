@@ -4,97 +4,15 @@
 
 This is the development roadmap for Sound Cabinet, roughly in priority order.
 
-## Section enhancements: positioning, ranges, sequence, and scoping
+## ~~Section enhancements~~ ✅ Implemented
 
-The current section grammar is too rigid -- only `repeat X every N beats` and `play X` (from beat 0). These enhancements make sections a proper arrangement tool.
+Beat ranges (`from`/`to`/`until`), at-positioning, `sequence`, inline events, repeat blocks inside sections, implicit section length, truncation at section boundaries, and `with` at entry level are all implemented. See [Patterns, Sections & Composition](sections-and-patterns.md).
 
-**Beat range for repeat** -- tile a pattern only within a specific range:
+**Still planned**: `sequence` with inline generators (`sequence (pick [a, b] 2 times), breakdown`).
 
-```sc
-section intro = 32 beats
-  repeat clap_funky until 32
-  repeat hats_steady from 8 to 32
-  repeat marimba_wonky every 4 beats from 16
-```
+## ~~Multi-note instrument calls~~ ✅ Implemented
 
-`from` and `to` are independent keywords: use both, either, or neither. `until` is syntactic sugar for `to`. If `every` is omitted, it defaults to the pattern's own duration. The implicit `every` is resolved during expansion (when pattern durations are known), not at parse time.
-
-**Truncation and overflow** -- patterns that extend beyond the section's declared length truncate at the boundary. Playing a 32-beat pattern inside a 16-beat section gives you just the first half:
-
-```sc
-section teaser = 16 beats
-  at 0 play full_melody    // full_melody is 32 beats, but only the first 16 play
-```
-
-**Implicit section length** -- if the beat count is omitted, the section's duration is computed from its contents:
-
-```sc
-section auto_length
-  at 0 play 8beatpattern       // ends at beat 8
-  at 8 play 32beatpattern      // ends at beat 40
-  // section is implicitly 40 beats
-
-// For parsing convenience, "= 0 beats" also signals implicit length:
-section auto_length = 0 beats
-  at 0 play intro
-  at 8 play verse
-```
-
-**At-positioning** -- start a pattern at a specific beat within a section:
-
-```sc
-section verse = 32 beats
-  at 8 play fill_pattern
-  at 16 repeat hats every 1 beat
-```
-
-**Sequence** -- play patterns one after another (sequential, not simultaneous):
-
-```sc
-section verse = 32 beats
-  repeat drums every 8 beats
-  sequence bass_sparse, bass_active    // 16 + 16 = 32, plays back-to-back
-```
-
-`sequence` could evolve to support inline generators:
-
-```sc
-sequence (pick [groove_a, groove_b, groove_c] 2 times), breakdown
-```
-
-**Repeat blocks inside sections** -- allow `repeat N { pick [...] }` and `repeat N { shuffle [...] }` inside sections:
-
-```sc
-section verse = 32 beats
-  repeat drums every 8 beats
-  repeat 4 {
-    pick [groove_a, groove_b]
-  }
-```
-
-**`with` at all scope levels** -- voice substitution inside sections, sequences, and even inline with specific patterns:
-
-```sc
-section evolution = 32 beats
-  repeat bass_line from 0 to 16 with {bass = synth_bass}
-  repeat bass_line from 16 to 32 with {bass = upright_bass}
-```
-
-## Multi-note instrument calls
-
-Allow instruments to accept multiple frequencies, producing a summed chord:
-
-```sc
-// Currently required for instrument chords:
-at 0 play lead(E5) for 1 beat
-at 0 play lead(G5) for 1 beat
-at 0 play lead(B5) for 1 beat
-
-// Proposed: multi-note shorthand
-at 0 play lead(E5, G5, B5) for 1 beat
-```
-
-The engine would instantiate the instrument's signal chain once per frequency, scale each by `1/N`, and sum them.
+`play lead(E5, G5, B5) for 1 beat` — instruments accept multiple frequencies, producing a summed chord scaled by 1/N.
 
 ## Expression ranges
 
@@ -364,9 +282,9 @@ mix bass 0.6, melody 1.0, drums 0.8, pad 0.3
 
 A terminal UI during playback showing scrolling beat position, active voices, level meters, and waveform.
 
-## Contextual error messages
+## ~~Contextual error messages~~ ✅ Partially implemented
 
-Replace raw parser errors with actionable human-readable messages that explain what's wrong and how to fix it.
+Section entry errors now provide actionable hints (e.g., "Can't nest a pattern inside a section — define separately and reference by name"). Reserved built-in name warnings. Further improvements: better errors in pattern bodies, repeat blocks, and top-level scope.
 
 ## Score linting and validation
 

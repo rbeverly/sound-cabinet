@@ -148,6 +148,19 @@ instrument piano = saw(freq) >> lowpass(freq * 4, 0.7) >> decay(8) >> reverb(0.6
 fx hall = reverb(0.8, 0.4, 0.35) >> delay(0.3, 0.2, 0.15)
 ```
 
+### Custom waveforms
+
+```sc
+// Define arbitrary wave shapes — the array is one cycle, played at any frequency
+wave plateau = [0.0, 0.4, 0.8, 1.0, 1.0, 1.0, 0.8, 0.4, 0.0, -0.4, -0.8, -1.0, -1.0, -1.0, -0.8, -0.4]
+wave spike = [0.0, 1.0, 0.3, 0.1, 0.0, -0.1, -0.3, -1.0]
+
+at 0 play 0.3 * plateau(C3) >> lowpass(2000, 0.7) for 4 beats
+at 4 play 0.3 * spike(A4) >> reverb(0.6, 0.4, 0.25) for 4 beats
+```
+
+Fewer points = crunchier (8-bit character). More points = smoother. Asymmetric waves add even harmonics (tube/tape warmth). Custom waves work with instruments, effects, and arp.
+
 ### Schedule playback
 
 ```sc
@@ -173,15 +186,27 @@ pattern drums = 4 beats
   at 2 play kick for 0.5 beats
   at 3 play snare for 0.25 beats
 
-// Sections compose patterns together
+// Sections compose patterns — all entries play simultaneously by default
 section verse = 16 beats
-  repeat drums every 4 beats
-  repeat hats from 8 to 16
-  play melody_line
-  sequence bass_a, bass_b         // plays back-to-back
+  repeat drums every 4 beats              // tile every 4 beats
+  repeat hats from 8 to 16               // tile only in beat range 8-16
+  repeat bass until 12                    // tile from 0 until beat 12
+  play melody_line                        // play once from beat 0
+  play fill from 8                        // play once starting at beat 8
+  sequence bass_a, bass_b                 // play back-to-back (sequential)
+  at 12 play transition for 2 beats       // inline event at specific beat
+  repeat 4 {                              // repeat block with random selection
+    pick [groove_a, groove_b]
+  }
+
+// Implicit section length — computed from contents if omitted
+section auto_length
+  at 0 play intro_8beat
+  at 8 play verse_32beat
 
 // sample() — slice a pattern by beat range
-play sample(melody, 0, 16)            // first 16 beats only
+play sample(melody, 0, 16)               // first 16 beats only
+play sample(melody, 16)                  // beat 16 to end
 repeat sample(drums, 0, 4) every 4 beats
 
 // Sequential play at top level
@@ -190,6 +215,11 @@ play verse
 play chorus
 play verse
 play outro
+
+// Repeat with random selection at top level
+repeat 8 {
+  pick [verse_a:2, verse_b:2, chorus:1]
+}
 ```
 
 ### Tempo changes
