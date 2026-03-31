@@ -187,6 +187,17 @@ fn try_parse_command(line: &str) -> Result<Option<Command>> {
         }
     }
 
+    // Normalize
+    if let Ok(pairs) = ScoreParser::parse(Rule::normalize_stmt, line) {
+        for pair in pairs {
+            let mut inner = pair.into_inner();
+            let name = inner.next().unwrap().as_str().to_string();
+            let target: f64 = inner.next().unwrap().as_str().parse()
+                .map_err(|_| anyhow!("normalize: invalid target level"))?;
+            return Ok(Some(Command::Normalize { name, target }));
+        }
+    }
+
     // Pedal events
     if let Ok(pairs) = ScoreParser::parse(Rule::pedal_down_stmt, line) {
         for pair in pairs {

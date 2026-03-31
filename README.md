@@ -95,6 +95,16 @@ sound-cabinet play examples/demo.sc -v
 # Skip ahead — start playing from beat 140
 sound-cabinet play examples/demo.sc --from 140
 
+# Solo a specific voice (mute everything else)
+sound-cabinet play examples/demo.sc --solo bass
+sound-cabinet play examples/demo.sc --solo bass,melody
+
+# Show live VU meters per voice during playback
+sound-cabinet play examples/demo.sc --vu
+
+# Profile a score — report per-voice levels
+sound-cabinet profile examples/demo.sc
+
 # Watch mode — live reload on file save
 sound-cabinet watch examples/demo.sc
 
@@ -534,6 +544,20 @@ at 0 play piano(Ab3) >> swell(0.0, 0.5) for 4 beats
 
 Instruments compose with everything: pipe into `fx` chains, use with `swell`, and arp uses `substitute_var` so filter tracking is preserved across all arpeggiated notes.
 
+#### Volume normalization
+
+Different instruments produce different output levels depending on their synthesis chain. `normalize` levels them to a consistent volume:
+
+```
+instrument bass = sine(freq) >> lowpass(freq * 3, 0.5) >> decay(12)
+instrument piano = saw(freq) >> lowpass(freq * 4, 0.7) >> decay(8)
+
+normalize bass 0.5
+normalize piano 0.5
+```
+
+The target is on a 0.0-1.0 scale where 1.0 = full scale (0 dBFS) and 0.5 = comfortable level (-6 dB). The engine renders short test tones at multiple frequencies (C2 through C6) through the instrument, measures the average RMS, and applies a gain correction. After normalization, `bass` and `piano` produce comparable output regardless of their synthesis chains.
+
 ### Chords
 
 `chord(name)` generates a summed set of saw oscillators for a named chord. Use it anywhere you'd use an oscillator:
@@ -682,6 +706,28 @@ pedal up at 8.0                      // both notes released
 
 Notes that end while the pedal is down have their duration extended to the pedal-up point. The MIDI converter (`midi2sc.py`) automatically translates CC64 pedal events into `pedal down/up` instructions.
 
+#### Voice-scoped pedal
+
+By default, `pedal down` sustains *all* voices. Use a voice name to scope it:
+
+```
+// Only sustain the piano — drums, bass, etc. are unaffected
+pedal down piano at 4.0
+pedal up piano at 8.0
+
+// Sustain multiple specific voices
+pedal down [piano, strings] at 4.0
+pedal up [piano, strings] at 8.0
+```
+
+This works with `with` substitutions too. If you have `with lead_piano = piano, rhythm_piano = piano`, you can pedal them independently:
+
+```
+pedal down lead_piano at 4.0
+pedal up lead_piano at 8.0
+// rhythm_piano is not affected
+```
+
 ### Swing & Humanize
 
 Timing transforms that make patterns feel human. Swing shifts offbeat events (eighth-note positions like 0.5, 1.5, 2.5) later within each beat. Humanize adds random timing jitter.
@@ -806,6 +852,146 @@ The `examples/` directory includes several complete compositions:
 
 Voice kits in `examples/voices/` define reusable instrument sets that compositions import. The **default instrument library** (`voices/instruments.sc`) includes 20+ instruments across 5 families (keys, plucked strings, pads, bass, mallets) plus texture voices (vinyl crackle, tape hiss, room tone) and effect chains (lofi, hall, radio).
 
+## Mixing & Diagnostics
+
+### Profile a score
+
+`profile` renders your score and reports per-voice levels so you can spot balance issues without guessing:
+
+```bash
+sound-cabinet profile song.sc
+```
+
+```
+  Voice                       RMS       Peak   Relative  Status
+  ─────                       ───       ────   ────────  ──────
+  kick                   -17.2 dB    -3.4 dB    +0.0 dB  Loudest
+  hat                    -19.3 dB    -1.8 dB    -2.1 dB  Loudest
+  bass                   -52.1 dB   -38.0 dB   -35.0 dB  INAUDIBLE
+  mel                    -33.2 dB   -15.5 dB   -16.0 dB  Quiet
+```
+
+If a voice is marked INAUDIBLE, it's effectively not in the mix — don't spend time tweaking its sound until you fix its level. The "Relative" column shows how far each voice is from the loudest, which is the most useful number for mixing decisions.
+
+`render` also prints a voice level summary automatically after every render.
+
+### Solo a voice
+
+Mute everything except one voice (or a few) to hear it in isolation:
+
+```bash
+sound-cabinet play song.sc --solo bass
+sound-cabinet play song.sc --solo bass,melody
+sound-cabinet render song.sc -o bass-check.wav --solo bass
+```
+
+### Live VU meters
+
+Show real-time per-voice level bars during playback:
+
+```bash
+sound-cabinet play song.sc --vu
+```
+
+Voices flagged as `(quiet)` or `(clip!)` in the meter display need attention.
+
+## Common Mistakes
+
+### Nesting patterns inside patterns
+
+Patterns cannot contain other patterns or sections. A pattern is a flat list of `at ... play ... for ...` events:
+
+```
+// WRONG — won't work:
+pattern verse = 8 beats
+  pattern melody = 4 beats       // nesting not supported
+    at 0 play piano(C4) for 1 beat
+
+// RIGHT — define patterns separately, compose with sections:
+pattern melody = 4 beats
+  at 0 play piano(C4) for 1 beat
+  at 1 play piano(E4) for 1 beat
+
+pattern chords = 4 beats
+  at 0 play pad for 4 beats
+
+section verse = 8 beats
+  repeat melody every 4 beats
+  repeat chords every 4 beats
+```
+
+The rule: **patterns define events, sections compose patterns**. If you need patterns to play together or in sequence, use a section.
+
+### Playing patterns in alternation
+
+If you want pattern A for 4 beats, then pattern B for 4 beats, then A again:
+
+```
+// WRONG — this plays them simultaneously (both start at beat 0 of the section):
+section broken = 16 beats
+  play pattern_a
+  play pattern_b
+
+// RIGHT — use repeat with offsets, or sequential play at top level:
+// Option 1: top-level sequential play
+play pattern_a
+play pattern_b
+play pattern_a
+play pattern_b
+
+// Option 2: explicit section with tiled patterns
+section alternating = 16 beats
+  repeat pattern_a every 8 beats            // plays at beats 0 and 8
+  repeat pattern_b every 8 beats            // also plays at beats 0 and 8 — still wrong!
+
+// Option 3: use pick for random alternation in a repeat block
+repeat 4 {
+  pick [pattern_a, pattern_b]
+}
+```
+
+For truly alternating patterns, the simplest approach is sequential `play` at the top level. Each `play` advances the cursor automatically.
+
+### Inaudible voices (the "why can't I hear my bass?" problem)
+
+If a voice's gain multiplier is too low, it's effectively silent. In Sound Cabinet, gain is linear — the difference between `* 0.5` and `* 0.01` is much larger than it looks:
+
+| Linear gain | dB level | Perception |
+|-------------|----------|------------|
+| `* 1.0` | 0 dB | Full volume |
+| `* 0.5` | -6 dB | Noticeably quieter |
+| `* 0.25` | -12 dB | Half as loud (perceived) |
+| `* 0.1` | -20 dB | Quiet |
+| `* 0.01` | -40 dB | Nearly inaudible |
+| `* 0.001` | -60 dB | Silent for practical purposes |
+
+Use `sound-cabinet profile song.sc` to check. If a voice shows up as INAUDIBLE, raise its gain. Or use `normalize` to auto-level instruments to a consistent volume.
+
+### Forgetting that `with` is not `play`
+
+`with` sets up voice substitution for subsequent plays — it doesn't play anything:
+
+```
+// WRONG — this defines substitutions but never plays:
+with kick = 808_kick, snare = clap
+
+// RIGHT — with followed by play:
+with kick = 808_kick, snare = clap
+play drums_pattern
+```
+
+### Effects without a source
+
+Effects need a signal to process. Putting an effect first produces silence:
+
+```
+// WRONG:
+at 0 play reverb(0.8, 0.4, 0.3) for 4 beats      // reverb of... nothing
+
+// RIGHT:
+at 0 play saw(C3) >> reverb(0.8, 0.4, 0.3) for 4 beats
+```
+
 ## Master Bus
 
 Every render passes through an automatic master bus chain:
@@ -829,6 +1015,7 @@ master compress 0                  // off — bypass compressor entirely
 master compress -18 2              // explicit threshold (dB) and ratio
 master compress -18 2 0.05 0.2     // threshold, ratio, attack (s), release (s)
 master ceiling -1.0                // set limiter ceiling to -1.0 dBFS (default: -0.3)
+master gain -6                     // reduce overall level by 6 dB (useful for dense mixes)
 ```
 
 Or from the CLI (overrides score settings):

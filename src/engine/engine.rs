@@ -60,6 +60,51 @@ pub struct Engine {
     pub verbose: bool,
     /// Bus envelopes for sidechain compression (bus_name -> current envelope level).
     bus_envelopes: HashMap<String, f32>,
+    /// Per-voice level tracking: voice_label -> (sum_of_squares, peak, sample_count).
+    /// Accumulated across the entire render for the profile/summary feature.
+    voice_levels: HashMap<String, VoiceLevelStats>,
+    /// Names of voices to solo (empty = play all).
+    solo_voices: Vec<String>,
+}
+
+/// Accumulated level statistics for a single voice.
+#[derive(Debug, Clone)]
+pub struct VoiceLevelStats {
+    pub sum_sq: f64,
+    pub peak: f32,
+    pub sample_count: u64,
+}
+
+impl VoiceLevelStats {
+    fn new() -> Self {
+        VoiceLevelStats {
+            sum_sq: 0.0,
+            peak: 0.0,
+            sample_count: 0,
+        }
+    }
+
+    /// RMS level in dBFS.
+    pub fn rms_db(&self) -> f64 {
+        if self.sample_count == 0 {
+            return -100.0;
+        }
+        let rms = (self.sum_sq / self.sample_count as f64).sqrt();
+        if rms > 0.0 {
+            20.0 * rms.log10()
+        } else {
+            -100.0
+        }
+    }
+
+    /// Peak level in dBFS.
+    pub fn peak_db(&self) -> f64 {
+        if self.peak > 0.0 {
+            20.0 * (self.peak as f64).log10()
+        } else {
+            -100.0
+        }
+    }
 }
 
 impl Engine {
@@ -78,7 +123,29 @@ impl Engine {
             master_bus: MasterBus::new(sample_rate),
             verbose: false,
             bus_envelopes: HashMap::new(),
+            voice_levels: HashMap::new(),
+            solo_voices: Vec::new(),
         }
+    }
+
+    /// Set solo mode: only play events matching these voice labels.
+    /// Pass an empty vec to disable solo (play everything).
+    pub fn set_solo(&mut self, voices: Vec<String>) {
+        if !voices.is_empty() {
+            // Remove events that don't match the solo filter
+            self.schedule.retain(|e| {
+                e.voice_label
+                    .as_ref()
+                    .map(|l| voices.iter().any(|v| v == l))
+                    .unwrap_or(false)
+            });
+        }
+        self.solo_voices = voices;
+    }
+
+    /// Get accumulated per-voice level statistics.
+    pub fn voice_levels(&self) -> &HashMap<String, VoiceLevelStats> {
+        &self.voice_levels
     }
 
     /// Process a parsed command.
@@ -173,6 +240,9 @@ impl Engine {
             }
             Command::MasterGain(db) => {
                 self.master_bus.set_gain(db as f32);
+            }
+            Command::Normalize { name, target } => {
+                self.normalize_instrument(&name, target)?;
             }
             // Swing/humanize/with are consumed by the expander — ignore if they reach engine
             Command::SetSwing(_) | Command::SetHumanize(_) | Command::SetWith(_) => {}
@@ -414,6 +484,19 @@ impl Engine {
                 let sample = out * anti_click * swell_env * release_env * event.gain * sc_gain;
                 buffer[i] += sample;
 
+                // Track per-voice level stats
+                if let Some(ref label) = event.voice_label {
+                    let stats = self.voice_levels
+                        .entry(label.clone())
+                        .or_insert_with(VoiceLevelStats::new);
+                    stats.sum_sq += (sample as f64) * (sample as f64);
+                    let abs = sample.abs();
+                    if abs > stats.peak {
+                        stats.peak = abs;
+                    }
+                    stats.sample_count += 1;
+                }
+
                 // Track bus peak level
                 if let Some(ref bus) = event.bus_name {
                     let abs = sample.abs();
@@ -483,6 +566,98 @@ impl Engine {
     /// Set limiter ceiling in dBFS (e.g., -0.3, -1.0).
     pub fn set_master_ceiling(&mut self, db: f32) {
         self.master_bus.set_ceiling(db, self.sample_rate);
+    }
+
+    /// Normalize an instrument to a target level (0.0-1.0 scale).
+    /// Renders short test tones at multiple frequencies through the instrument,
+    /// measures the average RMS, and stores a correction gain so future notes
+    /// through this instrument produce output at the target level.
+    fn normalize_instrument(&mut self, name: &str, target: f64) -> anyhow::Result<()> {
+        use crate::engine::graph::{build_graph, substitute_var};
+
+        // Look up the instrument definition
+        let expr = self.voices.get(name)
+            .ok_or_else(|| anyhow::anyhow!("normalize: unknown voice/instrument '{name}'"))?
+            .clone();
+
+        let kind = self.voice_kinds.get(name).copied();
+        let is_instrument = kind == Some(DefKind::Instrument);
+
+        // Test frequencies across the musical range
+        let test_freqs: &[f64] = if is_instrument {
+            &[65.41, 130.81, 261.63, 523.25, 1046.50] // C2, C3, C4, C5, C6
+        } else {
+            &[261.63] // Voices are fixed — just test once
+        };
+
+        let test_duration = 0.25; // seconds per test tone
+        let test_samples = (test_duration * self.sample_rate) as usize;
+        let mut total_sum_sq = 0.0_f64;
+        let mut total_count = 0u64;
+
+        for &freq in test_freqs {
+            // For instruments, substitute freq variable
+            let test_expr = if is_instrument {
+                substitute_var(&expr, "freq", freq)
+            } else {
+                expr.clone()
+            };
+
+            // Build the DSP graph
+            let mut net = match build_graph(
+                &test_expr,
+                &self.voices,
+                &self.wavetables,
+                self.sample_rate,
+                Some(test_duration),
+            ) {
+                Ok(n) => n,
+                Err(_) => continue, // skip frequencies that fail to build
+            };
+            net.set_sample_rate(self.sample_rate);
+            net.allocate();
+
+            // Render test samples
+            for _ in 0..test_samples {
+                let out = net.get_mono();
+                if out.is_finite() {
+                    total_sum_sq += (out as f64) * (out as f64);
+                    total_count += 1;
+                }
+            }
+        }
+
+        if total_count == 0 {
+            eprintln!("  normalize {name}: no valid output — skipping");
+            return Ok(());
+        }
+
+        let measured_rms = (total_sum_sq / total_count as f64).sqrt();
+        if measured_rms < 1e-10 {
+            eprintln!("  normalize {name}: instrument is silent — skipping");
+            return Ok(());
+        }
+
+        // Target RMS: the target level (0.0-1.0) maps to linear amplitude.
+        // 1.0 = 0 dBFS, 0.5 = -6 dB, 0.25 = -12 dB, etc.
+        let target_rms = target.max(0.001).min(1.0);
+        let correction = target_rms / measured_rms;
+
+        // Apply correction: wrap the instrument's expression in a gain multiplier
+        let corrected = Expr::Mul(
+            Box::new(expr),
+            Box::new(Expr::Number(correction)),
+        );
+        self.voices.insert(name.to_string(), corrected);
+
+        let measured_db = if measured_rms > 0.0 { 20.0 * measured_rms.log10() } else { -100.0 };
+        let target_db = 20.0 * target_rms.log10();
+        let correction_db = 20.0 * correction.log10();
+        eprintln!(
+            "  normalize {name}: measured {measured_db:.1} dB, target {target_db:.1} dB, correction {correction_db:+.1} dB"
+        );
+
+        Ok(())
     }
 
     /// Flush the master bus limiter lookahead buffer.

@@ -2,7 +2,7 @@ WHITESPACE = _{ " " | "\t" }
 COMMENT    = _{ "//" ~ (!NEWLINE ~ ANY)* }
 
 script = { SOI ~ (line ~ NEWLINE)* ~ line? ~ EOI }
-line   = { voice_def | fx_def | instrument_def | wave_def | master_stmt | pedal_down_stmt | pedal_up_stmt | swing_stmt | humanize_stmt | with_stmt | bpm_stmt | at_stmt | import_stmt | play_stmt | empty_line }
+line   = { voice_def | fx_def | instrument_def | wave_def | normalize_stmt | master_stmt | pedal_down_stmt | pedal_up_stmt | swing_stmt | humanize_stmt | with_stmt | bpm_stmt | at_stmt | import_stmt | play_stmt | empty_line }
 
 // Top-level voice binding defaults: with kick = analog_kick, snare = tight_snare
 with_stmt = { "with" ~ mapping ~ ("," ~ mapping)* }
@@ -19,6 +19,9 @@ instrument_def = { "instrument" ~ ident ~ "=" ~ expr }
 
 // Wavetable definitions: wave name = [0.0, 0.3, 0.8, 1.0, -0.5, -1.0, 0.0]
 wave_def = { "wave" ~ ident ~ "=" ~ "[" ~ number ~ ("," ~ number)* ~ "]" }
+
+// Normalize instrument volume: normalize bass 0.5
+normalize_stmt = { "normalize" ~ ident ~ number }
 
 // Master bus control: master compress 0.5, master ceiling -1.0, master gain -6
 master_stmt = { "master" ~ (master_compress | master_ceiling | master_gain) }

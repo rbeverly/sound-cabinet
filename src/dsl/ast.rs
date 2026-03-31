@@ -130,6 +130,11 @@ pub enum Command {
     PedalDown { beat: f64, voices: Vec<String> },
     /// Sustain pedal up: `pedal up at 4.0` or `pedal up piano at 4.0`
     PedalUp { beat: f64, voices: Vec<String> },
+    /// Normalize an instrument's volume: `normalize bass 0.5`
+    /// The engine renders test tones through the instrument at multiple frequencies,
+    /// measures average RMS, and applies a correction gain so the instrument
+    /// produces output at the target level (0.0-1.0 scale, where 1.0 = 0 dBFS).
+    Normalize { name: String, target: f64 },
     /// Set swing amount: `swing 0.6` (0.5 = straight, 0.67 = triplet feel)
     SetSwing(f64),
     /// Set humanize jitter: `humanize 10` (±ms random timing offset)

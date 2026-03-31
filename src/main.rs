@@ -30,6 +30,7 @@ fn main() -> Result<()> {
         "piano" => cmd_piano(&args[2..])?,
         "stream" => cmd_stream()?,
         "generate" => cmd_generate(&args[2..])?,
+        "profile" => cmd_profile(&args[2..])?,
         "export" => cmd_export(&args[2..])?,
         _ => {
             print_usage();
@@ -47,10 +48,128 @@ fn print_usage() {
     eprintln!("  sound-cabinet watch <score.sc>   (live reload on file save)");
     eprintln!("  sound-cabinet piano <score.sc>   (play with keyboard)");
     eprintln!("  sound-cabinet stream              (reads from stdin)");
+    eprintln!("  sound-cabinet profile <score.sc>    (analyze per-voice levels)");
     eprintln!("  sound-cabinet generate --pattern <file.yaml> --key <K> --mode <M> --chords \"...\"");
     eprintln!("                        --voice <name> [--range C2-G3] [--variations 5] [--seed 42] [-o out.sc]");
     eprintln!("  sound-cabinet export <score.sc> -o out.ly [--voice piano] [--source verse_a]");
     eprintln!("                        [--format pdf] [--time 4/4] [--key Am] [--from 0 --to 32]");
+}
+
+/// Print per-voice level summary from engine stats.
+fn print_voice_levels(engine: &sound_cabinet::engine::Engine) {
+    let levels = engine.voice_levels();
+    if levels.is_empty() {
+        return;
+    }
+
+    // Sort by RMS level descending (loudest first)
+    let mut entries: Vec<_> = levels.iter().collect();
+    entries.sort_by(|a, b| b.1.rms_db().partial_cmp(&a.1.rms_db()).unwrap());
+
+    eprintln!();
+    eprintln!("  {:<20} {:>10} {:>10}  {}", "Voice", "RMS", "Peak", "Status");
+    eprintln!("  {:<20} {:>10} {:>10}  {}", "─────", "───", "────", "──────");
+
+    for (name, stats) in &entries {
+        let rms = stats.rms_db();
+        let peak = stats.peak_db();
+
+        let status = if rms < -60.0 {
+            "INAUDIBLE"
+        } else if rms < -40.0 {
+            "Very quiet"
+        } else if rms < -24.0 {
+            "Quiet"
+        } else if peak > -1.0 {
+            "Dominant"
+        } else {
+            "OK"
+        };
+
+        eprintln!(
+            "  {:<20} {:>7.1} dB {:>7.1} dB  {}",
+            name, rms, peak, status
+        );
+    }
+    eprintln!();
+}
+
+/// Profile a score: render each voice in isolation and report levels.
+fn cmd_profile(args: &[String]) -> Result<()> {
+    if args.is_empty() {
+        return Err(anyhow!("Usage: sound-cabinet profile <score.sc>"));
+    }
+
+    let score_path = args.iter()
+        .find(|a| !a.starts_with('-'))
+        .ok_or_else(|| anyhow!("Usage: sound-cabinet profile <score.sc>"))?;
+
+    eprintln!("Profiling {}...", score_path);
+
+    // First, do a full render to get combined levels
+    let mut engine = build_engine(score_path)?;
+
+    // Render all samples (discard audio, just accumulate stats)
+    let mut buffer = vec![0.0f32; 1024];
+    while !engine.is_finished() {
+        buffer.fill(0.0);
+        engine.render_samples(&mut buffer);
+    }
+    let _ = engine.flush_master();
+
+    let levels = engine.voice_levels();
+    if levels.is_empty() {
+        eprintln!("No voiced events found in the score.");
+        return Ok(());
+    }
+
+    // Sort by RMS level descending
+    let mut entries: Vec<_> = levels.iter().collect();
+    entries.sort_by(|a, b| b.1.rms_db().partial_cmp(&a.1.rms_db()).unwrap());
+
+    // Find the loudest voice for relative comparison
+    let max_rms = entries.first().map(|(_, s)| s.rms_db()).unwrap_or(-100.0);
+
+    eprintln!();
+    eprintln!("  {:<20} {:>10} {:>10} {:>10}  {}", "Voice", "RMS", "Peak", "Relative", "Status");
+    eprintln!("  {:<20} {:>10} {:>10} {:>10}  {}", "─────", "───", "────", "────────", "──────");
+
+    for (name, stats) in &entries {
+        let rms = stats.rms_db();
+        let peak = stats.peak_db();
+        let relative = rms - max_rms;
+
+        let status = if rms < -60.0 {
+            "INAUDIBLE — probably can't hear this"
+        } else if rms < -40.0 {
+            "Very quiet — likely masked by louder voices"
+        } else if rms < -24.0 {
+            "Quiet"
+        } else if peak > -1.0 {
+            "Dominant — may clip"
+        } else if relative > -3.0 {
+            "Loudest"
+        } else {
+            "OK"
+        };
+
+        eprintln!(
+            "  {:<20} {:>7.1} dB {:>7.1} dB {:>+7.1} dB  {}",
+            name, rms, peak, relative, status
+        );
+    }
+
+    // Check for large gaps between loudest and quietest
+    let min_rms = entries.last().map(|(_, s)| s.rms_db()).unwrap_or(-100.0);
+    let gap = max_rms - min_rms;
+    if gap > 30.0 && min_rms > -100.0 {
+        eprintln!();
+        eprintln!("  Warning: {:.0} dB gap between loudest and quietest voice.", gap);
+        eprintln!("  The quietest voices are likely inaudible in the mix.");
+    }
+
+    eprintln!();
+    Ok(())
 }
 
 /// Parse a `--flag <value>` pair from args, returning the f64 value if present.
@@ -273,6 +392,10 @@ fn cmd_render(args: &[String]) -> Result<()> {
                     })?);
                 }
             }
+            "--solo" => {
+                // handled below
+                i += 1;
+            }
             _ => {
                 if score_path.is_none() {
                     score_path = Some(&args[i]);
@@ -287,6 +410,12 @@ fn cmd_render(args: &[String]) -> Result<()> {
     let output_path = output_path.ok_or_else(|| anyhow!(usage))?;
 
     let mut engine = build_engine(score_path)?;
+    // Apply solo filter
+    if let Some(voice) = parse_flag_str(args, "--solo") {
+        let voices: Vec<String> = voice.split(',').map(|s| s.trim().to_string()).collect();
+        eprintln!("Solo: {}", voices.join(", "));
+        engine.set_solo(voices);
+    }
     // CLI overrides for master bus
     if let Some(params) = compress {
         match params.len() {
@@ -300,6 +429,7 @@ fn cmd_render(args: &[String]) -> Result<()> {
         engine.set_master_ceiling(db);
     }
     render_to_wav(&mut engine, &output_path, target_lufs)?;
+    print_voice_levels(&engine);
     eprintln!("Rendered to {}", output_path.display());
 
     Ok(())
@@ -308,23 +438,34 @@ fn cmd_render(args: &[String]) -> Result<()> {
 /// Play a score file through speakers.
 fn cmd_play(args: &[String]) -> Result<()> {
     if args.is_empty() {
-        return Err(anyhow!("Usage: sound-cabinet play <score.sc> [-v] [--from <beat>]"));
+        return Err(anyhow!("Usage: sound-cabinet play <score.sc> [-v] [--from <beat>] [--solo <voice>]"));
     }
 
     let verbose = args.iter().any(|a| a == "-v" || a == "--verbose");
+    let show_vu = args.iter().any(|a| a == "--vu" || a == "--meters");
     let from_beat = parse_flag_f64(args, "--from")?;
+    let solo = parse_flag_str(args, "--solo");
     let score_path = args.iter()
         .find(|a| !a.starts_with('-') && !is_flag_value(args, a))
-        .ok_or_else(|| anyhow!("Usage: sound-cabinet play <score.sc> [-v] [--from <beat>]"))?;
+        .ok_or_else(|| anyhow!("Usage: sound-cabinet play <score.sc> [-v] [--vu] [--from <beat>] [--solo <voice>]"))?;
 
     let mut engine = build_engine(score_path)?;
     engine.verbose = verbose;
+    if let Some(voice) = solo {
+        let voices: Vec<String> = voice.split(',').map(|s| s.trim().to_string()).collect();
+        eprintln!("Solo: {}", voices.join(", "));
+        engine.set_solo(voices);
+    }
     if let Some(beat) = from_beat {
         engine.skip_to_beat(beat);
         eprintln!("Skipping to beat {beat}...");
     }
     eprintln!("Playing{}... (Ctrl+C to stop)", if verbose { " (verbose)" } else { "" });
-    realtime::play_realtime(engine)?;
+    if show_vu {
+        realtime::play_realtime_vu(engine)?;
+    } else {
+        realtime::play_realtime(engine)?;
+    }
 
     Ok(())
 }
