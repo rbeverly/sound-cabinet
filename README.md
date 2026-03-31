@@ -105,9 +105,11 @@ sound-cabinet play song.sc --solo bass,melody
 sound-cabinet play song.sc --vu
 
 # Profile per-voice levels
-
-# Profile per-voice levels
 sound-cabinet profile song.sc
+
+# Freeze — expand all randomness into flat .sc
+sound-cabinet freeze song.sc
+sound-cabinet freeze song.sc --seed 42 -o frozen.sc
 
 # Watch mode — live reload on file save
 sound-cabinet watch song.sc
@@ -154,8 +156,11 @@ at 0 play pad for 4 beats
 at 0 play piano(C4) for 2 beats
 at 2 play piano(E4) for 2 beats
 
-// Or use note names anywhere: A4 = 440 Hz, C4 = middle C, Bb3 = B-flat 3
+// Note names: A4 = 440 Hz, C4 = middle C, Bb3 = B-flat 3
 at 0 play piano(Bb3) >> hall for 4 beats
+
+// Multi-note instrument calls — play chords through any instrument
+at 0 play piano(C4, E4, G4) for 2 beats
 ```
 
 ### Patterns and sections
@@ -174,6 +179,10 @@ section verse = 16 beats
   repeat hats from 8 to 16
   play melody_line
   sequence bass_a, bass_b         // plays back-to-back
+
+// sample() — slice a pattern by beat range
+play sample(melody, 0, 16)            // first 16 beats only
+repeat sample(drums, 0, 4) every 4 beats
 
 // Sequential play at top level
 play intro
@@ -209,6 +218,15 @@ play drums   // uses substituted voices
 ```sc
 voice pluck = 0.3 * saw(0) >> lowpass(2000, 0.8) >> decay(10)
 at 0 play pluck >> arp(Cm7, 4, updown, gate, 0.5) for 8 beats
+```
+
+### Sustain pedal
+
+```sc
+pedal down at 4.0                      // sustain all voices
+pedal down piano at 4.0                // sustain only piano
+pedal down [piano, strings] at 4.0     // sustain multiple voices
+pedal up piano at 8.0
 ```
 
 ### Mixing

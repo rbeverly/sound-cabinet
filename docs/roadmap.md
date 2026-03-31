@@ -439,13 +439,9 @@ Playback speed manipulation for transitions and sound design:
 at 32 play melody >> tape_stop(2.0) for 2 beats
 ```
 
-## Freeze / flatten randomization
+## ~~Freeze / flatten randomization~~ ✅ Implemented
 
-Export a deterministic, fully-expanded version of a score with all randomness resolved:
-
-```bash
-sound-cabinet freeze song.sc -o frozen-v1.sc --seed 42
-```
+The `freeze` command is implemented: `sound-cabinet freeze song.sc -o frozen.sc --seed 42`
 
 ## Loop recording / overdub
 

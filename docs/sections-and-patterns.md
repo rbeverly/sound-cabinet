@@ -106,6 +106,28 @@ section verse = 32 beats
   sequence bass_sparse, bass_active    // 16 + 16 = 32, plays back-to-back
 ```
 
+### Pattern Slicing with sample()
+
+`sample(pattern, start, end)` extracts a beat range from a pattern, creating an anonymous sub-pattern. Works anywhere a pattern name works:
+
+```sc
+// Play only the first 16 beats of a 32-beat melody
+play sample(melody, 0, 16)
+
+// Play from beat 16 to end
+play sample(melody, 16)
+
+// Slice in sections
+section intro = 16 beats
+  repeat sample(drums, 0, 4) every 4 beats
+  play sample(full_melody, 0, 16)
+
+// Slice in sequences
+sequence sample(melody, 0, 16), sample(melody, 16, 32)
+```
+
+This is useful for introducing material gradually (play the first half of a melody in the intro, the full melody in the verse), or for creating variations by rearranging slices.
+
 ### Repeat Blocks Inside Sections
 
 Use `repeat N { pick [...] }` and `repeat N { shuffle [...] }` inside sections, not just at the top level:

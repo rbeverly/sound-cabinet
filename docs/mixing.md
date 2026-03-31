@@ -62,6 +62,30 @@ The display uses color coding to indicate level:
 
 Peak hold markers show the highest level reached, with gradual decay so you can see transient peaks.
 
+## Freeze — Expand and Inspect
+
+The `freeze` command expands all patterns, sections, pick/shuffle, humanize, and swing into a flat list of absolute `PlayAt` events. Useful for debugging timing issues and seeing exactly what the engine will play:
+
+```bash
+# Print expanded score to terminal
+sound-cabinet freeze song.sc
+
+# Save to file with deterministic seed
+sound-cabinet freeze song.sc --seed 42 -o frozen.sc
+
+# Generate multiple variations
+sound-cabinet freeze song.sc --seed 99 -o variation2.sc
+```
+
+Each event includes comments showing its source pattern and voice label:
+
+```sc
+at 8 play kick for 0.5 beats  // beat, voice:kick
+at 0 play warm_pad >> swell(2, 2) for 8 beats  // pad_bed, voice:warm_pad
+```
+
+The frozen output is valid `.sc` — you can `sound-cabinet play frozen.sc` and it sounds identical to the original.
+
 ## Voice Level Summary on Render
 
 Every `render` command automatically prints a per-voice level summary after completing. This gives the same information as `profile` without a separate command.
