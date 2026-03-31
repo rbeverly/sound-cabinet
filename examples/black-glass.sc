@@ -12,12 +12,12 @@ normalize deep 0.2
 normalize atmos 0.2
 normalize silk 0.2
 normalize dk 0.085
-normalize sn 0.07
-normalize rim 0.045
+normalize sn 0.035
+normalize rim 0.025
 normalize ht 0.03
 normalize oht 0.06
 normalize hum 0.001866
-normalize air 0.00025
+normalize air 0.00033
 
 master compress 1.0
 master gain -3
@@ -217,9 +217,11 @@ section wind_down = 32 beats
 
 // Outro — pads and texture fading
 section outro = 32 beats
-  play chords_a
-  play texture
-  repeat shakers to 30
+  repeat chords_a until 24
+  repeat texture until 30
+  repeat silk_wash
+  //repeat melody_thumb to 24
+  //repeat beat_sparse to 24
 
 // ============================================================
 // ARRANGEMENT

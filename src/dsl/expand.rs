@@ -83,6 +83,25 @@ fn entry_with_map(entry: &SectionEntry) -> Option<&WithMap> {
     }
 }
 
+/// Truncate a PlayAt event's duration to not exceed a boundary beat.
+/// Non-PlayAt commands pass through unchanged.
+fn truncate_to_boundary(cmd: Command, abs_end: f64) -> Command {
+    if abs_end <= 0.0 {
+        return cmd; // no boundary (implicit length sections)
+    }
+    if let Command::PlayAt { beat, expr, duration_beats, source, voice_label } = cmd {
+        if beat >= abs_end {
+            // Event starts past boundary — make it zero-length (will be inaudible)
+            Command::PlayAt { beat, expr, duration_beats: 0.0, source, voice_label }
+        } else {
+            let clipped = duration_beats.min(abs_end - beat);
+            Command::PlayAt { beat, expr, duration_beats: clipped, source, voice_label }
+        }
+    } else {
+        cmd
+    }
+}
+
 /// Resolve the effective with_map for a section entry.
 fn resolve_entry_with(section_with: &WithMap, entry_with: Option<&WithMap>) -> WithMap {
     if let Some(ew) = entry_with {
@@ -263,10 +282,13 @@ impl ExpansionContext {
                     let every = every_beats.unwrap_or_else(|| self.duration_of_ref(pattern).unwrap_or(4.0));
                     let start = from_beat.unwrap_or(0.0);
                     let end = to_beat.unwrap_or(section_duration);
+                    let abs_end = base_beat + end;
                     let mut beat = start;
                     while beat < end {
                         let cmds = self.expand_pattern_ref(pattern, base_beat + beat, global_swing, global_humanize, bpm, &resolved_with, rng)?;
-                        output.extend(cmds);
+                        for cmd in cmds {
+                            output.push(truncate_to_boundary(cmd, abs_end));
+                        }
                         beat += every;
                     }
                 }
@@ -274,20 +296,30 @@ impl ExpansionContext {
                     // Play starts at the section's base beat (simultaneous with other entries).
                     // Use `sequence` for back-to-back sequential playback.
                     let cmds = self.expand_pattern_ref(pattern, base_beat, global_swing, global_humanize, bpm, &resolved_with, rng)?;
-                    output.extend(cmds);
+                    // Truncate events to section boundary
+                    let abs_end = base_beat + section_duration;
+                    for cmd in cmds {
+                        output.push(truncate_to_boundary(cmd, abs_end));
+                    }
                 }
                 SectionEntry::AtPlay { beat, pattern, .. } => {
                     let cmds = self.expand_pattern_ref(pattern, base_beat + beat, global_swing, global_humanize, bpm, &resolved_with, rng)?;
-                    output.extend(cmds);
+                    let abs_end = base_beat + section_duration;
+                    for cmd in cmds {
+                        output.push(truncate_to_boundary(cmd, abs_end));
+                    }
                 }
                 SectionEntry::AtRepeat { beat, pattern, every_beats, from_beat, to_beat, .. } => {
                     let every = every_beats.unwrap_or_else(|| self.duration_of_ref(pattern).unwrap_or(4.0));
                     let start = from_beat.unwrap_or(*beat);
                     let end = to_beat.unwrap_or(section_duration);
+                    let abs_end = base_beat + end;
                     let mut b = start;
                     while b < end {
                         let cmds = self.expand_pattern_ref(pattern, base_beat + b, global_swing, global_humanize, bpm, &resolved_with, rng)?;
-                        output.extend(cmds);
+                        for cmd in cmds {
+                            output.push(truncate_to_boundary(cmd, abs_end));
+                        }
                         b += every;
                     }
                 }
