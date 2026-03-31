@@ -1,5 +1,8 @@
 # Build artifacts
 /target
+/target-*
+/sound-cabinet
+/.cargo/config.toml
 
 # Object files / shared libraries
 *.o
