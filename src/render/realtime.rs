@@ -78,48 +78,88 @@ fn play_realtime_inner(engine: Engine, show_vu: bool) -> Result<()> {
 
     stream.play()?;
 
+    if show_vu {
+        eprintln!(); // blank line separator after "Playing..."
+    }
+
     // Track number of VU lines printed for terminal cleanup
     let mut vu_lines: usize = 0;
 
     // Wait until the engine finishes
     loop {
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::thread::sleep(std::time::Duration::from_millis(50));
         let eng = engine.lock().unwrap();
 
         if show_vu {
-            // Clear previous VU meter lines
-            if vu_lines > 0 {
+            let vu_meters = eng.voice_vu();
+            if !vu_meters.is_empty() {
+                // Clear previous VU meter lines by moving cursor up
                 for _ in 0..vu_lines {
-                    eprint!("\x1b[A\x1b[2K"); // move up + clear line
+                    eprint!("\x1b[A\r\x1b[2K");
                 }
-            }
 
-            let levels = eng.voice_levels();
-            let mut entries: Vec<_> = levels.iter().collect();
-            entries.sort_by(|a, b| a.0.cmp(b.0)); // alphabetical for stable ordering
+                let mut entries: Vec<_> = vu_meters.iter().collect();
+                entries.sort_by(|a, b| a.0.cmp(b.0));
 
-            vu_lines = entries.len();
-            for (name, stats) in &entries {
-                let rms = stats.rms_db();
-                // Map dB to bar width: -60 dB = 0 bars, 0 dB = 40 bars
-                let bar_width = ((rms + 60.0) / 60.0 * 40.0).clamp(0.0, 40.0) as usize;
-                let bar: String = "\u{2588}".repeat(bar_width);
-                let empty: String = "\u{2591}".repeat(40 - bar_width);
+                vu_lines = entries.len();
+                for (name, vu) in &entries {
+                    let level_db = vu.level_db();
+                    let peak_db = vu.peak_hold_db();
+                    let bar_width = ((level_db + 60.0) / 60.0 * 40.0).clamp(0.0, 40.0) as usize;
+                    let peak_pos = ((peak_db + 60.0) / 60.0 * 40.0).clamp(0.0, 39.0) as usize;
 
-                let status = if rms < -60.0 {
-                    " \x1b[90m(inaudible)\x1b[0m"
-                } else if rms < -40.0 {
-                    " \x1b[33m(quiet)\x1b[0m"
-                } else if stats.peak_db() > -1.0 {
-                    " \x1b[31m(clip!)\x1b[0m"
-                } else {
-                    ""
-                };
+                    // Build the bar with color gradient and peak hold indicator
+                    let mut bar = String::new();
+                    for i in 0..40 {
+                        if i == peak_pos && peak_db > -60.0 && i >= bar_width {
+                            // Peak hold marker (beyond current level)
+                            let color = if i >= 36 {
+                                "\x1b[91m" // red
+                            } else if i >= 30 {
+                                "\x1b[93m" // yellow
+                            } else {
+                                "\x1b[97m" // white
+                            };
+                            bar.push_str(color);
+                            bar.push('\u{2502}'); // thin vertical bar as peak marker
+                        } else if i < bar_width {
+                            let color = if i >= 36 {
+                                "\x1b[91m" // bright red: > -6 dB
+                            } else if i >= 30 {
+                                "\x1b[93m" // bright yellow: -6 to -15 dB
+                            } else if i >= 20 {
+                                "\x1b[92m" // bright green: -15 to -30 dB
+                            } else {
+                                "\x1b[32m" // green: < -30 dB
+                            };
+                            bar.push_str(color);
+                            bar.push('\u{2588}');
+                        } else {
+                            bar.push_str("\x1b[90m"); // dark gray
+                            bar.push('\u{2591}');
+                        }
+                    }
+                    bar.push_str("\x1b[0m"); // reset
 
-                eprintln!(
-                    "  {:<16} {}{} {:>6.1} dB{}",
-                    name, bar, empty, rms, status
-                );
+                    // Status indicator
+                    let status = if peak_db > -1.0 {
+                        " \x1b[91;1mCLIP\x1b[0m"
+                    } else if level_db < -60.0 && peak_db < -60.0 {
+                        ""
+                    } else {
+                        ""
+                    };
+
+                    // Name color: dim if silent, white if active
+                    let name_color = if level_db < -50.0 { "\x1b[90m" } else { "\x1b[97m" };
+
+                    eprint!(
+                        "  {}{:<14}\x1b[0m {} {:>6.1} dB{}\r\n",
+                        name_color, name, bar, level_db, status
+                    );
+                }
+                use std::io::Write;
+                let _ = std::io::stderr().flush();
             }
         }
 

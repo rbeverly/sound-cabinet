@@ -60,14 +60,16 @@ pub struct Engine {
     pub verbose: bool,
     /// Bus envelopes for sidechain compression (bus_name -> current envelope level).
     bus_envelopes: HashMap<String, f32>,
-    /// Per-voice level tracking: voice_label -> (sum_of_squares, peak, sample_count).
-    /// Accumulated across the entire render for the profile/summary feature.
+    /// Per-voice level tracking (cumulative) for profile/render summary.
     voice_levels: HashMap<String, VoiceLevelStats>,
+    /// Per-voice instantaneous levels for VU meter display.
+    /// Updated each buffer, with ballistic decay.
+    voice_vu: HashMap<String, VuMeter>,
     /// Names of voices to solo (empty = play all).
     solo_voices: Vec<String>,
 }
 
-/// Accumulated level statistics for a single voice.
+/// Accumulated level statistics for a single voice (lifetime of render).
 #[derive(Debug, Clone)]
 pub struct VoiceLevelStats {
     pub sum_sq: f64,
@@ -107,6 +109,74 @@ impl VoiceLevelStats {
     }
 }
 
+/// Per-voice VU meter with ballistic decay and peak hold.
+#[derive(Debug, Clone)]
+pub struct VuMeter {
+    /// Current displayed level (linear amplitude), with decay applied.
+    pub level: f32,
+    /// Peak hold level (linear amplitude) — stays at max for a short time.
+    pub peak_hold: f32,
+    /// Countdown for peak hold (in buffer cycles). When 0, peak starts decaying.
+    pub peak_hold_frames: u32,
+}
+
+impl VuMeter {
+    fn new() -> Self {
+        VuMeter {
+            level: 0.0,
+            peak_hold: 0.0,
+            peak_hold_frames: 0,
+        }
+    }
+
+    /// Update with a new buffer's peak level. Fast attack, slow decay.
+    /// Called once per audio buffer (~46ms at 2048 frames / 44100 Hz).
+    fn update(&mut self, buffer_peak: f32) {
+        // Fast attack: jump to new level if higher
+        if buffer_peak > self.level {
+            self.level = buffer_peak;
+        } else {
+            // Gentle decay: ~0.85 per buffer → falls ~1.4 dB per buffer
+            // Takes ~15 buffers (~700ms) to drop from full to inaudible
+            self.level *= 0.85;
+            if self.level < 1e-5 {
+                self.level = 0.0;
+            }
+        }
+
+        // Peak hold: stays at max for ~1.5 seconds (~32 buffers), then decays slowly
+        if buffer_peak > self.peak_hold {
+            self.peak_hold = buffer_peak;
+            self.peak_hold_frames = 32;
+        } else if self.peak_hold_frames > 0 {
+            self.peak_hold_frames -= 1;
+        } else {
+            self.peak_hold *= 0.92;
+            if self.peak_hold < 1e-5 {
+                self.peak_hold = 0.0;
+            }
+        }
+    }
+
+    /// Current level in dBFS.
+    pub fn level_db(&self) -> f64 {
+        if self.level > 0.0 {
+            20.0 * (self.level as f64).log10()
+        } else {
+            -100.0
+        }
+    }
+
+    /// Peak hold level in dBFS.
+    pub fn peak_hold_db(&self) -> f64 {
+        if self.peak_hold > 0.0 {
+            20.0 * (self.peak_hold as f64).log10()
+        } else {
+            -100.0
+        }
+    }
+}
+
 impl Engine {
     pub fn new(sample_rate: f64) -> Self {
         Self {
@@ -124,8 +194,14 @@ impl Engine {
             verbose: false,
             bus_envelopes: HashMap::new(),
             voice_levels: HashMap::new(),
+            voice_vu: HashMap::new(),
             solo_voices: Vec::new(),
         }
+    }
+
+    /// Get per-voice VU meter states (instantaneous with decay).
+    pub fn voice_vu(&self) -> &HashMap<String, VuMeter> {
+        &self.voice_vu
     }
 
     /// Set solo mode: only play events matching these voice labels.
@@ -395,6 +471,7 @@ impl Engine {
 
         // Accumulate per-bus peak levels for this buffer (for sidechain in next buffer)
         let mut bus_peaks: HashMap<String, f32> = HashMap::new();
+        let mut voice_buffer_peaks: HashMap<String, f32> = HashMap::new();
 
         for event in &mut self.schedule {
             // Skip events entirely outside this buffer window
@@ -495,6 +572,12 @@ impl Engine {
                         stats.peak = abs;
                     }
                     stats.sample_count += 1;
+
+                    // Track buffer-local peak for VU meter
+                    let bp = voice_buffer_peaks.entry(label.clone()).or_insert(0.0);
+                    if abs > *bp {
+                        *bp = abs;
+                    }
                 }
 
                 // Track bus peak level
@@ -512,6 +595,24 @@ impl Engine {
         for (name, peak) in bus_peaks {
             let db = if peak > 0.0 { 20.0 * peak.log10() } else { -100.0 };
             self.bus_envelopes.insert(name, db);
+        }
+
+        // Update VU meters: voices that played this buffer get their peak,
+        // voices that didn't play get a decay update.
+        // Use a noise floor: anything below -80 dBFS (~0.0001) is treated as silence.
+        let noise_floor: f32 = 0.0001;
+        let known_voices: Vec<String> = self.voice_vu.keys().cloned().collect();
+        for name in &known_voices {
+            let buffer_peak = voice_buffer_peaks.get(name).copied().unwrap_or(0.0);
+            if buffer_peak < noise_floor {
+                // Voice is silent or below noise floor — decay
+                self.voice_vu.entry(name.clone()).and_modify(|vu| vu.update(0.0));
+            }
+        }
+        for (name, peak) in voice_buffer_peaks {
+            if peak >= noise_floor {
+                self.voice_vu.entry(name).or_insert_with(VuMeter::new).update(peak);
+            }
         }
 
         // Master bus: bandpass + limiter
