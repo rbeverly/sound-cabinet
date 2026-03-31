@@ -12,14 +12,15 @@ normalize deep 0.2
 normalize atmos 0.2
 normalize silk 0.2
 normalize dk 0.085
-normalize sn 0.035
-normalize rim 0.025
-normalize ht 0.03
-normalize oht 0.06
-normalize hum 0.001866
+normalize sn 0.028
+normalize rim 0.028
+normalize ht 0.02
+normalize oht 0.03
+normalize hum 0.000966
 normalize air 0.00033
 
-master compress 1.0
+master compress 0.5
+master ceiling -1.0
 master gain -3
 
 bpm 98
@@ -149,6 +150,9 @@ pattern texture = 32 beats
   at 0 play air for 32 beats
   at 0 play hum for 32 beats
 
+pattern hum_down = 16 beats
+  at 0 play hum >> swell(0.2, 0.5) for 16 beats
+
 // ============================================================
 // SECTIONS
 // ============================================================
@@ -216,12 +220,13 @@ section wind_down = 32 beats
   repeat beat_full from 8
 
 // Outro — pads and texture fading
-section outro = 32 beats
-  repeat chords_a until 24
-  repeat texture until 30
-  repeat silk_wash
-  //repeat melody_thumb to 24
-  //repeat beat_sparse to 24
+section outro = 34 beats
+  repeat chords_a to 32
+  repeat texture until 32
+  repeat silk_wash until 32
+  repeat melody_thumb to 30
+  repeat beat_sparse to 32
+  at 24 play hum_down
 
 // ============================================================
 // ARRANGEMENT
