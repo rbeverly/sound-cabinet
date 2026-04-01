@@ -313,7 +313,7 @@ impl Engine {
                 let start_sample = self.beats_to_samples(beat);
 
                 // Check for arpeggiator: arp(...) or arp(...) >> swell(...)
-                if self.try_handle_arp(&expr, start_sample, duration_beats)?.is_some() {
+                if self.try_handle_arp(&expr, start_sample, duration_beats, voice_label.clone())?.is_some() {
                     // Arpeggiator handled — sub-events already scheduled
                 } else {
                     let duration_samples = self.beats_to_samples(duration_beats);
@@ -411,7 +411,7 @@ impl Engine {
                 let offset = self.beats_to_samples(beat);
                 let start_sample = self.current_sample + offset;
 
-                if let Some(_) = self.try_handle_arp(&expr, start_sample, duration_beats)? {
+                if let Some(_) = self.try_handle_arp(&expr, start_sample, duration_beats, voice_label.clone())? {
                     // Arpeggiator handled
                 } else {
                     let duration_samples = self.beats_to_samples(duration_beats);
@@ -871,6 +871,7 @@ impl Engine {
         expr: &Expr,
         base_start: u64,
         duration_beats: f64,
+        voice_label: Option<String>,
     ) -> Result<Option<()>> {
         // Find arp(...) in the pipe chain and split into pre/post
         let (pre_chain, arp_args, post_chain) = match extract_arp(expr) {
@@ -1077,7 +1078,7 @@ impl Engine {
                 release_at: None,
                 release_samples: (self.sample_rate * 0.05) as u64,
                 note_id: 0,
-                voice_label: None,
+                voice_label: voice_label.clone(),
             });
         }
 

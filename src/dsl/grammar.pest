@@ -111,6 +111,7 @@ mul_op    = { "*" | "/" }
 atom = {
     fn_call
   | range
+  | chord_name
   | note_name
   | number
   | ident
@@ -119,6 +120,15 @@ atom = {
 
 // Parameter sweep: 800 -> 4000 (linear interpolation over event duration)
 range = { number ~ "->" ~ number }
+
+// Chord name: Root[Accidental][Octave]:Quality — e.g., C:maj7, G3:7, Bb:m7, F#4:dim
+// The colon separates the root/octave from the quality, eliminating all ambiguity.
+chord_name = @{ ('A'..'G') ~ ("#" | "b" | "s")? ~ ('0'..'9')? ~ ":" ~ chord_quality }
+chord_quality = @{
+    "mmaj7" | "m7b5" | "maj9" | "min9" | "add9" | "maj7" | "min7" | "dim7" | "aug7"
+  | "dom9" | "dom7" | "sus2" | "sus4" | "min" | "maj" | "dim" | "aug"
+  | "m9" | "m7" | "m6" | "m" | "9" | "7" | "6"
+}
 
 note_name = @{ ('A'..'G') ~ ("#" | "b" | "s")? ~ ('0'..'9') }
 

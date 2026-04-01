@@ -53,10 +53,10 @@ pattern hats_push = 4 beats
 // Chord progression: Cm7 → Abmaj7 → Fm7 → Bbmaj7
 // Bbmaj7 replaces Gdom7 — dominant 7th tritone was clashing with the melody
 pattern chords = 16 beats
-  at 0  play chord_pad(Cm7) for 4 beats
-  at 4  play chord_pad(Abmaj7) for 4 beats
-  at 8  play chord_pad(Fm7) for 4 beats
-  at 12 play chord_pad(Bbmaj7) for 4 beats
+  at 0  play chord_pad(C:m7) for 4 beats
+  at 4  play chord_pad(Ab:maj7) for 4 beats
+  at 8  play chord_pad(F:m7) for 4 beats
+  at 12 play chord_pad(Bb:maj7) for 4 beats
 
 // Bass follows chord roots
 pattern bass_line = 16 beats

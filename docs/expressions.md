@@ -150,7 +150,7 @@ Duck one signal based on another signal's level -- the classic EDM/house "pumpin
 
 ```sc
 voice kick = sine(55) >> decay(15)
-voice pad = chord(Cm7) >> lowpass(800, 0.6)
+voice pad = chord(C:m7) >> lowpass(800, 0.6)
 
 // Tag the kick's output to the "drums" bus
 at 0 play kick >> bus(drums) for 0.5 beats
@@ -184,7 +184,7 @@ fx hall = reverb(0.8, 0.4, 0.35) >> delay(0.3, 0.2, 0.15)
 fx telephone = highpass(300, 0.5) >> lowpass(2000, 0.3) >> distort(3.0)
 fx tape = chorus(0.015, 0.008, 0.2) >> distort(1.2)
 
-voice pad = chord(Cm7) >> lowpass(800, 0.6) >> hall
+voice pad = chord(C:m7) >> lowpass(800, 0.6) >> hall
 at 0 play sine(A4) >> telephone for 4 beats
 ```
 
@@ -238,8 +238,8 @@ The target is on a 0.0-1.0 scale where 1.0 = full scale (0 dBFS) and 0.5 = comfo
 `chord(name)` generates a summed set of saw oscillators for a named chord. Use it anywhere you'd use an oscillator:
 
 ```sc
-voice pad = chord(Cm7) >> lowpass(800, 0.6) >> reverb(0.7, 0.5, 0.2)
-voice bright = chord(Fmaj7) >> chorus(0.012, 0.004, 0.2)
+voice pad = chord(C:m7) >> lowpass(800, 0.6) >> reverb(0.7, 0.5, 0.2)
+voice bright = chord(F:maj7) >> chorus(0.012, 0.004, 0.2)
 ```
 
 ### Supported Chord Types
@@ -250,14 +250,14 @@ voice bright = chord(Fmaj7) >> chorus(0.012, 0.004, 0.2)
 | `m` / `min` | Minor triad | root, b3, 5 |
 | `dim` | Diminished | root, b3, b5 |
 | `aug` | Augmented | root, 3, #5 |
-| `7` / `dom7` | Dominant 7th | root, 3, 5, b7 |
+| `7` | Dominant 7th | root, 3, 5, b7 |
 | `maj7` | Major 7th | root, 3, 5, 7 |
 | `m7` / `min7` | Minor 7th | root, b3, 5, b7 |
 | `m7b5` | Half-diminished | root, b3, b5, b7 |
 | `dim7` | Diminished 7th | root, b3, b5, bb7 |
 | `aug7` | Augmented 7th | root, 3, #5, b7 |
 | `mmaj7` | Minor-major 7th | root, b3, 5, 7 |
-| `9` / `dom9` | Dominant 9th | root, 3, 5, b7, 9 |
+| `9` | Dominant 9th | root, 3, 5, b7, 9 |
 | `maj9` | Major 9th | root, 3, 5, 7, 9 |
 | `m9` / `min9` | Minor 9th | root, b3, 5, b7, 9 |
 | `add9` | Major add 9 | root, 3, 5, 9 |
@@ -266,9 +266,7 @@ voice bright = chord(Fmaj7) >> chorus(0.012, 0.004, 0.2)
 | `sus2` | Suspended 2nd | root, 2, 5 |
 | `sus4` | Suspended 4th | root, 4, 5 |
 
-The root is any note letter (A-G) with optional accidental (`#`, `s`, `b`). Append a single digit for octave (default 4): `Abmaj73` = Ab major 7th at octave 3, `Cm7` = C minor 7th at octave 4.
-
-**G7 gotcha:** `G7` is parsed as the note G in octave 7, not a G dominant 7th chord. Use `Gdom7` for the chord.
+Format: `Root[Accidental][Octave]:Quality` — e.g., `C:maj7`, `G3:7`, `Bb:m7`. The root is any note letter (A-G) with optional accidental (`#`, `s`, `b`). Octave (default 4) goes before the colon: `Ab3:maj7` = Ab major 7th at octave 3, `C:m7` = C minor 7th at octave 4.
 
 ## Arpeggiator
 
@@ -277,8 +275,8 @@ The arpeggiator splits a voice into a sequence of notes over time. It lives in t
 ```sc
 voice pluck = 0.3 * saw(0) >> lowpass(2000, 0.8) >> decay(10)
 
-// Chord shorthand -- Cm7 expands to C4, Eb4, G4, Bb4
-at 0 play pluck >> arp(Cm7, 4) >> lowpass(1500, 0.6) for 4 beats
+// Chord shorthand -- C:m7 expands to C4, Eb4, G4, Bb4
+at 0 play pluck >> arp(C:m7, 4) >> lowpass(1500, 0.6) for 4 beats
 
 // Or spell out individual notes
 at 0 play pluck >> arp(C4, Eb4, G4, Bb4, 4) >> lowpass(1500, 0.6) for 4 beats
@@ -291,15 +289,15 @@ Works with voices, instruments, and wavetables: `pluck >> arp(...)`, `piano >> a
 ### Direction and Octave Spanning
 
 ```sc
-pluck >> arp(Cm7, 4)              // ascending (default)
-pluck >> arp(Cm7, 4, down)        // descending
-pluck >> arp(Cm7, 4, updown)      // ping-pong (up then down)
-pluck >> arp(Cm7, 4, random)      // random note each step
+pluck >> arp(C:m7, 4)              // ascending (default)
+pluck >> arp(C:m7, 4, down)        // descending
+pluck >> arp(C:m7, 4, updown)      // ping-pong (up then down)
+pluck >> arp(C:m7, 4, random)      // random note each step
 
 // Octave spanning -- play across multiple octaves before repeating
-pluck >> arp(Cm7, 4, up2)         // ascending across 2 octaves
-pluck >> arp(Cm7, 4, down3)       // descending across 3 octaves
-pluck >> arp(Cm7, 4, updown2)     // ping-pong across 2 octaves
+pluck >> arp(C:m7, 4, up2)         // ascending across 2 octaves
+pluck >> arp(C:m7, 4, down3)       // descending across 3 octaves
+pluck >> arp(C:m7, 4, updown2)     // ping-pong across 2 octaves
 ```
 
 ### Gate Length
@@ -307,8 +305,8 @@ pluck >> arp(Cm7, 4, updown2)     // ping-pong across 2 octaves
 Controls note duration relative to step length. Default is 1.0 (full step). Less than 1.0 creates staccato, greater than 1.0 creates legato overlap:
 
 ```sc
-pluck >> arp(Cm7, 4, gate, 0.5)              // staccato (50% of step)
-pad >> arp(Cm7, 2, updown, gate, 1.5)        // legato (notes overlap)
+pluck >> arp(C:m7, 4, gate, 0.5)              // staccato (50% of step)
+pad >> arp(C:m7, 2, updown, gate, 1.5)        // legato (notes overlap)
 ```
 
 ### Accent Pattern
@@ -316,8 +314,8 @@ pad >> arp(Cm7, 2, updown, gate, 1.5)        // legato (notes overlap)
 Boosts every Nth note (1.5x gain on accented, 0.7x on unaccented):
 
 ```sc
-pluck >> arp(Cm7, 8, accent, 4)              // accent every 4th note
-pluck >> arp(Cm7, 8, down, accent, 3)        // descending, accent every 3rd
+pluck >> arp(C:m7, 8, accent, 4)              // accent every 4th note
+pluck >> arp(C:m7, 8, down, accent, 3)        // descending, accent every 3rd
 ```
 
 ### Step Pattern
@@ -325,8 +323,8 @@ pluck >> arp(Cm7, 8, down, accent, 3)        // descending, accent every 3rd
 Rhythmic gating -- `x` plays, `_` rests. The pattern cycles:
 
 ```sc
-pluck >> arp(Cm7, 8, steps, x_x_xx_x)       // rhythmic pattern
-pluck >> arp(Cm7, 8, updown, steps, xxx_)    // 3 on, 1 off
+pluck >> arp(C:m7, 8, steps, x_x_xx_x)       // rhythmic pattern
+pluck >> arp(C:m7, 8, updown, steps, xxx_)    // 3 on, 1 off
 ```
 
 ### Speed Ramp
@@ -334,9 +332,9 @@ pluck >> arp(Cm7, 8, updown, steps, xxx_)    // 3 on, 1 off
 Uses the range syntax (`->`) for the rate to accelerate or decelerate:
 
 ```sc
-pluck >> arp(Cm7, 2 -> 8) for 8 beats       // accelerate: 2 to 8 notes/beat
-pluck >> arp(Cm7, 8 -> 2) for 8 beats       // decelerate
-pluck >> arp(Cm7, 2 -> 8, updown) for 8 beats  // ramp + direction
+pluck >> arp(C:m7, 2 -> 8) for 8 beats       // accelerate: 2 to 8 notes/beat
+pluck >> arp(C:m7, 8 -> 2) for 8 beats       // decelerate
+pluck >> arp(C:m7, 2 -> 8, updown) for 8 beats  // ramp + direction
 ```
 
 ### Combining Options
@@ -344,7 +342,7 @@ pluck >> arp(Cm7, 2 -> 8, updown) for 8 beats  // ramp + direction
 Options can be combined freely after the rate:
 
 ```sc
-pluck >> arp(Cm7, 8, updown2, gate, 0.3, accent, 4, steps, x.xx) for 8 beats
+pluck >> arp(C:m7, 8, updown2, gate, 0.3, accent, 4, steps, x.xx) for 8 beats
 ```
 
 ## Operators

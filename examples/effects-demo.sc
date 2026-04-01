@@ -13,9 +13,8 @@ fx wide = chorus(0.015, 0.005, 0.3) >> reverb(0.9, 0.6, 0.4)
 
 instrument keys = (0.4 * saw(freq) >> lowpass(freq * 4, 0.7) >> decay(8)) + (1.5 * saw(freq) + 0.3 * saw(freq * 2)) >> lowpass(freq * 1.2, 0.6) >> chorus(0.016, 0.006, 0.1) >> decay(2.5) >> hall
 
-// Mix levels
+// Mix levels (instruments only — voices normalized after definition below)
 normalize keys 0.3
-normalize kick 0.15
 
 master compress 1.0
 master gain -3
@@ -23,7 +22,7 @@ master gain -3
 // --- Voices (using fx chains) ---
 
 // Warm pad with vibrato and hall reverb
-voice warm_pad = chord(Cmaj) >> lowpass(1200, 0.7) >> vibrato(4.0, 15.0) >> hall
+voice warm_pad = chord(C:maj) >> lowpass(1200, 0.7) >> vibrato(4.0, 15.0) >> hall
 
 // Lead with dotted-eighth delay echoes
 voice lead = 0.4 * triangle(G5) >> lfo(6.0, 0.4) >> echo
@@ -49,6 +48,7 @@ voice pluck = 0.3 * saw(0) >> lowpass(2000, 0.8) >> decay(10)
 // Simple kick and hat
 voice kick = (0.7 * sine(A1) + 0.5 * sine(B0)) >> decay(12)
 voice hat = 0.1 * noise() >> highpass(6000, 1.0) >> decay(25)
+normalize kick 0.15
 
 // --- Patterns ---
 
@@ -59,9 +59,9 @@ pattern beat = 4 beats
   at 3 play hat for 0.25 beats
   at 3.5 play hat for 0.25 beats
 
-// Arpeggiator with chord shorthand — Cm7 expands to C4, Eb4, G4, Bb4
+// Arpeggiator with chord shorthand — C:m7 expands to C4, Eb4, G4, Bb4
 pattern arp_pattern = 4 beats
-  at 0 play pluck >> arp(Cm7, 4) >> lowpass(1500, 0.6) >> delay(0.3, 0.35, 0.3) for 4 beats
+  at 0 play pluck >> arp(C:m7, 4) >> lowpass(1500, 0.6) >> delay(0.3, 0.35, 0.3) for 4 beats
 
 // Instrument used directly — one definition, any note
 pattern keys_phrase = 4 beats

@@ -247,7 +247,7 @@ play drums   // uses substituted voices
 
 ```sc
 voice pluck = 0.3 * saw(0) >> lowpass(2000, 0.8) >> decay(10)
-at 0 play pluck >> arp(Cm7, 4, updown, gate, 0.5) for 8 beats
+at 0 play pluck >> arp(C:m7, 4, updown, gate, 0.5) for 8 beats
 ```
 
 ### Sustain pedal

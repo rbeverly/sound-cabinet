@@ -335,7 +335,7 @@ sound-cabinet audition bass_a.sc bass_b.sc
 Modulated delay effects:
 
 ```sc
-pad(Cm7) >> chorus(0.5, 0.3)
+pad(C:m7) >> chorus(0.5, 0.3)
 lead(freq) >> flanger(0.2, 0.7)
 keys(freq) >> phaser(0.3, 4)
 ```
