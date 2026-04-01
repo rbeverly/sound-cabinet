@@ -4,7 +4,7 @@ use anyhow::Result;
 use fundsp::hacker::*;
 
 use crate::dsl::ast::{Command, DefKind, Expr};
-use crate::dsl::parser::resolve_chord;
+use crate::dsl::parser::{extract_voice_label, resolve_chord};
 use crate::engine::effects::MasterBus;
 use crate::engine::graph::{build_graph, extract_arp, extract_bus, extract_sidechain, extract_swell, strip_bus, strip_sidechain, strip_swell, substitute_freq, substitute_var, SidechainConfig};
 
@@ -51,8 +51,10 @@ struct ScheduledEvent {
     release_samples: u64,
     /// Unique ID for matching note-on to note-off (MIDI note number, or 0 for score events).
     note_id: u16,
-    /// Voice label from `PlayAt`, used by pedal voice filtering.
+    /// Voice label from `PlayAt` — the pre-substitution name (e.g., "pluck").
     voice_label: Option<String>,
+    /// Resolved voice/instrument name after `with` substitution (e.g., "mau5_arp").
+    voice_resolved: Option<String>,
 }
 
 /// The central audio engine. Manages voice definitions, scheduled events,
@@ -260,12 +262,20 @@ impl Engine {
     /// Pass an empty vec to disable solo (play everything).
     pub fn set_solo(&mut self, voices: Vec<String>) {
         if !voices.is_empty() {
-            // Remove events that don't match the solo filter
+            // Match against voice_label (alias/pattern name) OR voice_resolved
+            // (the actual instrument/voice name after `with` substitution).
             self.schedule.retain(|e| {
-                e.voice_label
-                    .as_ref()
-                    .map(|l| voices.iter().any(|v| v == l))
-                    .unwrap_or(false)
+                if let Some(ref label) = e.voice_label {
+                    if voices.iter().any(|v| v == label) {
+                        return true;
+                    }
+                }
+                if let Some(ref resolved) = e.voice_resolved {
+                    if voices.iter().any(|v| v == resolved) {
+                        return true;
+                    }
+                }
+                false
             });
         }
         self.solo_voices = voices;
@@ -313,7 +323,7 @@ impl Engine {
                 let start_sample = self.beats_to_samples(beat);
 
                 // Check for arpeggiator: arp(...) or arp(...) >> swell(...)
-                if self.try_handle_arp(&expr, start_sample, duration_beats, voice_label.clone())?.is_some() {
+                if self.try_handle_arp(&expr, start_sample, duration_beats, voice_label.clone(), extract_voice_label(&expr))?.is_some() {
                     // Arpeggiator handled — sub-events already scheduled
                 } else {
                     let duration_samples = self.beats_to_samples(duration_beats);
@@ -345,6 +355,7 @@ impl Engine {
                         release_samples: (self.sample_rate * 0.05) as u64,
                         note_id: 0,
                         voice_label,
+                        voice_resolved: extract_voice_label(&expr),
                     });
                 }
             }
@@ -411,7 +422,7 @@ impl Engine {
                 let offset = self.beats_to_samples(beat);
                 let start_sample = self.current_sample + offset;
 
-                if let Some(_) = self.try_handle_arp(&expr, start_sample, duration_beats, voice_label.clone())? {
+                if let Some(_) = self.try_handle_arp(&expr, start_sample, duration_beats, voice_label.clone(), extract_voice_label(&expr))? {
                     // Arpeggiator handled
                 } else {
                     let duration_samples = self.beats_to_samples(duration_beats);
@@ -443,6 +454,7 @@ impl Engine {
                         release_samples: (self.sample_rate * 0.05) as u64,
                         note_id: 0,
                         voice_label,
+                        voice_resolved: extract_voice_label(&expr),
                     });
                 }
             }
@@ -478,6 +490,7 @@ impl Engine {
             release_samples: (self.sample_rate * 0.08) as u64,
             note_id,
             voice_label: None,
+            voice_resolved: None,
         });
 
         Ok(())
@@ -872,6 +885,7 @@ impl Engine {
         base_start: u64,
         duration_beats: f64,
         voice_label: Option<String>,
+        voice_resolved: Option<String>,
     ) -> Result<Option<()>> {
         // Find arp(...) in the pipe chain and split into pre/post
         let (pre_chain, arp_args, post_chain) = match extract_arp(expr) {
@@ -1079,6 +1093,7 @@ impl Engine {
                 release_samples: (self.sample_rate * 0.05) as u64,
                 note_id: 0,
                 voice_label: voice_label.clone(),
+                voice_resolved: voice_resolved.clone(),
             });
         }
 
