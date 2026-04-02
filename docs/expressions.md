@@ -108,6 +108,7 @@ Effects process a signal in the pipe chain -- place them after the source and an
 | `eq(freq, gain, high)` | High shelf -- boost or cut everything above `freq` | `sine(A4) >> eq(10000, 2, high)` |
 | `pan(position)` | Stereo panning. -1.0 = full left, 0.0 = center, 1.0 = full right. Equal-power panning. | `saw(C3) >> pan(-0.3)` |
 | `bus(name)` | Tag this event's output for sidechain detection | `kick >> bus(drums)` |
+| `excite(freq, amount)` | Harmonic exciter -- boosts content above `freq` for presence/sparkle | `saw(C3) >> excite(3000, 0.5)` |
 | `sidechain(bus, thresh, ratio, atk, rel)` | Duck signal based on a bus level. Classic pumping effect | `pad >> sidechain(drums, -20, 4, 0.01, 0.1)` |
 
 `loudness(freq)` is most useful inside instrument definitions where `freq` is automatically substituted with the note's Hz value. A C2 (65 Hz) gets ~+8 dB, a C4 (262 Hz) gets ~+1.5 dB, and A4 (440 Hz) gets ~+0.3 dB.
@@ -193,6 +194,34 @@ Only `bus` is required -- `sidechain` defaults to -20 dB, 4:1, 10ms attack, 100m
 pad >> sidechain(drums)                     // defaults
 pad >> sidechain(drums, -20, 4, 0.01, 0.1) // explicit
 ```
+
+### Harmonic Exciter
+
+Targeted high-frequency saturation that adds presence and sparkle. The exciter isolates content above a cutoff frequency, applies saturation to generate harmonics, and blends the result back into the original signal:
+
+```sc
+saw(C3) >> excite(3000, 0.5)             // excite above 3 kHz at 50% blend
+sine(A4) >> excite(5000, 0.3)            // subtle air above 5 kHz
+```
+
+Parameters:
+
+- `freq` -- cutoff frequency in Hz. Content above this frequency is saturated to generate harmonics. Typical values: 2000-5000 Hz.
+- `amount` -- blend level (0.0-1.0). How much of the excited signal is mixed back in. 0.0 = no effect, 1.0 = full exciter level.
+
+The exciter is especially useful inside instrument definitions for voices that need to cut through noise:
+
+```sc
+// A lead that stays audible in car stereo or phone playback
+instrument lead = saw(freq) >> decay(6) >> excite(3000, 0.5)
+
+// Vocal-range presence boost
+instrument vocal_synth = triangle(freq) >> lowpass(freq * 3, 0.7) >> excite(2500, 0.4) >> reverb(0.5, 0.3, 0.2)
+```
+
+Unlike a high shelf EQ (which boosts existing content), the exciter generates new harmonic content above the cutoff. This makes it effective for signals that lack high-frequency energy -- the exciter creates what isn't there, rather than amplifying what is.
+
+The exciter works well in combination with the `master curve` and `--env` simulation tools for tuning mixes that need to translate to car stereos, phone speakers, and other challenging playback environments.
 
 ## Effect Chains (`fx`)
 

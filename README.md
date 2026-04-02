@@ -104,6 +104,14 @@ sound-cabinet play song.sc --solo bass,melody
 # Live VU meters during playback
 sound-cabinet play song.sc --vu
 
+# Sub-bass fold-up monitoring (hear sub-bass on headphones)
+sound-cabinet play song.sc --subfold
+
+# Environment noise simulation (test mix translation)
+sound-cabinet play song.sc --env car
+sound-cabinet play song.sc --env cafe
+sound-cabinet play song.sc --env subway
+
 # Profile per-voice levels
 sound-cabinet profile song.sc
 
@@ -276,6 +284,19 @@ normalize piano 0.5
 // Master bus control
 master compress 1.0
 master gain -3
+
+// Master EQ curve — shape frequency balance for translation
+master curve car                          // preset: reduces sub-bass, boosts presence
+master curve low -4, mid 0, high 3       // manual per-band (dB)
+
+// Multiband compressor — per-band dynamic control
+master multiband 0.3                      // 0=off, 1.0=OTT-level
+
+// Soft clipper — warm saturation for harmonics + translation
+master saturate 0.5
+
+// Harmonic exciter — adds sparkle to cut through noise
+instrument lead = saw(freq) >> decay(6) >> excite(3000, 0.5)
 ```
 
 See [Expressions & Effects](docs/expressions.md) for the full reference.

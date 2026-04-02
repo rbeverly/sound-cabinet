@@ -14,99 +14,42 @@ Beat ranges (`from`/`to`/`until`), at-positioning, `sequence`, inline events, re
 
 `play lead(E5, G5, B5) for 1 beat` — instruments accept multiple frequencies, producing a summed chord scaled by 1/N.
 
-## Master bus mastering chain
+## ~~Master bus mastering chain~~ ✅ Mostly implemented
 
-The current master bus (HP → LP → Compressor → Limiter) is functional but doesn't produce "road-ready" mixes. Songs that sound great on headphones can disappear under environmental noise or rattle car doors with unchecked sub-bass. A professional-grade mastering chain would add:
+The master bus chain now includes: HP → LP → EQ Curve → Multiband Compressor → Compressor → Soft Clipper → Limiter. See [Master Bus & Loudness](master-bus.md) for full documentation.
 
-### Master soft clipper
+### ~~Master soft clipper~~ ✅ Implemented
 
-A `tanh` waveshaper on the master bus that catches peaks with warm saturation instead of hard limiting. Adds harmonic density that helps translation to noisy environments. Sits before the limiter:
+`master saturate` adds a `tanh` waveshaper between the compressor and limiter. Catches peaks with warm saturation and adds harmonic density for translation.
 
-```sc
-master saturate 0.5          // 0 = off, 0.5 = gentle warmth, 1.0 = heavy
-master saturate off          // bypass
-```
+### ~~Master EQ curve~~ ✅ Implemented
 
-The upgraded chain: HP → LP → EQ Curve → Multiband Compressor → **Soft Clipper** → Limiter.
+`master curve` with presets (`car`, `broadcast`, `bright`, `warm`, `flat`) and manual per-band control (`low`, `mid`, `high` in dB). 3-band EQ: low shelf at 120 Hz, mid peak at 1 kHz, high shelf at 6 kHz.
 
-### Master EQ curve
+### ~~Multiband compressor~~ ✅ Implemented
 
-Static frequency shaping on the master bus — always reduce sub-bass, always boost presence. Different from multiband compression (which is dynamic). Pre-tuned presets for common translation targets:
-
-```sc
-master curve low -4, mid -1, high +2     // manual 3-band
-master curve car                          // preset: reduce sub, boost presence
-master curve broadcast                    // EBU broadcast standard
-```
-
-### Multiband compressor
-
-Split audio into 3 bands (low/mid/high), compress each independently. The core "radio-ready" tool — brings up quiet details, tames loud transients per band. A gentle default makes mixes translate without aggressive coloring:
-
-```sc
-master multiband 0.3                      // amount: 0 = off, 1.0 = OTT-level
-master multiband low 0.5, mid 0.3, high 0.2  // per-band control
-master multiband off                      // bypass
-```
+`master multiband` splits audio into 3 bands (low <200 Hz, mid 200-3 kHz, high >3 kHz) and compresses each independently. Simple amount control (0-1.0) or per-band amounts.
 
 ### Upward compression mode
 
-Extend the existing compressor to boost quiet content instead of reducing loud content. The "OTT" effect that makes every detail hyper-visible:
+Partially implemented -- the infrastructure exists but no DSL syntax yet for `master compress ... up`. Planned:
 
 ```sc
 saw(C3) >> compress(-30, 2, 0.01, 0.1, up)   // upward mode
 master compress -30 2 0.01 0.1 up             // master bus upward compression
 ```
 
-### Harmonic exciter
+### ~~Harmonic exciter~~ ✅ Implemented
 
-Targeted high-frequency saturation — applies distortion only above a cutoff frequency and blends the harmonics back. Adds "air" and "sparkle" that cuts through noise:
+`excite(freq, amount)` is available as a pipe-chain effect. Applies targeted high-frequency saturation above a cutoff frequency and blends harmonics back in. See [Expressions & Effects](expressions.md#harmonic-exciter).
 
-```sc
-saw(C3) >> excite(3000, 0.5)             // excite above 3kHz at 50% blend
-master excite 4000 0.3                    // master bus exciter
-```
+## ~~Environment simulation~~ ✅ Implemented
 
-## Environment simulation
+`--env car|cafe|subway` mixes calibrated environmental noise into playback to test mix translation. Playback-only -- never affects rendered files. See [Mixing & Diagnostics](mixing.md#environment-simulation).
 
-A monitoring-only mode that mixes calibrated environmental noise into playback to test how a mix translates. The noise never touches the rendered file — it's a diagnostic tool:
+## ~~Sub-bass monitoring~~ ✅ Implemented
 
-```bash
-sound-cabinet play song.sc --env car         # highway road noise + cabin gain
-sound-cabinet play song.sc --env cafe        # coffee shop chatter
-sound-cabinet play song.sc --env laptop      # simulates laptop speaker rolloff
-sound-cabinet play song.sc --env phone       # simulates phone speaker rolloff
-sound-cabinet play song.sc --env subway      # heavy broadband noise
-```
-
-Noise profiles are calibrated from real-world measurements. If the melody disappears under simulated road noise, the mix needs more harmonic content or wider frequency spread.
-
-## Sub-bass monitoring
-
-Tools to detect dangerous sub-bass levels without needing a car or subwoofer:
-
-### Sub-bass energy warning
-
-Extend `profile` to report per-voice energy in frequency bands. Flags voices with excessive sub-bass:
-
-```
-Voice          Sub(<80)   Low(80-300)  Mid(300-3k)  High(3k+)   Status
-kick           -8.2 dB    -14.1 dB     -22.0 dB     -40.1 dB   ⚠ Sub-heavy
-bass           -12.1 dB   -16.3 dB     -28.4 dB     -45.0 dB   ⚠ Sub-heavy
-melody         -60.0 dB   -38.2 dB     -18.4 dB     -24.1 dB   OK
-```
-
-If you see "Sub-heavy" before getting in the car, you know to add `highpass(40)` or reduce the voice's low-frequency gain.
-
-### Sub-bass fold-up monitoring
-
-A playback mode that pitch-shifts everything below ~80 Hz up by 1-2 octaves and mixes it in as a quiet monitoring layer. A 40 Hz door-rattler becomes a clearly audible 160 Hz tone in headphones — like sonar for sub-bass:
-
-```bash
-sound-cabinet play song.sc --subfold       # hear sub-bass content shifted up
-```
-
-Playback-only — never affects the rendered file.
+Sub-bass fold-up (`--subfold`) shifts sub-bass up 1 octave for headphone monitoring. The frequency-band profile in `sc profile` shows per-voice energy in 4 bands (Sub <80, Low 80-300, Mid 300-3k, High 3k+) with warning flags (Sub-heavy, No presence). See [Mixing & Diagnostics](mixing.md#sub-bass-fold-up) and [Frequency-band Profile](mixing.md#frequency-band-profile).
 
 ## Expression ranges
 

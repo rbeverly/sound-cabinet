@@ -86,6 +86,76 @@ at 0 play warm_pad >> swell(2, 2) for 8 beats  // pad_bed, voice:warm_pad
 
 The frozen output is valid `.sc` — you can `sound-cabinet play frozen.sc` and it sounds identical to the original.
 
+## Sub-bass Fold-up
+
+A playback-only monitoring mode that shifts sub-bass content up by 1 octave so you can hear it on headphones or small speakers. Sub-bass below ~80 Hz is largely inaudible on headphones but can rattle car doors and subwoofers -- fold-up makes it audible without needing a subwoofer to check:
+
+```bash
+sound-cabinet play song.sc --subfold
+```
+
+With `--subfold` enabled, everything below ~80 Hz is pitch-shifted up by one octave and mixed in as a quiet monitoring layer. A 40 Hz door-rattler becomes a clearly audible 160 Hz tone. This lets you detect dangerous sub-bass buildup before getting in the car.
+
+Fold-up is playback-only -- it never affects rendered output from `render`. Use it as a diagnostic: if you hear unexpected low-frequency content during fold-up playback, add a `highpass(40)` to the offending voice or reduce its low-frequency gain.
+
+## Environment Simulation
+
+A monitoring-only mode that mixes calibrated environmental noise into playback to test how a mix translates to real-world listening conditions. The noise never touches the rendered file -- it is purely a diagnostic tool:
+
+```bash
+sound-cabinet play song.sc --env car       # highway road noise + cabin resonance
+sound-cabinet play song.sc --env cafe      # coffee shop chatter and ambient noise
+sound-cabinet play song.sc --env subway    # heavy broadband transit noise
+```
+
+### Noise Profiles
+
+| Profile | Character | What It Tests |
+|---------|-----------|---------------|
+| `car` | Low-frequency road rumble with cabin resonance peaks | Whether sub-bass is excessive and whether melodies/vocals survive road noise |
+| `cafe` | Mid-frequency crowd chatter and clinking | Whether midrange elements (vocals, leads) cut through conversational noise |
+| `subway` | Heavy broadband noise across all frequencies | Worst-case translation -- if it works here, it works everywhere |
+
+Noise profiles are calibrated from real-world measurements at typical listening levels.
+
+If the melody disappears under simulated road noise, the mix needs more harmonic content in the midrange (try the `excite()` effect) or wider frequency spread. If the bass is overwhelming under `--env car`, reduce sub-bass with `master curve car` or add a highpass to the bass voice.
+
+Environment simulation pairs well with `master curve` presets -- use `--env car` to hear the problem, then apply `master curve car` to fix it.
+
+## Frequency-band Profile
+
+The `profile` command includes a second table showing per-voice energy across 4 frequency bands, with warning flags for common problems:
+
+```bash
+sound-cabinet profile song.sc
+```
+
+Output includes the standard level table plus a frequency-band breakdown:
+
+```
+  Voice          Sub(<80)   Low(80-300)  Mid(300-3k)  High(3k+)   Status
+  -----          --------   ----------   ----------   ---------   ------
+  kick           -8.2 dB    -14.1 dB     -22.0 dB     -40.1 dB   ⚠ Sub-heavy
+  bass           -12.1 dB   -16.3 dB     -28.4 dB     -45.0 dB   ⚠ Sub-heavy
+  melody         -60.0 dB   -38.2 dB     -18.4 dB     -24.1 dB   OK
+  pad            -55.0 dB   -20.3 dB     -16.1 dB     -38.5 dB   OK
+  lead           -60.0 dB   -42.0 dB     -30.2 dB     -35.8 dB   ⚠ No presence
+```
+
+The 4 bands:
+
+| Band | Range | Typical Content |
+|------|-------|-----------------|
+| Sub | Below 80 Hz | Sub-bass rumble, kick sub-harmonics |
+| Low | 80 -- 300 Hz | Bass body, kick punch, low male vocal |
+| Mid | 300 Hz -- 3 kHz | Vocals, guitar, snare, melodic content |
+| High | Above 3 kHz | Hi-hats, cymbals, sibilance, air, sparkle |
+
+### Warning Flags
+
+- **Sub-heavy** -- the voice has significant energy below 80 Hz. This may cause problems on car stereos and subwoofers. Consider adding `highpass(40)` or reducing the voice's low-frequency content.
+- **No presence** -- the voice has little energy in the mid and high bands relative to its low-frequency content. It may disappear in noisy environments. Consider using `excite()` to add high-frequency harmonics, or EQ to boost the 2-5 kHz range.
+
 ## Voice Level Summary on Render
 
 Every `render` command automatically prints a per-voice level summary after completing. This gives the same information as `profile` without a separate command.
