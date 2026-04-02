@@ -1,43 +1,52 @@
-//! ITU-R BS.1770 integrated loudness measurement (mono).
+//! ITU-R BS.1770 integrated loudness measurement (stereo).
 //!
 //! Implements the K-weighting filter and gated block integration
-//! to produce an integrated LUFS value from a buffer of f32 samples.
+//! to produce an integrated LUFS value from stereo f32 buffers.
 
-/// Measure integrated loudness (LUFS) of a mono signal at the given sample rate.
+/// Measure integrated loudness (LUFS) of a stereo signal at the given sample rate.
 ///
 /// Implements ITU-R BS.1770-4:
-/// 1. K-weighting filter (high-shelf + highpass)
-/// 2. 400ms block mean-square
+/// 1. K-weighting filter (high-shelf + highpass) per channel
+/// 2. 400ms block mean-square (summed across L+R, both weight 1.0)
 /// 3. Absolute gate (-70 LUFS)
 /// 4. Relative gate (-10 dB below ungated mean)
-pub fn measure_lufs(samples: &[f32], sample_rate: f64) -> f64 {
-    if samples.is_empty() {
+pub fn measure_lufs(left: &[f32], right: &[f32], sample_rate: f64) -> f64 {
+    if left.is_empty() {
         return -f64::INFINITY;
     }
 
-    // Step 1: K-weighting filter
-    let weighted = k_weight(samples, sample_rate);
+    // Step 1: K-weighting filter per channel
+    let weighted_l = k_weight(left, sample_rate);
+    let weighted_r = k_weight(right, sample_rate);
 
     // Step 2: Compute mean-square per 400ms block (75% overlap → step = 100ms)
     let block_len = (0.4 * sample_rate) as usize;
     let step_len = (0.1 * sample_rate) as usize;
+    let len = weighted_l.len().min(weighted_r.len());
 
-    if block_len == 0 || weighted.len() < block_len {
+    if block_len == 0 || len < block_len {
         // Signal too short for even one block — just compute overall
-        let ms: f64 = weighted.iter().map(|&s| (s as f64) * (s as f64)).sum::<f64>()
-            / weighted.len() as f64;
-        return -0.691 + 10.0 * ms.log10();
+        let ms_l: f64 = weighted_l.iter().map(|&s| (s as f64) * (s as f64)).sum::<f64>()
+            / len as f64;
+        let ms_r: f64 = weighted_r.iter().map(|&s| (s as f64) * (s as f64)).sum::<f64>()
+            / len as f64;
+        return -0.691 + 10.0 * (ms_l + ms_r).log10();
     }
 
     let mut block_powers: Vec<f64> = Vec::new();
     let mut pos = 0;
-    while pos + block_len <= weighted.len() {
-        let ms: f64 = weighted[pos..pos + block_len]
+    while pos + block_len <= len {
+        let ms_l: f64 = weighted_l[pos..pos + block_len]
             .iter()
             .map(|&s| (s as f64) * (s as f64))
             .sum::<f64>()
             / block_len as f64;
-        block_powers.push(ms);
+        let ms_r: f64 = weighted_r[pos..pos + block_len]
+            .iter()
+            .map(|&s| (s as f64) * (s as f64))
+            .sum::<f64>()
+            / block_len as f64;
+        block_powers.push(ms_l + ms_r);
         pos += step_len;
     }
 
@@ -76,12 +85,11 @@ pub fn measure_lufs(samples: &[f32], sample_rate: f64) -> f64 {
     -0.691 + 10.0 * gated_mean.log10()
 }
 
-/// Find the true peak in dBFS.
-pub fn true_peak_dbfs(samples: &[f32]) -> f64 {
-    let peak = samples
-        .iter()
-        .map(|s| s.abs())
-        .fold(0.0_f32, f32::max);
+/// Find the true peak in dBFS across both stereo channels.
+pub fn true_peak_dbfs(left: &[f32], right: &[f32]) -> f64 {
+    let peak_l = left.iter().map(|s| s.abs()).fold(0.0_f32, f32::max);
+    let peak_r = right.iter().map(|s| s.abs()).fold(0.0_f32, f32::max);
+    let peak = peak_l.max(peak_r);
     if peak > 0.0 {
         20.0 * (peak as f64).log10()
     } else {
@@ -181,28 +189,30 @@ mod tests {
     #[test]
     fn test_silence_is_neg_infinity() {
         let silence = vec![0.0f32; 44100];
-        let lufs = measure_lufs(&silence, 44100.0);
+        let lufs = measure_lufs(&silence, &silence, 44100.0);
         assert!(lufs.is_infinite() && lufs < 0.0);
     }
 
     #[test]
     fn test_sine_loudness_plausible() {
-        // 1kHz sine at full scale should be around -3 LUFS
+        // 1kHz sine at full scale in both channels
         let sr = 44100.0;
         let samples: Vec<f32> = (0..44100 * 4)
             .map(|i| (2.0 * std::f64::consts::PI * 1000.0 * i as f64 / sr).sin() as f32)
             .collect();
-        let lufs = measure_lufs(&samples, sr);
-        // Full-scale 1kHz sine should be roughly -3.01 LUFS (with K-weighting boost)
-        // Allow a generous range since K-weighting shifts it
-        assert!(lufs > -5.0 && lufs < 0.0, "unexpected LUFS: {lufs}");
+        let lufs = measure_lufs(&samples, &samples, sr);
+        // Stereo with identical channels sums L+R mean-square, so ~3 dB louder than mono.
+        // Full-scale 1kHz stereo should be roughly 0 LUFS (with K-weighting boost).
+        // Allow a generous range since K-weighting shifts it.
+        assert!(lufs > -3.0 && lufs < 4.0, "unexpected LUFS: {lufs}");
     }
 
     #[test]
     fn test_true_peak() {
-        let samples = vec![0.0, 0.5, -0.8, 0.3];
-        let peak = true_peak_dbfs(&samples);
-        let expected = 20.0 * (0.8_f64).log10();
+        let left = vec![0.0, 0.5, -0.8, 0.3];
+        let right = vec![0.0, 0.3, -0.6, 0.9];
+        let peak = true_peak_dbfs(&left, &right);
+        let expected = 20.0 * (0.9_f64).log10();
         assert!((peak - expected).abs() < 0.01);
     }
 }

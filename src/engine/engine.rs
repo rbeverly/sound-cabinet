@@ -20,7 +20,7 @@ fn is_reserved_name(name: &str) -> bool {
             | "compress" | "crush" | "decimate" | "degrade"
             | "lfo" | "eq" | "gain" | "loudness"
             | "arp" | "chord" | "bus" | "sidechain"
-            | "noise_gate" | "bit_crush"
+            | "noise_gate" | "bit_crush" | "pan"
     )
 }
 
@@ -522,14 +522,17 @@ impl Engine {
 
     /// Render audio samples into the output buffer (mono f32).
     /// This is the hot path — called from both WAV rendering and cpal callbacks.
-    pub fn render_samples(&mut self, buffer: &mut [f32]) {
-        // Zero the buffer
-        for sample in buffer.iter_mut() {
+    pub fn render_samples(&mut self, left: &mut [f32], right: &mut [f32]) {
+        // Zero both buffers
+        for sample in left.iter_mut() {
+            *sample = 0.0;
+        }
+        for sample in right.iter_mut() {
             *sample = 0.0;
         }
 
         let buf_start = self.current_sample;
-        let buf_end = buf_start + buffer.len() as u64;
+        let buf_end = buf_start + left.len() as u64;
 
         // Verbose logging: print events that start in this buffer
         if self.verbose {
@@ -565,7 +568,7 @@ impl Engine {
             let active_end = if event.end_sample < buf_end {
                 (event.end_sample - buf_start) as usize
             } else {
-                buffer.len()
+                left.len()
             };
 
             let fade_samples = 256u64;
@@ -627,42 +630,44 @@ impl Engine {
                     1.0
                 };
 
-                let out = event.net.get_mono();
+                let (out_l, out_r) = event.net.get_stereo();
                 // Guard: if a voice produces NaN/Inf (e.g. filter instability
                 // from extreme frequencies), kill the event immediately.
                 // A NaN voice never recovers — cut it off to protect the mix.
-                if !out.is_finite() {
+                if !out_l.is_finite() || !out_r.is_finite() {
                     event.end_sample = pos; // mark as finished
                     break; // stop processing this event for the rest of the buffer
                 }
-                let sample = out * anti_click * swell_env * release_env * event.gain * sc_gain;
-                buffer[i] += sample;
+                let env = anti_click * swell_env * release_env * event.gain * sc_gain;
+                let left_sample = out_l * env;
+                let right_sample = out_r * env;
+                left[i] += left_sample;
+                right[i] += right_sample;
 
-                // Track per-voice level stats
+                // Track per-voice level stats (use max of L/R)
+                let abs_peak = left_sample.abs().max(right_sample.abs());
                 if let Some(ref label) = event.voice_label {
                     let stats = self.voice_levels
                         .entry(label.clone())
                         .or_insert_with(VoiceLevelStats::new);
-                    stats.sum_sq += (sample as f64) * (sample as f64);
-                    let abs = sample.abs();
-                    if abs > stats.peak {
-                        stats.peak = abs;
+                    stats.sum_sq += (left_sample as f64) * (left_sample as f64);
+                    if abs_peak > stats.peak {
+                        stats.peak = abs_peak;
                     }
                     stats.sample_count += 1;
 
                     // Track buffer-local peak for VU meter
                     let bp = voice_buffer_peaks.entry(label.clone()).or_insert(0.0);
-                    if abs > *bp {
-                        *bp = abs;
+                    if abs_peak > *bp {
+                        *bp = abs_peak;
                     }
                 }
 
                 // Track bus peak level
                 if let Some(ref bus) = event.bus_name {
-                    let abs = sample.abs();
                     let peak = bus_peaks.entry(bus.clone()).or_insert(0.0);
-                    if abs > *peak {
-                        *peak = abs;
+                    if abs_peak > *peak {
+                        *peak = abs_peak;
                     }
                 }
             }
@@ -692,8 +697,8 @@ impl Engine {
             }
         }
 
-        // Master bus: bandpass + limiter
-        self.master_bus.process(buffer);
+        // Master bus: bandpass + compressor + limiter (stereo)
+        self.master_bus.process_stereo(left, right);
 
         self.current_sample = buf_end;
 
@@ -859,12 +864,13 @@ impl Engine {
         Ok(())
     }
 
-    /// Flush the master bus limiter lookahead buffer.
+    /// Flush the master bus limiter lookahead buffer (stereo).
     /// Call after all render_samples() calls to get the final tail samples.
-    pub fn flush_master(&mut self) -> Vec<f32> {
-        let mut tail = Vec::new();
-        self.master_bus.flush(&mut tail);
-        tail
+    pub fn flush_master(&mut self) -> (Vec<f32>, Vec<f32>) {
+        let mut left_tail = Vec::new();
+        let mut right_tail = Vec::new();
+        self.master_bus.flush_stereo(&mut left_tail, &mut right_tail);
+        (left_tail, right_tail)
     }
 
     /// Get the current playback position in samples.

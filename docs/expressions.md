@@ -106,6 +106,7 @@ Effects process a signal in the pipe chain -- place them after the source and an
 | `eq(freq, gain, q)` | Parametric EQ -- peak (bell) filter. Boost or cut `gain` dB at `freq` Hz with bandwidth `q` | `saw(C3) >> eq(400, -3, 1.5)` |
 | `eq(freq, gain, low)` | Low shelf -- boost or cut everything below `freq` | `saw(C3) >> eq(80, 4, low)` |
 | `eq(freq, gain, high)` | High shelf -- boost or cut everything above `freq` | `sine(A4) >> eq(10000, 2, high)` |
+| `pan(position)` | Stereo panning. -1.0 = full left, 0.0 = center, 1.0 = full right. Equal-power panning. | `saw(C3) >> pan(-0.3)` |
 | `bus(name)` | Tag this event's output for sidechain detection | `kick >> bus(drums)` |
 | `sidechain(bus, thresh, ratio, atk, rel)` | Duck signal based on a bus level. Classic pumping effect | `pad >> sidechain(drums, -20, 4, 0.01, 0.1)` |
 
@@ -143,6 +144,24 @@ fx radio = highpass(300, 0.5) >> lowpass(3000, 0.3) >> eq(1000, 4, 0.6)
 ```
 
 Q values for peak bands: 0.5 = very wide (gentle, broad), 1.0 = moderate (default), 3.0+ = narrow/surgical. Shelves use a fixed Q of 0.707 (Butterworth, maximally flat).
+
+### Stereo Panning
+
+All output is stereo (2-channel). Without `pan()`, voices play center (equal in both speakers). Add `pan()` at the end of a pipe chain to place a voice in the stereo field:
+
+```sc
+// Static panning
+instrument piano = saw(freq) >> decay(8) >> pan(-0.3)          // slightly left
+instrument bass = sine(freq) >> decay(12) >> pan(0.0)          // center (same as no pan)
+voice hat = noise() >> highpass(8000) >> decay(25) >> pan(0.7)  // right
+
+// Pan sweep using the range operator
+at 0 play saw(440) >> pan(-1.0 -> 1.0) for 8 beats            // sweeps left to right
+```
+
+Range: -1.0 (full left) to 1.0 (full right), 0.0 = center. Uses equal-power panning so the perceived loudness stays constant across the field.
+
+`pan()` should be the last effect in the chain (or just before bus/sidechain). Effects before `pan()` process in mono; the panner converts the mono signal to stereo for output.
 
 ### Sidechain Compression
 

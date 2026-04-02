@@ -435,6 +435,15 @@ fn build_fn_call(
             Ok(pass_node * gain_node)
         }
 
+        // Stereo panner: pan(position) where -1.0 = full left, 0.0 = center, 1.0 = full right.
+        // Takes 1 mono input and produces 2 stereo outputs using fundsp's pan().
+        "pan" => {
+            let position = expect_number(args, 0, name)? as f32;
+            let mut net = Net::wrap(Box::new(pan(position)));
+            net.set_sample_rate(sample_rate);
+            Ok(net)
+        }
+
         // Parametric EQ: single biquad band.
         // eq(freq, gain_db, q)      — peak/bell filter
         // eq(freq, gain_db, "low")  — low shelf

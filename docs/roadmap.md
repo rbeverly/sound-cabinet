@@ -204,14 +204,11 @@ Apply `loudness(freq)` automatically to all instruments via a global `loudness o
 
 Render to `.mid` instead of `.wav` so compositions can be brought into a DAW. Combined with the existing `midi2sc.py` importer, this creates a round-trip: MIDI -> .sc -> MIDI.
 
-## Stereo output and panning
+## ~~Stereo output and panning~~ ✅ Implemented
 
-Adding stereo would transform the output quality. Requires changing the render pipeline from single-channel to dual-channel buffers and adding a `pan(position)` effect:
+Engine renders stereo dual-buffer output. `pan(position)` places voices in the stereo field (-1.0 left, 0.0 center, 1.0 right). WAV output is 2-channel. See [Expressions & Effects](expressions.md#stereo-panning).
 
-```sc
-instrument wide_pad = saw(freq) >> lowpass(2000, 0.5) >> pan(0.3)
-instrument bass = sine(freq) >> decay(8) >> pan(0.0)   // center
-```
+**Still planned**: Stereo-aware reverb/chorus/delay (currently mono effects produce centered stereo; future versions will output decorrelated stereo width). Spatial audio via HRTF/binaural for 3D positioning.
 
 ## Sample playback
 

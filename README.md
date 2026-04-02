@@ -146,7 +146,14 @@ instrument piano = saw(freq) >> lowpass(freq * 4, 0.7) >> decay(8) >> reverb(0.6
 
 // An fx is a reusable effect chain
 fx hall = reverb(0.8, 0.4, 0.35) >> delay(0.3, 0.2, 0.15)
+
+// Stereo panning — place instruments in the stereo field
+instrument piano = saw(freq) >> decay(8) >> pan(-0.3)        // slightly left
+instrument bass = sine(freq) >> decay(12) >> pan(0.0)        // center
+voice hat = noise() >> highpass(8000) >> decay(25) >> pan(0.6)  // right
 ```
+
+All output is stereo (2-channel WAV). Without `pan()`, voices play center. `pan()` uses equal-power panning: -1.0 = full left, 0.0 = center, 1.0 = full right.
 
 ### Custom waveforms
 

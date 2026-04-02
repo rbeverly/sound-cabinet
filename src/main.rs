@@ -112,10 +112,12 @@ fn cmd_profile(args: &[String]) -> Result<()> {
     let mut engine = build_engine(score_path)?;
 
     // Render all samples (discard audio, just accumulate stats)
-    let mut buffer = vec![0.0f32; 1024];
+    let mut left_buf = vec![0.0f32; 1024];
+    let mut right_buf = vec![0.0f32; 1024];
     while !engine.is_finished() {
-        buffer.fill(0.0);
-        engine.render_samples(&mut buffer);
+        left_buf.fill(0.0);
+        right_buf.fill(0.0);
+        engine.render_samples(&mut left_buf, &mut right_buf);
     }
     let _ = engine.flush_master();
 

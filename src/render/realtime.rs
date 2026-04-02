@@ -40,33 +40,50 @@ fn play_realtime_inner(engine: Engine, show_vu: bool) -> Result<()> {
     let engine = Arc::new(Mutex::new(engine));
     let engine_clone = Arc::clone(&engine);
 
-    // Pre-allocate the mono render buffer outside the callback.
+    // Pre-allocate stereo render buffers outside the callback.
     // NEVER allocate in the audio callback — heap allocation can block.
-    let max_mono_frames = PREFERRED_BUFFER_FRAMES as usize;
-    let mono_buf = Arc::new(Mutex::new(vec![0.0f32; max_mono_frames]));
-    let mono_buf_clone = Arc::clone(&mono_buf);
+    let max_frames = PREFERRED_BUFFER_FRAMES as usize;
+    let left_buf = Arc::new(Mutex::new(vec![0.0f32; max_frames]));
+    let right_buf = Arc::new(Mutex::new(vec![0.0f32; max_frames]));
+    let left_clone = Arc::clone(&left_buf);
+    let right_clone = Arc::clone(&right_buf);
 
     let stream = match sample_format {
         SampleFormat::F32 => device.build_output_stream(
             &stream_config,
             move |data: &mut [f32], _| {
                 let mut eng = engine_clone.lock().unwrap();
-                let mut buf = mono_buf_clone.lock().unwrap();
+                let mut lbuf = left_clone.lock().unwrap();
+                let mut rbuf = right_clone.lock().unwrap();
                 let frame_count = data.len() / channels as usize;
 
-                // Ensure our pre-allocated buffer is large enough
-                // (resize is a no-op if already big enough)
-                if buf.len() < frame_count {
-                    buf.resize(frame_count, 0.0);
+                // Ensure our pre-allocated buffers are large enough
+                if lbuf.len() < frame_count {
+                    lbuf.resize(frame_count, 0.0);
+                }
+                if rbuf.len() < frame_count {
+                    rbuf.resize(frame_count, 0.0);
                 }
 
-                eng.render_samples(&mut buf[..frame_count]);
+                eng.render_samples(&mut lbuf[..frame_count], &mut rbuf[..frame_count]);
 
-                // Interleave mono to all output channels, clamping to prevent driver clipping
+                // Interleave stereo to output channels, clamping to prevent driver clipping
                 for (i, frame) in data.chunks_mut(channels as usize).enumerate() {
-                    let sample = if i < frame_count { buf[i].clamp(-1.0, 1.0) } else { 0.0 };
-                    for ch in frame.iter_mut() {
-                        *ch = sample;
+                    let l = if i < frame_count { lbuf[i].clamp(-1.0, 1.0) } else { 0.0 };
+                    let r = if i < frame_count { rbuf[i].clamp(-1.0, 1.0) } else { 0.0 };
+                    match frame.len() {
+                        1 => {
+                            // Mono output device: downmix
+                            frame[0] = (l + r) * 0.5;
+                        }
+                        _ => {
+                            // Stereo or more: L, R, then silence for extra channels
+                            frame[0] = l;
+                            if frame.len() > 1 { frame[1] = r; }
+                            for ch in frame.iter_mut().skip(2) {
+                                *ch = 0.0;
+                            }
+                        }
                     }
                 }
             },
@@ -193,28 +210,44 @@ pub fn play_streaming(
 
     let engine_clone = Arc::clone(&engine);
 
-    let max_mono_frames = PREFERRED_BUFFER_FRAMES as usize;
-    let mono_buf = Arc::new(Mutex::new(vec![0.0f32; max_mono_frames]));
-    let mono_buf_clone = Arc::clone(&mono_buf);
+    let max_frames = PREFERRED_BUFFER_FRAMES as usize;
+    let left_buf = Arc::new(Mutex::new(vec![0.0f32; max_frames]));
+    let right_buf = Arc::new(Mutex::new(vec![0.0f32; max_frames]));
+    let left_clone = Arc::clone(&left_buf);
+    let right_clone = Arc::clone(&right_buf);
 
     let stream = match sample_format {
         SampleFormat::F32 => device.build_output_stream(
             &stream_config,
             move |data: &mut [f32], _| {
                 let mut eng = engine_clone.lock().unwrap();
-                let mut buf = mono_buf_clone.lock().unwrap();
+                let mut lbuf = left_clone.lock().unwrap();
+                let mut rbuf = right_clone.lock().unwrap();
                 let frame_count = data.len() / channels as usize;
 
-                if buf.len() < frame_count {
-                    buf.resize(frame_count, 0.0);
+                if lbuf.len() < frame_count {
+                    lbuf.resize(frame_count, 0.0);
+                }
+                if rbuf.len() < frame_count {
+                    rbuf.resize(frame_count, 0.0);
                 }
 
-                eng.render_samples(&mut buf[..frame_count]);
+                eng.render_samples(&mut lbuf[..frame_count], &mut rbuf[..frame_count]);
 
                 for (i, frame) in data.chunks_mut(channels as usize).enumerate() {
-                    let sample = if i < frame_count { buf[i].clamp(-1.0, 1.0) } else { 0.0 };
-                    for ch in frame.iter_mut() {
-                        *ch = sample;
+                    let l = if i < frame_count { lbuf[i].clamp(-1.0, 1.0) } else { 0.0 };
+                    let r = if i < frame_count { rbuf[i].clamp(-1.0, 1.0) } else { 0.0 };
+                    match frame.len() {
+                        1 => {
+                            frame[0] = (l + r) * 0.5;
+                        }
+                        _ => {
+                            frame[0] = l;
+                            if frame.len() > 1 { frame[1] = r; }
+                            for ch in frame.iter_mut().skip(2) {
+                                *ch = 0.0;
+                            }
+                        }
                     }
                 }
             },

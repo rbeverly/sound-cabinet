@@ -800,6 +800,7 @@ impl BrickwallLimiter {
 /// Default settings: -18 dB threshold, 2:1 ratio, 10ms attack, 200ms release.
 ///
 /// Not an AudioNode — operates on buffers for master bus use.
+#[derive(Clone)]
 pub struct MasterCompressor {
     threshold: f32,    // dB
     ratio: f32,
@@ -907,6 +908,21 @@ impl MasterCompressor {
 // Master Bus (highpass + lowpass + compressor + limiter)
 // ---------------------------------------------------------------------------
 
+/// Per-channel biquad filter state (delay elements only).
+#[derive(Clone)]
+struct BiquadState {
+    x1: f32,
+    x2: f32,
+    y1: f32,
+    y2: f32,
+}
+
+impl Default for BiquadState {
+    fn default() -> Self {
+        BiquadState { x1: 0.0, x2: 0.0, y1: 0.0, y2: 0.0 }
+    }
+}
+
 /// Master bus processing chain: bandpass filter (HP + LP), gentle compressor,
 /// and brick-wall limiter. Operates on buffers, not the AudioNode trait.
 ///
@@ -914,31 +930,30 @@ impl MasterCompressor {
 /// - Lowpass at 18 kHz: removes ultrasonic content from aliasing/resonance
 /// - Compressor: reduces crest factor (peak-to-RMS gap) for higher perceived loudness
 /// - Limiter at -0.3 dBFS: prevents peaks from hitting 0 dBFS
+///
+/// Supports stereo processing: each channel has independent filter state,
+/// compressor, and limiter, but shares filter coefficients.
 pub struct MasterBus {
-    // Highpass state (2nd-order Butterworth via biquad)
+    // Highpass coefficients (shared across channels)
     hp_a1: f32,
     hp_a2: f32,
     hp_b0: f32,
     hp_b1: f32,
     hp_b2: f32,
-    hp_x1: f32,
-    hp_x2: f32,
-    hp_y1: f32,
-    hp_y2: f32,
-    // Lowpass state (2nd-order Butterworth via biquad)
+    // Highpass per-channel state [left, right]
+    hp_state: [BiquadState; 2],
+    // Lowpass coefficients (shared across channels)
     lp_a1: f32,
     lp_a2: f32,
     lp_b0: f32,
     lp_b1: f32,
     lp_b2: f32,
-    lp_x1: f32,
-    lp_x2: f32,
-    lp_y1: f32,
-    lp_y2: f32,
-    // Compressor (crest factor reduction)
-    compressor: MasterCompressor,
-    // Limiter
-    limiter: BrickwallLimiter,
+    // Lowpass per-channel state [left, right]
+    lp_state: [BiquadState; 2],
+    // Compressor per channel [left, right]
+    compressor: [MasterCompressor; 2],
+    // Limiter per channel [left, right]
+    limiter: [BrickwallLimiter; 2],
     // Output gain (linear). Applied before everything else in the chain.
     gain: f32,
 }
@@ -951,25 +966,28 @@ impl MasterBus {
         let ceiling = 10.0_f32.powf(-0.3 / 20.0);
         // Default: gentle mastering compression (amount 1.0)
         let compressor = MasterCompressor::from_amount(1.0, sample_rate);
+        let limiter = BrickwallLimiter::new(ceiling, 0.1, sample_rate);
         MasterBus {
             hp_a1, hp_a2, hp_b0, hp_b1, hp_b2,
-            hp_x1: 0.0, hp_x2: 0.0, hp_y1: 0.0, hp_y2: 0.0,
+            hp_state: [BiquadState::default(), BiquadState::default()],
             lp_a1, lp_a2, lp_b0, lp_b1, lp_b2,
-            lp_x1: 0.0, lp_x2: 0.0, lp_y1: 0.0, lp_y2: 0.0,
-            compressor,
-            limiter: BrickwallLimiter::new(ceiling, 0.1, sample_rate),
+            lp_state: [BiquadState::default(), BiquadState::default()],
+            compressor: [compressor.clone(), compressor],
+            limiter: [limiter.clone(), limiter],
             gain: 1.0,
         }
     }
 
     /// Set the compression amount (0.0 = off, 1.0 = default, 2.0 = heavy).
     pub fn set_compress(&mut self, amount: f32, sample_rate: f64) {
-        self.compressor = MasterCompressor::from_amount(amount, sample_rate);
+        let c = MasterCompressor::from_amount(amount, sample_rate);
+        self.compressor = [c.clone(), c];
     }
 
     /// Set compression with explicit parameters.
     pub fn set_compress_params(&mut self, threshold: f32, ratio: f32, attack: f64, release: f64, sample_rate: f64) {
-        self.compressor = MasterCompressor::new(threshold, ratio, attack, release, sample_rate);
+        let c = MasterCompressor::new(threshold, ratio, attack, release, sample_rate);
+        self.compressor = [c.clone(), c];
     }
 
     /// Set master output gain in dB (e.g., -6.0 to reduce by 6 dB).
@@ -981,7 +999,8 @@ impl MasterBus {
     /// Set the limiter ceiling in dBFS (e.g., -0.3 for default, -1.0 for broadcast).
     pub fn set_ceiling(&mut self, db: f32, sample_rate: f64) {
         let ceiling = 10.0_f32.powf(db / 20.0);
-        self.limiter = BrickwallLimiter::new(ceiling, 0.1, sample_rate);
+        let l = BrickwallLimiter::new(ceiling, 0.1, sample_rate);
+        self.limiter = [l.clone(), l];
     }
 
     /// 2nd-order Butterworth highpass biquad coefficients.
@@ -1012,7 +1031,45 @@ impl MasterBus {
         (b0, b1, b2, a1, a2)
     }
 
-    /// Process a buffer in-place: highpass → lowpass → compressor → limiter.
+    /// Process a single channel through biquad filters using the given channel index.
+    fn process_channel(&mut self, buffer: &mut [f32], ch: usize) {
+        let hp = &mut self.hp_state[ch];
+        let lp = &mut self.lp_state[ch];
+
+        for sample in buffer.iter_mut() {
+            if !sample.is_finite() {
+                *sample = 0.0;
+                continue;
+            }
+
+            // Highpass
+            let hp_out = self.hp_b0 * *sample + self.hp_b1 * hp.x1 + self.hp_b2 * hp.x2
+                - self.hp_a1 * hp.y1 - self.hp_a2 * hp.y2;
+            hp.x2 = hp.x1;
+            hp.x1 = *sample;
+            hp.y2 = hp.y1;
+            hp.y1 = hp_out;
+
+            // Lowpass
+            let lp_out = self.lp_b0 * hp_out + self.lp_b1 * lp.x1 + self.lp_b2 * lp.x2
+                - self.lp_a1 * lp.y1 - self.lp_a2 * lp.y2;
+            lp.x2 = lp.x1;
+            lp.x1 = hp_out;
+            lp.y2 = lp.y1;
+            lp.y1 = lp_out;
+
+            if !lp_out.is_finite() {
+                *hp = BiquadState::default();
+                *lp = BiquadState::default();
+                *sample = 0.0;
+            } else {
+                *sample = lp_out;
+            }
+        }
+    }
+
+    /// Process a mono buffer in-place: highpass → lowpass → compressor → limiter.
+    /// Uses channel 0 state. Still needed by the standalone normalization limiter path.
     pub fn process(&mut self, buffer: &mut [f32]) {
         // Apply master gain first (before all processing)
         if (self.gain - 1.0).abs() > 1e-6 {
@@ -1021,51 +1078,49 @@ impl MasterBus {
             }
         }
 
-        for sample in buffer.iter_mut() {
-            // Guard: if input is NaN/Inf (e.g. from an oscillator above Nyquist),
-            // replace with silence to prevent poisoning the filter state.
-            if !sample.is_finite() {
-                *sample = 0.0;
-                continue;
+        self.process_channel(buffer, 0);
+
+        // Compressor (crest factor reduction)
+        self.compressor[0].process(buffer);
+
+        // Limiter
+        self.limiter[0].process(buffer);
+    }
+
+    /// Process stereo buffers in-place: gain → highpass → lowpass → compressor → limiter per channel.
+    pub fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32]) {
+        // Apply master gain first
+        if (self.gain - 1.0).abs() > 1e-6 {
+            for sample in left.iter_mut() {
+                *sample *= self.gain;
             }
-
-            // Highpass
-            let hp_out = self.hp_b0 * *sample + self.hp_b1 * self.hp_x1 + self.hp_b2 * self.hp_x2
-                - self.hp_a1 * self.hp_y1 - self.hp_a2 * self.hp_y2;
-            self.hp_x2 = self.hp_x1;
-            self.hp_x1 = *sample;
-            self.hp_y2 = self.hp_y1;
-            self.hp_y1 = hp_out;
-
-            // Lowpass
-            let lp_out = self.lp_b0 * hp_out + self.lp_b1 * self.lp_x1 + self.lp_b2 * self.lp_x2
-                - self.lp_a1 * self.lp_y1 - self.lp_a2 * self.lp_y2;
-            self.lp_x2 = self.lp_x1;
-            self.lp_x1 = hp_out;
-            self.lp_y2 = self.lp_y1;
-            self.lp_y1 = lp_out;
-
-            // Guard filter output: if filters produced NaN (unstable coefficients),
-            // reset filter state and output silence for this sample.
-            if !lp_out.is_finite() {
-                self.hp_x1 = 0.0; self.hp_x2 = 0.0; self.hp_y1 = 0.0; self.hp_y2 = 0.0;
-                self.lp_x1 = 0.0; self.lp_x2 = 0.0; self.lp_y1 = 0.0; self.lp_y2 = 0.0;
-                *sample = 0.0;
-            } else {
-                *sample = lp_out;
+            for sample in right.iter_mut() {
+                *sample *= self.gain;
             }
         }
 
-        // Compressor (crest factor reduction)
-        self.compressor.process(buffer);
+        // Biquad filters per channel
+        self.process_channel(left, 0);
+        self.process_channel(right, 1);
 
-        // Limiter
-        self.limiter.process(buffer);
+        // Compressor per channel
+        self.compressor[0].process(left);
+        self.compressor[1].process(right);
+
+        // Limiter per channel
+        self.limiter[0].process(left);
+        self.limiter[1].process(right);
     }
 
-    /// Flush limiter lookahead tail.
+    /// Flush limiter lookahead tail (mono — uses channel 0).
     pub fn flush(&mut self, output: &mut Vec<f32>) {
-        self.limiter.flush(output);
+        self.limiter[0].flush(output);
+    }
+
+    /// Flush both limiter channels for stereo output.
+    pub fn flush_stereo(&mut self, left: &mut Vec<f32>, right: &mut Vec<f32>) {
+        self.limiter[0].flush(left);
+        self.limiter[1].flush(right);
     }
 }
 
