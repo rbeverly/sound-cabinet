@@ -46,6 +46,9 @@ pub fn render_to_wav(engine: &mut Engine, path: &Path, target_lufs: Option<f64>)
 
     // Optional LUFS normalization
     if let Some(target) = target_lufs {
+        if target > 0.0 {
+            eprintln!("  Warning: --lufs {} is positive — did you mean --lufs {}? LUFS targets are always negative (e.g., -14 for Spotify).", target, -target.abs());
+        }
         if lufs.is_finite() {
             let gain_db = target - lufs;
             let gain_linear = 10.0_f64.powf(gain_db / 20.0) as f32;
