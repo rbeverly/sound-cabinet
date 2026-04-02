@@ -873,6 +873,7 @@ pub struct MasterCompressor {
     release_coeff: f32,
     envelope_sq: f32,  // squared RMS envelope (avoids sqrt per sample)
     makeup_gain: f32,  // compensate for gain reduction
+    upward: bool,      // upward compression: boost quiet content instead of reducing loud
 }
 
 impl MasterCompressor {
@@ -891,7 +892,17 @@ impl MasterCompressor {
             release_coeff,
             envelope_sq: 0.0,
             makeup_gain,
+            upward: false,
         }
+    }
+
+    /// Create an upward compressor (boosts quiet content).
+    pub fn new_upward(threshold_db: f32, ratio: f32, attack_secs: f64, release_secs: f64, sample_rate: f64) -> Self {
+        let mut comp = Self::new(threshold_db, ratio, attack_secs, release_secs, sample_rate);
+        comp.upward = true;
+        // Upward compression doesn't need makeup gain — it boosts directly
+        comp.makeup_gain = 1.0;
+        comp
     }
 
     /// Create from a simple 0.0–2.0 amount parameter.
@@ -954,13 +965,25 @@ impl MasterCompressor {
                 -200.0
             };
 
-            // Gain reduction
-            let gain_db = if env_db > self.threshold {
-                let over = env_db - self.threshold;
-                let compressed_over = over / self.ratio;
-                self.threshold + compressed_over - env_db
+            // Gain change: downward or upward compression
+            let gain_db = if self.upward {
+                // Upward: boost content BELOW threshold
+                if env_db < self.threshold && env_db > -100.0 {
+                    let under = self.threshold - env_db;
+                    let boosted = under * (1.0 - 1.0 / self.ratio);
+                    boosted.min(24.0) // cap boost at 24 dB to prevent runaway
+                } else {
+                    0.0
+                }
             } else {
-                0.0
+                // Downward: reduce content ABOVE threshold
+                if env_db > self.threshold {
+                    let over = env_db - self.threshold;
+                    let compressed_over = over / self.ratio;
+                    self.threshold + compressed_over - env_db
+                } else {
+                    0.0
+                }
             };
 
             let gain = 10.0_f32.powf(gain_db / 20.0) * self.makeup_gain;
@@ -971,6 +994,196 @@ impl MasterCompressor {
 
 // ---------------------------------------------------------------------------
 // Master Bus (highpass + lowpass + compressor + limiter)
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Multiband Compressor (3-band: low, mid, high)
+// ---------------------------------------------------------------------------
+
+/// 3-band multiband compressor for the master bus.
+/// Splits signal into low (<200Hz), mid (200Hz-3kHz), and high (>3kHz) bands
+/// using 2nd-order crossover filters, compresses each band independently,
+/// then sums them back together.
+#[derive(Clone)]
+pub struct MultibandCompressor {
+    // Crossover filter states per channel [left, right]
+    // Low-mid crossover at 200 Hz
+    lm_lp_state: [[f32; 4]; 2],  // [ch][x1,x2,y1,y2]
+    lm_hp_state: [[f32; 4]; 2],
+    lm_lp_b0: f32, lm_lp_b1: f32, lm_lp_b2: f32, lm_lp_a1: f32, lm_lp_a2: f32,
+    lm_hp_b0: f32, lm_hp_b1: f32, lm_hp_b2: f32, lm_hp_a1: f32, lm_hp_a2: f32,
+    // Mid-high crossover at 3000 Hz
+    mh_lp_state: [[f32; 4]; 2],
+    mh_hp_state: [[f32; 4]; 2],
+    mh_lp_b0: f32, mh_lp_b1: f32, mh_lp_b2: f32, mh_lp_a1: f32, mh_lp_a2: f32,
+    mh_hp_b0: f32, mh_hp_b1: f32, mh_hp_b2: f32, mh_hp_a1: f32, mh_hp_a2: f32,
+    // Per-band compressor envelopes [low, mid, high] × [left, right]
+    env: [[f32; 2]; 3],
+    // Per-band settings
+    threshold: [f32; 3],
+    ratio: [f32; 3],
+    attack_coeff: f32,
+    release_coeff: f32,
+    makeup: [f32; 3],
+    active: bool,
+}
+
+impl MultibandCompressor {
+    pub fn new(sample_rate: f64) -> Self {
+        let (lp_b0, lp_b1, lp_b2, lp_a1, lp_a2) = Self::lowpass_coeffs(200.0, sample_rate);
+        let (hp_b0, hp_b1, hp_b2, hp_a1, hp_a2) = Self::highpass_coeffs(200.0, sample_rate);
+        let (mlp_b0, mlp_b1, mlp_b2, mlp_a1, mlp_a2) = Self::lowpass_coeffs(3000.0, sample_rate);
+        let (mhp_b0, mhp_b1, mhp_b2, mhp_a1, mhp_a2) = Self::highpass_coeffs(3000.0, sample_rate);
+
+        let attack_coeff = (-1.0 / (0.01 * sample_rate)).exp() as f32;
+        let release_coeff = (-1.0 / (0.1 * sample_rate)).exp() as f32;
+
+        MultibandCompressor {
+            lm_lp_state: [[0.0; 4]; 2], lm_hp_state: [[0.0; 4]; 2],
+            lm_lp_b0: lp_b0, lm_lp_b1: lp_b1, lm_lp_b2: lp_b2, lm_lp_a1: lp_a1, lm_lp_a2: lp_a2,
+            lm_hp_b0: hp_b0, lm_hp_b1: hp_b1, lm_hp_b2: hp_b2, lm_hp_a1: hp_a1, lm_hp_a2: hp_a2,
+            mh_lp_state: [[0.0; 4]; 2], mh_hp_state: [[0.0; 4]; 2],
+            mh_lp_b0: mlp_b0, mh_lp_b1: mlp_b1, mh_lp_b2: mlp_b2, mh_lp_a1: mlp_a1, mh_lp_a2: mlp_a2,
+            mh_hp_b0: mhp_b0, mh_hp_b1: mhp_b1, mh_hp_b2: mhp_b2, mh_hp_a1: mhp_a1, mh_hp_a2: mhp_a2,
+            env: [[0.0; 2]; 3],
+            threshold: [-24.0, -20.0, -18.0], // low, mid, high
+            ratio: [3.0, 2.5, 2.0],
+            attack_coeff,
+            release_coeff,
+            makeup: [1.0, 1.0, 1.0],
+            active: false,
+        }
+    }
+
+    /// Set from a simple amount (0 = off, 0.3 = gentle, 1.0 = OTT-level).
+    pub fn set_amount(&mut self, amount: f32) {
+        if amount <= 0.0 {
+            self.active = false;
+            return;
+        }
+        self.active = true;
+        let a = amount.min(2.0);
+        // Scale thresholds and ratios based on amount
+        self.threshold = [-30.0 / a, -24.0 / a, -20.0 / a];
+        self.ratio = [1.0 + a * 3.0, 1.0 + a * 2.5, 1.0 + a * 2.0];
+        // Makeup gain to compensate for compression
+        for i in 0..3 {
+            self.makeup[i] = 10.0_f32.powf(
+                self.threshold[i].abs() * (1.0 - 1.0 / self.ratio[i]) * 0.3 / 20.0
+            );
+        }
+    }
+
+    /// Set per-band amounts (low, mid, high).
+    pub fn set_per_band(&mut self, low: f32, mid: f32, high: f32) {
+        self.active = low > 0.0 || mid > 0.0 || high > 0.0;
+        let amounts = [low, mid, high];
+        for i in 0..3 {
+            let a = amounts[i].max(0.0).min(2.0);
+            if a <= 0.0 {
+                self.threshold[i] = -100.0;
+                self.ratio[i] = 1.0;
+                self.makeup[i] = 1.0;
+            } else {
+                self.threshold[i] = -24.0 / a;
+                self.ratio[i] = 1.0 + a * 3.0;
+                self.makeup[i] = 10.0_f32.powf(
+                    self.threshold[i].abs() * (1.0 - 1.0 / self.ratio[i]) * 0.3 / 20.0
+                );
+            }
+        }
+    }
+
+    fn lowpass_coeffs(freq: f64, sr: f64) -> (f32, f32, f32, f32, f32) {
+        let w0 = 2.0 * std::f64::consts::PI * freq / sr;
+        let cos_w0 = w0.cos();
+        let alpha = w0.sin() / (2.0 * std::f64::consts::SQRT_2);
+        let a0 = 1.0 + alpha;
+        ((((1.0 - cos_w0) / 2.0) / a0) as f32,
+         (((1.0 - cos_w0)) / a0) as f32,
+         ((((1.0 - cos_w0) / 2.0)) / a0) as f32,
+         ((-2.0 * cos_w0) / a0) as f32,
+         (((1.0 - alpha)) / a0) as f32)
+    }
+
+    fn highpass_coeffs(freq: f64, sr: f64) -> (f32, f32, f32, f32, f32) {
+        let w0 = 2.0 * std::f64::consts::PI * freq / sr;
+        let cos_w0 = w0.cos();
+        let alpha = w0.sin() / (2.0 * std::f64::consts::SQRT_2);
+        let a0 = 1.0 + alpha;
+        ((((1.0 + cos_w0) / 2.0) / a0) as f32,
+         ((-(1.0 + cos_w0)) / a0) as f32,
+         ((((1.0 + cos_w0) / 2.0)) / a0) as f32,
+         ((-2.0 * cos_w0) / a0) as f32,
+         (((1.0 - alpha)) / a0) as f32)
+    }
+
+    #[inline]
+    fn biquad(x: f32, state: &mut [f32; 4], b0: f32, b1: f32, b2: f32, a1: f32, a2: f32) -> f32 {
+        let y = b0 * x + b1 * state[0] + b2 * state[1] - a1 * state[2] - a2 * state[3];
+        state[1] = state[0]; state[0] = x;
+        state[3] = state[2]; state[2] = y;
+        y
+    }
+
+    #[inline]
+    fn compress_sample(&mut self, sample: f32, band: usize, ch: usize) -> f32 {
+        let x_sq = sample * sample;
+        if x_sq > self.env[band][ch] {
+            self.env[band][ch] = self.attack_coeff * self.env[band][ch] + (1.0 - self.attack_coeff) * x_sq;
+        } else {
+            self.env[band][ch] = self.release_coeff * self.env[band][ch] + (1.0 - self.release_coeff) * x_sq;
+        }
+        let env_db = if self.env[band][ch] > 1e-20 {
+            10.0 * self.env[band][ch].log10()
+        } else { -200.0 };
+
+        let gain_db = if env_db > self.threshold[band] {
+            let over = env_db - self.threshold[band];
+            self.threshold[band] + over / self.ratio[band] - env_db
+        } else { 0.0 };
+
+        sample * 10.0_f32.powf(gain_db / 20.0) * self.makeup[band]
+    }
+
+    /// Process a stereo sample pair through the multiband compressor.
+    /// Returns (left_out, right_out).
+    #[inline]
+    pub fn process_sample(&mut self, l: f32, r: f32) -> (f32, f32) {
+        if !self.active { return (l, r); }
+
+        // Split into 3 bands per channel
+        // Low: lowpass at 200 Hz
+        let low_l = Self::biquad(l, &mut self.lm_lp_state[0], self.lm_lp_b0, self.lm_lp_b1, self.lm_lp_b2, self.lm_lp_a1, self.lm_lp_a2);
+        let low_r = Self::biquad(r, &mut self.lm_lp_state[1], self.lm_lp_b0, self.lm_lp_b1, self.lm_lp_b2, self.lm_lp_a1, self.lm_lp_a2);
+
+        // High pass at 200 Hz (everything above low)
+        let mid_high_l = Self::biquad(l, &mut self.lm_hp_state[0], self.lm_hp_b0, self.lm_hp_b1, self.lm_hp_b2, self.lm_hp_a1, self.lm_hp_a2);
+        let mid_high_r = Self::biquad(r, &mut self.lm_hp_state[1], self.lm_hp_b0, self.lm_hp_b1, self.lm_hp_b2, self.lm_hp_a1, self.lm_hp_a2);
+
+        // Mid: lowpass the mid_high at 3000 Hz
+        let mid_l = Self::biquad(mid_high_l, &mut self.mh_lp_state[0], self.mh_lp_b0, self.mh_lp_b1, self.mh_lp_b2, self.mh_lp_a1, self.mh_lp_a2);
+        let mid_r = Self::biquad(mid_high_r, &mut self.mh_lp_state[1], self.mh_lp_b0, self.mh_lp_b1, self.mh_lp_b2, self.mh_lp_a1, self.mh_lp_a2);
+
+        // High: highpass the mid_high at 3000 Hz
+        let high_l = Self::biquad(mid_high_l, &mut self.mh_hp_state[0], self.mh_hp_b0, self.mh_hp_b1, self.mh_hp_b2, self.mh_hp_a1, self.mh_hp_a2);
+        let high_r = Self::biquad(mid_high_r, &mut self.mh_hp_state[1], self.mh_hp_b0, self.mh_hp_b1, self.mh_hp_b2, self.mh_hp_a1, self.mh_hp_a2);
+
+        // Compress each band
+        let low_l = self.compress_sample(low_l, 0, 0);
+        let low_r = self.compress_sample(low_r, 0, 1);
+        let mid_l = self.compress_sample(mid_l, 1, 0);
+        let mid_r = self.compress_sample(mid_r, 1, 1);
+        let high_l = self.compress_sample(high_l, 2, 0);
+        let high_r = self.compress_sample(high_r, 2, 1);
+
+        // Recombine
+        (low_l + mid_l + high_l, low_r + mid_r + high_r)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Master Bus Support Types
 // ---------------------------------------------------------------------------
 
 /// Per-channel biquad filter state (delay elements only).
@@ -998,6 +1211,96 @@ impl Default for BiquadState {
 ///
 /// Supports stereo processing: each channel has independent filter state,
 /// compressor, and limiter, but shares filter coefficients.
+/// A single biquad EQ band with shared coefficients and per-channel state.
+#[derive(Clone)]
+struct EqBand {
+    b0: f32, b1: f32, b2: f32, a1: f32, a2: f32,
+    state: [BiquadState; 2],
+    active: bool,
+}
+
+impl EqBand {
+    fn bypass() -> Self {
+        EqBand {
+            b0: 1.0, b1: 0.0, b2: 0.0, a1: 0.0, a2: 0.0,
+            state: [BiquadState::default(), BiquadState::default()],
+            active: false,
+        }
+    }
+
+    fn low_shelf(freq: f64, gain_db: f32, sr: f64) -> Self {
+        if gain_db.abs() < 0.01 { return Self::bypass(); }
+        let a = 10.0_f64.powf(gain_db as f64 / 40.0);
+        let w0 = 2.0 * std::f64::consts::PI * freq / sr;
+        let cos_w0 = w0.cos();
+        let alpha = w0.sin() / (2.0 * std::f64::consts::SQRT_2);
+        let ap1 = a + 1.0;
+        let am1 = a - 1.0;
+        let two_sqrt_a_alpha = 2.0 * a.sqrt() * alpha;
+        let a0 = ap1 + am1 * cos_w0 + two_sqrt_a_alpha;
+        EqBand {
+            b0: (a * (ap1 - am1 * cos_w0 + two_sqrt_a_alpha) / a0) as f32,
+            b1: (2.0 * a * (am1 - ap1 * cos_w0) / a0) as f32,
+            b2: (a * (ap1 - am1 * cos_w0 - two_sqrt_a_alpha) / a0) as f32,
+            a1: (-2.0 * (am1 + ap1 * cos_w0) / a0) as f32,
+            a2: ((ap1 + am1 * cos_w0 - two_sqrt_a_alpha) / a0) as f32,
+            state: [BiquadState::default(), BiquadState::default()],
+            active: true,
+        }
+    }
+
+    fn high_shelf(freq: f64, gain_db: f32, sr: f64) -> Self {
+        if gain_db.abs() < 0.01 { return Self::bypass(); }
+        let a = 10.0_f64.powf(gain_db as f64 / 40.0);
+        let w0 = 2.0 * std::f64::consts::PI * freq / sr;
+        let cos_w0 = w0.cos();
+        let alpha = w0.sin() / (2.0 * std::f64::consts::SQRT_2);
+        let ap1 = a + 1.0;
+        let am1 = a - 1.0;
+        let two_sqrt_a_alpha = 2.0 * a.sqrt() * alpha;
+        let a0 = ap1 - am1 * cos_w0 + two_sqrt_a_alpha;
+        EqBand {
+            b0: (a * (ap1 + am1 * cos_w0 + two_sqrt_a_alpha) / a0) as f32,
+            b1: (-2.0 * a * (am1 + ap1 * cos_w0) / a0) as f32,
+            b2: (a * (ap1 + am1 * cos_w0 - two_sqrt_a_alpha) / a0) as f32,
+            a1: (2.0 * (am1 - ap1 * cos_w0) / a0) as f32,
+            a2: ((ap1 - am1 * cos_w0 - two_sqrt_a_alpha) / a0) as f32,
+            state: [BiquadState::default(), BiquadState::default()],
+            active: true,
+        }
+    }
+
+    fn peak(freq: f64, gain_db: f32, q: f64, sr: f64) -> Self {
+        if gain_db.abs() < 0.01 { return Self::bypass(); }
+        let a = 10.0_f64.powf(gain_db as f64 / 40.0);
+        let w0 = 2.0 * std::f64::consts::PI * freq / sr;
+        let cos_w0 = w0.cos();
+        let alpha = w0.sin() / (2.0 * q);
+        let a0 = 1.0 + alpha / a;
+        EqBand {
+            b0: ((1.0 + alpha * a) / a0) as f32,
+            b1: ((-2.0 * cos_w0) / a0) as f32,
+            b2: ((1.0 - alpha * a) / a0) as f32,
+            a1: ((-2.0 * cos_w0) / a0) as f32,
+            a2: ((1.0 - alpha / a) / a0) as f32,
+            state: [BiquadState::default(), BiquadState::default()],
+            active: true,
+        }
+    }
+
+    #[inline]
+    fn process_sample(&mut self, x: f32, ch: usize) -> f32 {
+        if !self.active { return x; }
+        let s = &mut self.state[ch];
+        let y = self.b0 * x + self.b1 * s.x1 + self.b2 * s.x2 - self.a1 * s.y1 - self.a2 * s.y2;
+        s.x2 = s.x1;
+        s.x1 = x;
+        s.y2 = s.y1;
+        s.y1 = y;
+        y
+    }
+}
+
 pub struct MasterBus {
     // Highpass coefficients (shared across channels)
     hp_a1: f32,
@@ -1015,8 +1318,17 @@ pub struct MasterBus {
     lp_b2: f32,
     // Lowpass per-channel state [left, right]
     lp_state: [BiquadState; 2],
+    // 3-band master EQ curve (low shelf, mid peak, high shelf)
+    eq_low: EqBand,
+    eq_mid: EqBand,
+    eq_high: EqBand,
+    // Multiband compressor (3-band: low, mid, high)
+    multiband: MultibandCompressor,
     // Compressor per channel [left, right]
     compressor: [MasterCompressor; 2],
+    // Soft clipper drive amount (0 = bypass, >0 = tanh saturation).
+    // Sits between compressor and limiter for warm peak taming.
+    saturate_drive: f32,
     // Limiter per channel [left, right]
     limiter: [BrickwallLimiter; 2],
     // Output gain (linear). Applied before everything else in the chain.
@@ -1037,10 +1349,73 @@ impl MasterBus {
             hp_state: [BiquadState::default(), BiquadState::default()],
             lp_a1, lp_a2, lp_b0, lp_b1, lp_b2,
             lp_state: [BiquadState::default(), BiquadState::default()],
+            eq_low: EqBand::bypass(),
+            eq_mid: EqBand::bypass(),
+            eq_high: EqBand::bypass(),
+            multiband: MultibandCompressor::new(sample_rate),
             compressor: [compressor.clone(), compressor],
+            saturate_drive: 0.0, // off by default
             limiter: [limiter.clone(), limiter],
             gain: 1.0,
         }
+    }
+
+    /// Set the master EQ curve with per-band gain in dB.
+    /// `low_db`: low shelf at 120 Hz, `mid_db`: peak at 1 kHz (Q=0.7), `high_db`: high shelf at 6 kHz.
+    pub fn set_curve(&mut self, low_db: f32, mid_db: f32, high_db: f32, sample_rate: f64) {
+        self.eq_low = EqBand::low_shelf(120.0, low_db, sample_rate);
+        self.eq_mid = EqBand::peak(1000.0, mid_db, 0.7, sample_rate);
+        self.eq_high = EqBand::high_shelf(6000.0, high_db, sample_rate);
+    }
+
+    /// Set master EQ curve from a named preset.
+    pub fn set_curve_preset(&mut self, name: &str, sample_rate: f64) -> bool {
+        match name {
+            "car" => {
+                // Reduce sub-bass (cabin gain compensation), boost presence for road noise
+                self.set_curve(-4.0, 0.0, 3.0, sample_rate);
+                true
+            }
+            "broadcast" => {
+                // EBU-style: slight low cut, presence boost
+                self.set_curve(-2.0, 0.0, 1.5, sample_rate);
+                true
+            }
+            "bright" => {
+                // Extra sparkle for dull-sounding mixes
+                self.set_curve(0.0, 0.0, 4.0, sample_rate);
+                true
+            }
+            "warm" => {
+                // Bass boost, high cut for vintage feel
+                self.set_curve(3.0, 0.0, -2.0, sample_rate);
+                true
+            }
+            "flat" | "off" => {
+                self.eq_low = EqBand::bypass();
+                self.eq_mid = EqBand::bypass();
+                self.eq_high = EqBand::bypass();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Set multiband compressor from a simple amount (0 = off, 0.3 = gentle, 1.0 = OTT-level).
+    pub fn set_multiband(&mut self, amount: f32) {
+        self.multiband.set_amount(amount);
+    }
+
+    /// Set multiband compressor per-band amounts.
+    pub fn set_multiband_per_band(&mut self, low: f32, mid: f32, high: f32) {
+        self.multiband.set_per_band(low, mid, high);
+    }
+
+    /// Set the soft clipper amount.
+    /// 0.0 = off (bypass), 0.5 = gentle warmth, 1.0 = moderate saturation, 2.0+ = heavy.
+    pub fn set_saturate(&mut self, amount: f32) {
+        // Map amount to drive: 0 = bypass, 0.5 → drive ~2, 1.0 → drive ~4, 2.0 → drive ~8
+        self.saturate_drive = if amount <= 0.0 { 0.0 } else { amount * 4.0 };
     }
 
     /// Set the compression amount (0.0 = off, 1.0 = default, 2.0 = heavy).
@@ -1128,7 +1503,12 @@ impl MasterBus {
                 *lp = BiquadState::default();
                 *sample = 0.0;
             } else {
-                *sample = lp_out;
+                // Apply 3-band master EQ curve
+                let mut s = lp_out;
+                s = self.eq_low.process_sample(s, ch);
+                s = self.eq_mid.process_sample(s, ch);
+                s = self.eq_high.process_sample(s, ch);
+                *sample = s;
             }
         }
     }
@@ -1148,11 +1528,20 @@ impl MasterBus {
         // Compressor (crest factor reduction)
         self.compressor[0].process(buffer);
 
+        // Soft clipper
+        if self.saturate_drive > 0.0 {
+            let drive = self.saturate_drive;
+            let norm = 1.0 / drive.tanh();
+            for sample in buffer.iter_mut() {
+                *sample = (*sample * drive).tanh() * norm;
+            }
+        }
+
         // Limiter
         self.limiter[0].process(buffer);
     }
 
-    /// Process stereo buffers in-place: gain → highpass → lowpass → compressor → limiter per channel.
+    /// Process stereo buffers in-place: gain → HP → LP → compressor → soft clipper → limiter.
     pub fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32]) {
         // Apply master gain first
         if (self.gain - 1.0).abs() > 1e-6 {
@@ -1168,9 +1557,30 @@ impl MasterBus {
         self.process_channel(left, 0);
         self.process_channel(right, 1);
 
+        // Multiband compressor (3-band: process per sample pair)
+        if self.multiband.active {
+            for i in 0..left.len() {
+                let (l, r) = self.multiband.process_sample(left[i], right[i]);
+                left[i] = l;
+                right[i] = r;
+            }
+        }
+
         // Compressor per channel
         self.compressor[0].process(left);
         self.compressor[1].process(right);
+
+        // Soft clipper (tanh saturation) — adds harmonic warmth and catches peaks
+        if self.saturate_drive > 0.0 {
+            let drive = self.saturate_drive;
+            let norm = 1.0 / drive.tanh(); // normalize so tanh(drive)/drive ≈ 1.0 at low levels
+            for sample in left.iter_mut() {
+                *sample = (*sample * drive).tanh() * norm;
+            }
+            for sample in right.iter_mut() {
+                *sample = (*sample * drive).tanh() * norm;
+            }
+        }
 
         // Limiter per channel
         self.limiter[0].process(left);

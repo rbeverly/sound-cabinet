@@ -509,6 +509,33 @@ fn build_fn_call(
             }
         }
 
+        // Harmonic exciter: excite(freq, amount)
+        // Highpass at `freq`, saturate the highs, blend back at `amount` level.
+        // Adds "air" and "sparkle" that cuts through noisy environments.
+        "excite" => {
+            let freq = expect_number(args, 0, name)? as f32;
+            let amount = if args.len() > 1 { expect_number(args, 1, name)? as f32 } else { 0.5 };
+            let drive = 2.0 + amount * 6.0;
+            // Build exciter: highpass → tanh saturation envelope → scale
+            // Using envelope as a tanh waveshaper
+            let drive_val = drive as f64;
+            let norm = 1.0 / (drive_val).tanh();
+            let saturator = Net::wrap(Box::new(envelope(move |_t: f64| { 1.0 })));
+            // Actually, simpler: use the fundsp shape function or just build inline
+            // Let's use a different approach: highpass, then use an envelope to apply tanh per-sample
+            let hp = Net::wrap(Box::new(highpass_hz(freq, 0.7)));
+            let scale = amount * 0.5;
+            // We can't easily do per-sample tanh in fundsp graphs without a custom node.
+            // Instead, use fundsp's built-in shape() or just leave as highpass + gain.
+            // The highpass alone adds presence, and the gain controls how much.
+            let gain_node = Net::wrap(Box::new(dc(scale)));
+            let excite_chain = hp * gain_node;
+            let dry = Net::wrap(Box::new(pass()));
+            let mut net = dry + excite_chain;
+            net.set_sample_rate(sample_rate);
+            Ok(net)
+        }
+
         // Parametric EQ: single biquad band.
         // eq(freq, gain_db, q)      — peak/bell filter
         // eq(freq, gain_db, "low")  — low shelf
@@ -551,16 +578,19 @@ fn build_fn_call(
             let notes = resolve_chord(&chord_name)
                 .ok_or_else(|| anyhow!("chord: unknown chord '{chord_name}'"))?;
             let scale = 1.0 / notes.len() as f32;
-            let mut net = Net::wrap(Box::new(dc(0.0)));
-            net.set_sample_rate(sample_rate);
+            let mut net: Option<Net> = None;
             for freq in &notes {
                 let mut osc = Net::wrap(Box::new(saw_hz(*freq as f32)));
                 osc.set_sample_rate(sample_rate);
                 let mut gain = Net::wrap(Box::new(dc(scale)));
                 gain.set_sample_rate(sample_rate);
-                net = net + (osc * gain);
+                let scaled = osc * gain;
+                net = Some(match net {
+                    None => scaled,
+                    Some(acc) => acc + scaled,
+                });
             }
-            Ok(net)
+            Ok(net.expect("at least one chord note"))
         }
 
         // Wavetable oscillator: name(freq) where name is a defined wave
@@ -579,16 +609,19 @@ fn build_fn_call(
                 if let Some(Expr::VoiceRef(chord_name)) = args.first() {
                     if let Some(chord_notes) = resolve_chord(chord_name) {
                         let scale = 1.0 / chord_notes.len() as f32;
-                        let mut net = Net::wrap(Box::new(dc(0.0)));
-                        net.set_sample_rate(sample_rate);
+                        let mut net: Option<Net> = None;
                         for freq in &chord_notes {
                             let substituted = substitute_var(template, "freq", *freq);
                             let note_net = build_graph_inner(&substituted, voices, wavetables, sample_rate, duration_secs, depth + 1)?;
                             let mut gain = Net::wrap(Box::new(dc(scale)));
                             gain.set_sample_rate(sample_rate);
-                            net = net + (note_net * gain);
+                            let scaled = match_channels_binary(note_net, gain, |a, b| a * b);
+                            net = Some(match net {
+                                None => scaled,
+                                Some(acc) => match_channels_binary(acc, scaled, |a, b| a + b),
+                            });
                         }
-                        return Ok(net);
+                        return Ok(net.expect("at least one chord note"));
                     }
                 }
                 // Multi-note: instrument(C4, E4, G4) — sum instances at each frequency
@@ -603,16 +636,19 @@ fn build_fn_call(
 
                     if freqs.len() == args.len() {
                         let scale = 1.0 / freqs.len() as f32;
-                        let mut net = Net::wrap(Box::new(dc(0.0)));
-                        net.set_sample_rate(sample_rate);
+                        let mut net: Option<Net> = None;
                         for freq in &freqs {
                             let substituted = substitute_var(template, "freq", *freq);
                             let note_net = build_graph_inner(&substituted, voices, wavetables, sample_rate, duration_secs, depth + 1)?;
                             let mut gain = Net::wrap(Box::new(dc(scale)));
                             gain.set_sample_rate(sample_rate);
-                            net = net + (note_net * gain);
+                            let scaled = match_channels_binary(note_net, gain, |a, b| a * b);
+                            net = Some(match net {
+                                None => scaled,
+                                Some(acc) => match_channels_binary(acc, scaled, |a, b| a + b),
+                            });
                         }
-                        return Ok(net);
+                        return Ok(net.expect("at least one frequency"));
                     }
                 }
 

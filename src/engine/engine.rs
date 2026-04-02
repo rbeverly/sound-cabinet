@@ -20,7 +20,7 @@ fn is_reserved_name(name: &str) -> bool {
             | "compress" | "crush" | "decimate" | "degrade"
             | "lfo" | "eq" | "gain" | "loudness"
             | "arp" | "chord" | "bus" | "sidechain"
-            | "noise_gate" | "bit_crush" | "pan"
+            | "noise_gate" | "bit_crush" | "pan" | "excite"
     )
 }
 
@@ -93,6 +93,13 @@ pub struct VoiceLevelStats {
     pub sum_sq: f64,
     pub peak: f32,
     pub sample_count: u64,
+    /// Per-band energy: [sub(<80Hz), low(80-300Hz), mid(300-3kHz), high(3kHz+)]
+    pub band_sum_sq: [f64; 4],
+    pub band_count: u64,
+    /// Simple one-pole filter states for band splitting
+    lp80: f64,    // lowpass at 80 Hz
+    lp300: f64,   // lowpass at 300 Hz
+    lp3000: f64,  // lowpass at 3000 Hz
 }
 
 impl VoiceLevelStats {
@@ -101,6 +108,52 @@ impl VoiceLevelStats {
             sum_sq: 0.0,
             peak: 0.0,
             sample_count: 0,
+            band_sum_sq: [0.0; 4],
+            band_count: 0,
+            lp80: 0.0,
+            lp300: 0.0,
+            lp3000: 0.0,
+        }
+    }
+
+    /// Accumulate a sample with band energy tracking.
+    /// Uses simple one-pole filters for approximate band splitting.
+    fn accumulate_with_bands(&mut self, sample: f32, sample_rate: f64) {
+        let x = sample as f64;
+
+        // One-pole lowpass coefficients: alpha = 2*pi*freq / (2*pi*freq + sample_rate)
+        let a80 = (2.0 * std::f64::consts::PI * 80.0) / (2.0 * std::f64::consts::PI * 80.0 + sample_rate);
+        let a300 = (2.0 * std::f64::consts::PI * 300.0) / (2.0 * std::f64::consts::PI * 300.0 + sample_rate);
+        let a3000 = (2.0 * std::f64::consts::PI * 3000.0) / (2.0 * std::f64::consts::PI * 3000.0 + sample_rate);
+
+        // Update lowpass filters
+        self.lp80 += a80 * (x - self.lp80);
+        self.lp300 += a300 * (x - self.lp300);
+        self.lp3000 += a3000 * (x - self.lp3000);
+
+        // Band energy: derived from filter outputs
+        let sub = self.lp80;                        // <80 Hz
+        let low = self.lp300 - self.lp80;           // 80-300 Hz
+        let mid = self.lp3000 - self.lp300;         // 300-3000 Hz
+        let high = x - self.lp3000;                 // 3000+ Hz
+
+        self.band_sum_sq[0] += sub * sub;
+        self.band_sum_sq[1] += low * low;
+        self.band_sum_sq[2] += mid * mid;
+        self.band_sum_sq[3] += high * high;
+        self.band_count += 1;
+    }
+
+    /// Get RMS level for a frequency band in dBFS.
+    pub fn band_rms_db(&self, band: usize) -> f64 {
+        if self.band_count == 0 || band >= 4 {
+            return -100.0;
+        }
+        let rms = (self.band_sum_sq[band] / self.band_count as f64).sqrt();
+        if rms > 0.0 {
+            20.0 * rms.log10()
+        } else {
+            -100.0
         }
     }
 
@@ -389,6 +442,24 @@ impl Engine {
             Command::MasterGain(db) => {
                 self.master_bus.set_gain(db as f32);
             }
+            Command::MasterSaturate(amount) => {
+                self.master_bus.set_saturate(amount as f32);
+            }
+            Command::MasterCurve { low, mid, high } => {
+                self.master_bus.set_curve(low as f32, mid as f32, high as f32, self.sample_rate);
+            }
+            Command::MasterMultiband(params) => {
+                match params.len() {
+                    1 => self.master_bus.set_multiband(params[0] as f32),
+                    3 => self.master_bus.set_multiband_per_band(params[0] as f32, params[1] as f32, params[2] as f32),
+                    _ => eprintln!("Warning: master multiband expects 1 or 3 values"),
+                }
+            }
+            Command::MasterCurvePreset(name) => {
+                if !self.master_bus.set_curve_preset(&name, self.sample_rate) {
+                    eprintln!("Warning: unknown master curve preset '{}'. Options: car, broadcast, bright, warm, flat", name);
+                }
+            }
             Command::Normalize { name, target } => {
                 self.normalize_instrument(&name, target)?;
             }
@@ -655,6 +726,9 @@ impl Engine {
                         stats.peak = abs_peak;
                     }
                     stats.sample_count += 1;
+                    // Band energy tracking (use mono mix for band analysis)
+                    let mono_sample = (left_sample + right_sample) * 0.5;
+                    stats.accumulate_with_bands(mono_sample, self.sample_rate);
 
                     // Track buffer-local peak for VU meter
                     let bp = voice_buffer_peaks.entry(label.clone()).or_insert(0.0);

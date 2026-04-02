@@ -172,6 +172,33 @@ fn cmd_profile(args: &[String]) -> Result<()> {
         eprintln!("  The quietest voices are likely inaudible in the mix.");
     }
 
+    // Frequency band analysis
+    eprintln!();
+    eprintln!("  {:<20} {:>10} {:>10} {:>10} {:>10}  {}", "Voice", "Sub<80", "Low 80-300", "Mid 300-3k", "High 3k+", "Flags");
+    eprintln!("  {:<20} {:>10} {:>10} {:>10} {:>10}  {}", "─────", "──────", "─────────", "─────────", "───────", "─────");
+
+    for (name, stats) in &entries {
+        let sub = stats.band_rms_db(0);
+        let low = stats.band_rms_db(1);
+        let mid = stats.band_rms_db(2);
+        let high = stats.band_rms_db(3);
+
+        // Flag sub-heavy voices and voices that may disappear under road noise
+        let mut flags = Vec::new();
+        if sub > -20.0 && sub > mid + 6.0 {
+            flags.push("⚠ Sub-heavy");
+        }
+        if mid > -60.0 && high < mid - 20.0 {
+            flags.push("⚠ No presence");
+        }
+
+        let flag_str = flags.join(", ");
+        eprintln!(
+            "  {:<20} {:>7.1} dB {:>7.1} dB {:>7.1} dB {:>7.1} dB  {}",
+            name, sub, low, mid, high, flag_str
+        );
+    }
+
     eprintln!();
     Ok(())
 }
@@ -274,6 +301,22 @@ fn cmd_freeze(args: &[String]) -> Result<()> {
             }
             Command::MasterGain(db) => {
                 out.push_str(&format!("master gain {db}\n"));
+            }
+            Command::MasterSaturate(amount) => {
+                out.push_str(&format!("master saturate {amount}\n"));
+            }
+            Command::MasterCurve { low, mid, high } => {
+                out.push_str(&format!("master curve low {low}, mid {mid}, high {high}\n"));
+            }
+            Command::MasterCurvePreset(name) => {
+                out.push_str(&format!("master curve {name}\n"));
+            }
+            Command::MasterMultiband(params) => {
+                if params.len() == 3 {
+                    out.push_str(&format!("master multiband low {}, mid {}, high {}\n", params[0], params[1], params[2]));
+                } else if params.len() == 1 {
+                    out.push_str(&format!("master multiband {}\n", params[0]));
+                }
             }
             Command::Normalize { name, target } => {
                 out.push_str(&format!("normalize {name} {target}\n"));
@@ -460,7 +503,11 @@ fn load_definitions(score_path: &str) -> Result<Engine> {
             | Command::SetBpm { .. }
             | Command::MasterCompress(_)
             | Command::MasterCeiling(_)
-            | Command::MasterGain(_) => {
+            | Command::MasterGain(_)
+            | Command::MasterSaturate(_)
+            | Command::MasterCurve { .. }
+            | Command::MasterCurvePreset(_)
+            | Command::MasterMultiband(_) => {
                 engine.handle_command(cmd)?;
             }
             _ => {} // skip playback events, patterns, sections, etc.
@@ -580,11 +627,13 @@ fn cmd_play(args: &[String]) -> Result<()> {
 
     let verbose = args.iter().any(|a| a == "-v" || a == "--verbose");
     let show_vu = args.iter().any(|a| a == "--vu" || a == "--meters");
+    let subfold = args.iter().any(|a| a == "--subfold");
+    let env = parse_flag_str(args, "--env");
     let from_beat = parse_flag_f64(args, "--from")?;
     let solo = parse_flag_str(args, "--solo");
     let score_path = args.iter()
         .find(|a| !a.starts_with('-') && !is_flag_value(args, a))
-        .ok_or_else(|| anyhow!("Usage: sound-cabinet play <score.sc> [-v] [--vu] [--from <beat>] [--solo <voice>]"))?;
+        .ok_or_else(|| anyhow!("Usage: sound-cabinet play <score.sc> [-v] [--vu] [--subfold] [--env car] [--from <beat>] [--solo <voice>]"))?;
 
     let mut engine = build_engine(score_path)?;
     engine.verbose = verbose;
@@ -597,9 +646,32 @@ fn cmd_play(args: &[String]) -> Result<()> {
         engine.skip_to_beat(beat);
         eprintln!("Skipping to beat {beat}...");
     }
+    if subfold {
+        eprintln!("Sub-bass fold-up monitoring active (sub-bass shifted up 1 octave)");
+    }
+    if let Some(ref e) = env {
+        eprintln!("Environment simulation: {e}");
+    }
     eprintln!("Playing{}... (Ctrl+C to stop)", if verbose { " (verbose)" } else { "" });
-    if show_vu {
-        realtime::play_realtime_vu(engine)?;
+
+    let env_noise = env.and_then(|e| match e {
+        "car" => Some(realtime::EnvNoiseProfile::Car),
+        "cafe" | "coffee" => Some(realtime::EnvNoiseProfile::Cafe),
+        "subway" | "train" => Some(realtime::EnvNoiseProfile::Subway),
+        _ => {
+            eprintln!("Warning: unknown environment '{}'. Options: car, cafe, subway", e);
+            None
+        }
+    });
+
+    let monitor_flags = realtime::MonitorFlags {
+        show_vu,
+        subfold,
+        env_noise,
+    };
+
+    if show_vu || subfold || env_noise.is_some() {
+        realtime::play_realtime_monitored(engine, monitor_flags)?;
     } else {
         realtime::play_realtime(engine)?;
     }

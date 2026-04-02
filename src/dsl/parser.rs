@@ -269,6 +269,52 @@ fn try_parse_command(line: &str) -> Result<Option<Command>> {
                         .map_err(|_| anyhow!("Invalid number in master gain"))?;
                     return Ok(Some(Command::MasterGain(val)));
                 }
+                Rule::master_saturate => {
+                    let val: f64 = inner.into_inner().next()
+                        .ok_or_else(|| anyhow!("Expected value in master saturate"))?
+                        .as_str().parse()
+                        .map_err(|_| anyhow!("Invalid number in master saturate"))?;
+                    return Ok(Some(Command::MasterSaturate(val)));
+                }
+                Rule::master_multiband => {
+                    let mb_inner = inner.into_inner().next().unwrap();
+                    match mb_inner.as_rule() {
+                        Rule::multiband_bands => {
+                            let nums: Vec<f64> = mb_inner.into_inner()
+                                .filter(|p| p.as_rule() == Rule::number)
+                                .map(|p| p.as_str().parse::<f64>().unwrap_or(0.0))
+                                .collect();
+                            return Ok(Some(Command::MasterMultiband(nums)));
+                        }
+                        Rule::number => {
+                            let val: f64 = mb_inner.as_str().parse().unwrap_or(0.0);
+                            return Ok(Some(Command::MasterMultiband(vec![val])));
+                        }
+                        _ => {
+                            // "off"
+                            return Ok(Some(Command::MasterMultiband(vec![0.0])));
+                        }
+                    }
+                }
+                Rule::master_curve => {
+                    let curve_inner = inner.into_inner().next().unwrap();
+                    match curve_inner.as_rule() {
+                        Rule::curve_bands => {
+                            let nums: Vec<f64> = curve_inner.into_inner()
+                                .filter(|p| p.as_rule() == Rule::number)
+                                .map(|p| p.as_str().parse::<f64>().unwrap_or(0.0))
+                                .collect();
+                            let low = nums.first().copied().unwrap_or(0.0);
+                            let mid = nums.get(1).copied().unwrap_or(0.0);
+                            let high = nums.get(2).copied().unwrap_or(0.0);
+                            return Ok(Some(Command::MasterCurve { low, mid, high }));
+                        }
+                        Rule::ident => {
+                            return Ok(Some(Command::MasterCurvePreset(curve_inner.as_str().to_string())));
+                        }
+                        _ => {}
+                    }
+                }
                 _ => {}
             }
         }

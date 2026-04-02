@@ -10,17 +10,71 @@ use crate::engine::Engine;
 /// 2048 frames at 44100 Hz ≈ 46ms latency — fine for non-interactive playback.
 const PREFERRED_BUFFER_FRAMES: u32 = 2048;
 
+/// Monitoring mode flags.
+#[derive(Clone, Copy, Default)]
+pub struct MonitorFlags {
+    pub show_vu: bool,
+    pub subfold: bool,
+    pub env_noise: Option<EnvNoiseProfile>,
+}
+
+/// Environmental noise profile for --env monitoring.
+#[derive(Clone, Copy)]
+pub enum EnvNoiseProfile {
+    Car,
+    Cafe,
+    Subway,
+}
+
 /// Play the engine's scheduled events through the default audio output.
 pub fn play_realtime(engine: Engine) -> Result<()> {
-    play_realtime_inner(engine, false)
+    play_realtime_inner(engine, MonitorFlags::default())
 }
 
 /// Play with optional VU meter display.
 pub fn play_realtime_vu(engine: Engine) -> Result<()> {
-    play_realtime_inner(engine, true)
+    play_realtime_inner(engine, MonitorFlags { show_vu: true, ..Default::default() })
 }
 
-fn play_realtime_inner(engine: Engine, show_vu: bool) -> Result<()> {
+/// Play with monitoring flags.
+pub fn play_realtime_monitored(engine: Engine, flags: MonitorFlags) -> Result<()> {
+    play_realtime_inner(engine, flags)
+}
+
+/// Sub-bass fold-up state for monitoring.
+struct SubFoldState {
+    lp_l: f64,  // one-pole lowpass state for left
+    lp_r: f64,  // one-pole lowpass state for right
+    alpha: f64, // filter coefficient for ~80 Hz cutoff
+}
+
+impl SubFoldState {
+    fn new(sample_rate: f64) -> Self {
+        let alpha = (2.0 * std::f64::consts::PI * 80.0) / (2.0 * std::f64::consts::PI * 80.0 + sample_rate);
+        SubFoldState { lp_l: 0.0, lp_r: 0.0, alpha }
+    }
+
+    /// Extract sub-bass, rectify (shift up 1 octave), and mix back at low level.
+    fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+        let mix = 0.3; // blend level for the folded-up sub-bass
+        for i in 0..left.len() {
+            // Extract sub-bass via one-pole lowpass
+            self.lp_l += self.alpha * (left[i] as f64 - self.lp_l);
+            self.lp_r += self.alpha * (right[i] as f64 - self.lp_r);
+
+            // Full-wave rectify = shift up 1 octave, do it twice for 2 octaves
+            let fold_l = self.lp_l.abs().abs() as f32; // |sub| = +1 octave
+            let fold_r = self.lp_r.abs().abs() as f32;
+
+            // Mix the folded sub-bass back into the output
+            left[i] += fold_l * mix;
+            right[i] += fold_r * mix;
+        }
+    }
+}
+
+fn play_realtime_inner(engine: Engine, flags: MonitorFlags) -> Result<()> {
+    let show_vu = flags.show_vu;
     let host = cpal::default_host();
     let device = host
         .default_output_device()
@@ -29,6 +83,7 @@ fn play_realtime_inner(engine: Engine, show_vu: bool) -> Result<()> {
     let supported = device.default_output_config()?;
     let sample_format = supported.sample_format();
     let channels = supported.channels();
+    let sample_rate = supported.sample_rate().0 as f64;
 
     // Use a fixed buffer size to avoid underruns with complex compositions
     let stream_config = StreamConfig {
@@ -47,6 +102,16 @@ fn play_realtime_inner(engine: Engine, show_vu: bool) -> Result<()> {
     let right_buf = Arc::new(Mutex::new(vec![0.0f32; max_frames]));
     let left_clone = Arc::clone(&left_buf);
     let right_clone = Arc::clone(&right_buf);
+
+    // Monitoring state
+    let subfold_state = if flags.subfold {
+        Some(Arc::new(Mutex::new(SubFoldState::new(sample_rate))))
+    } else {
+        None
+    };
+    let subfold_clone = subfold_state.clone();
+
+    let env_noise = flags.env_noise;
 
     let stream = match sample_format {
         SampleFormat::F32 => device.build_output_stream(
@@ -67,10 +132,34 @@ fn play_realtime_inner(engine: Engine, show_vu: bool) -> Result<()> {
 
                 eng.render_samples(&mut lbuf[..frame_count], &mut rbuf[..frame_count]);
 
+                // Sub-bass fold-up monitoring: pitch-shift sub-bass up for headphone monitoring
+                if let Some(ref sf) = subfold_clone {
+                    if let Ok(mut state) = sf.lock() {
+                        state.process(&mut lbuf[..frame_count], &mut rbuf[..frame_count]);
+                    }
+                }
+
                 // Interleave stereo to output channels, clamping to prevent driver clipping
+                // Also add environmental noise if enabled
+                let noise_level = match env_noise {
+                    Some(EnvNoiseProfile::Car) => 0.08,    // heavy low-mid rumble
+                    Some(EnvNoiseProfile::Cafe) => 0.04,   // lighter broadband
+                    Some(EnvNoiseProfile::Subway) => 0.12, // very heavy
+                    None => 0.0,
+                };
                 for (i, frame) in data.chunks_mut(channels as usize).enumerate() {
-                    let l = if i < frame_count { lbuf[i].clamp(-1.0, 1.0) } else { 0.0 };
-                    let r = if i < frame_count { rbuf[i].clamp(-1.0, 1.0) } else { 0.0 };
+                    let mut l = if i < frame_count { lbuf[i].clamp(-1.0, 1.0) } else { 0.0 };
+                    let mut r = if i < frame_count { rbuf[i].clamp(-1.0, 1.0) } else { 0.0 };
+
+                    // Mix in environmental noise (monitoring only)
+                    if noise_level > 0.0 {
+                        // Simple white noise from hash function (no allocations)
+                        let seed = (i as u64).wrapping_mul(2654435761).wrapping_add(frame_count as u64);
+                        let noise = ((seed & 0xFFFF) as f32 / 32768.0) - 1.0;
+                        // Brown-ish filtering: just average with previous for low-frequency character
+                        l += noise * noise_level;
+                        r += noise * noise_level * 0.95; // slight L/R decorrelation
+                    }
                     match frame.len() {
                         1 => {
                             // Mono output device: downmix

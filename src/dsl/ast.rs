@@ -223,6 +223,14 @@ pub enum Command {
     MasterCeiling(f64),
     /// Master output gain in dB: `master gain -6` (applied before compressor/limiter)
     MasterGain(f64),
+    /// Master soft clipper: `master saturate 0.5` (0=off, 0.5=gentle, 1.0=moderate, 2.0=heavy)
+    MasterSaturate(f64),
+    /// Master EQ curve: `master curve low -4, mid 0, high 3` or `master curve car`
+    MasterCurve { low: f64, mid: f64, high: f64 },
+    /// Master EQ curve preset: `master curve car`
+    MasterCurvePreset(String),
+    /// Master multiband compressor: `master multiband 0.3` or `master multiband low 0.5, mid 0.3, high 0.2`
+    MasterMultiband(Vec<f64>),
 }
 
 /// A complete parsed score file.
