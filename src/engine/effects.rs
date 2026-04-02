@@ -18,13 +18,20 @@ use fundsp::hacker::*;
 /// Damping is derived from feedback: higher feedback → more HF rolloff,
 /// which prevents harsh ringing and sounds natural.
 #[derive(Clone)]
+/// Stereo feedback delay with slightly offset L/R times for width.
+/// Inputs: 2 (stereo), Outputs: 2 (stereo).
+/// When fed mono (via auto-duplicate), the offset delay times create stereo spread.
 pub struct FeedbackDelay {
-    buffer: Vec<f32>,
-    write_pos: usize,
-    delay_samples: usize,
+    buf_l: Vec<f32>,
+    buf_r: Vec<f32>,
+    write_pos_l: usize,
+    write_pos_r: usize,
+    delay_samples_l: usize,
+    delay_samples_r: usize,
     feedback: f32,
     damping: f32,
-    prev_filtered: f32,
+    prev_filtered_l: f32,
+    prev_filtered_r: f32,
     mix: f32,
     sample_rate: f64,
     delay_seconds: f64,
@@ -36,12 +43,16 @@ impl FeedbackDelay {
         let mix = mix.clamp(0.0, 1.0);
         let damping = 0.3 + 0.4 * feedback;
         let mut node = FeedbackDelay {
-            buffer: Vec::new(),
-            write_pos: 0,
-            delay_samples: 1,
+            buf_l: Vec::new(),
+            buf_r: Vec::new(),
+            write_pos_l: 0,
+            write_pos_r: 0,
+            delay_samples_l: 1,
+            delay_samples_r: 1,
             feedback,
             damping,
-            prev_filtered: 0.0,
+            prev_filtered_l: 0.0,
+            prev_filtered_r: 0.0,
             mix,
             sample_rate: 0.0,
             delay_seconds,
@@ -49,44 +60,65 @@ impl FeedbackDelay {
         node.set_sample_rate(DEFAULT_SR);
         node
     }
+
+    #[inline]
+    fn process_channel(
+        buf: &mut [f32],
+        write_pos: &mut usize,
+        delay_samples: usize,
+        prev_filtered: &mut f32,
+        feedback: f32,
+        damping: f32,
+        input: f32,
+        mix: f32,
+    ) -> f32 {
+        let buf_len = buf.len();
+        let read_pos = (*write_pos + buf_len - delay_samples) % buf_len;
+        let delayed = buf[read_pos];
+        *prev_filtered = delayed + damping * (*prev_filtered - delayed);
+        buf[*write_pos] = input + feedback * *prev_filtered;
+        *write_pos = (*write_pos + 1) % buf_len;
+        (1.0 - mix) * input + mix * delayed
+    }
 }
 
 impl AudioNode for FeedbackDelay {
     const ID: u64 = 1000;
-    type Inputs = U1;
-    type Outputs = U1;
+    type Inputs = U2;
+    type Outputs = U2;
 
     fn reset(&mut self) {
-        self.buffer.fill(0.0);
-        self.write_pos = 0;
-        self.prev_filtered = 0.0;
+        self.buf_l.fill(0.0);
+        self.buf_r.fill(0.0);
+        self.write_pos_l = 0;
+        self.write_pos_r = 0;
+        self.prev_filtered_l = 0.0;
+        self.prev_filtered_r = 0.0;
     }
 
     fn set_sample_rate(&mut self, sample_rate: f64) {
         if self.sample_rate != sample_rate {
             self.sample_rate = sample_rate;
-            self.delay_samples = (self.delay_seconds * sample_rate).round().max(1.0) as usize;
-            self.buffer.resize(self.delay_samples + 1, 0.0);
+            self.delay_samples_l = (self.delay_seconds * sample_rate).round().max(1.0) as usize;
+            // Right channel: ~7% longer delay for stereo width
+            self.delay_samples_r = ((self.delay_seconds * 1.07) * sample_rate).round().max(1.0) as usize;
+            self.buf_l.resize(self.delay_samples_l + 1, 0.0);
+            self.buf_r.resize(self.delay_samples_r + 1, 0.0);
             self.reset();
         }
     }
 
     #[inline]
     fn tick(&mut self, input: &Frame<f32, Self::Inputs>) -> Frame<f32, Self::Outputs> {
-        let buf_len = self.buffer.len();
-        let read_pos = (self.write_pos + buf_len - self.delay_samples) % buf_len;
-        let delayed = self.buffer[read_pos];
-
-        // One-pole lowpass in feedback path
-        self.prev_filtered = delayed + self.damping * (self.prev_filtered - delayed);
-
-        // Write input + damped feedback into buffer
-        self.buffer[self.write_pos] = input[0] + self.feedback * self.prev_filtered;
-        self.write_pos = (self.write_pos + 1) % buf_len;
-
-        // Dry/wet mix
-        let out = (1.0 - self.mix) * input[0] + self.mix * delayed;
-        [out].into()
+        let out_l = Self::process_channel(
+            &mut self.buf_l, &mut self.write_pos_l, self.delay_samples_l,
+            &mut self.prev_filtered_l, self.feedback, self.damping, input[0], self.mix,
+        );
+        let out_r = Self::process_channel(
+            &mut self.buf_r, &mut self.write_pos_r, self.delay_samples_r,
+            &mut self.prev_filtered_r, self.feedback, self.damping, input[1], self.mix,
+        );
+        [out_l, out_r].into()
     }
 }
 
@@ -165,18 +197,28 @@ impl AllpassFilter {
     }
 }
 
-/// Freeverb — classic algorithmic reverb.
+/// Stereo spread offset for right channel comb filters (in samples at 44100 Hz).
+/// This decorrelates L/R reflections, creating natural stereo width.
+const STEREO_SPREAD: usize = 23;
+
+/// Freeverb — stereo algorithmic reverb.
 ///
-/// 8 parallel comb filters (with one-pole damping) summed together,
-/// then processed through 4 series allpass filters for diffusion.
+/// Two independent banks of 8 parallel comb filters + 4 series allpass filters,
+/// one for each channel. The right channel uses slightly longer delay lines
+/// (offset by STEREO_SPREAD samples) to decorrelate the reflections, creating
+/// natural stereo width even from a mono input.
+///
+/// Inputs: 2 (stereo), Outputs: 2 (stereo).
 ///
 /// - `room_size`: 0.0–1.0, scales comb filter feedback
 /// - `damping`: 0.0–1.0, high-frequency absorption
 /// - `mix`: 0.0–1.0, dry/wet blend
 #[derive(Clone)]
 pub struct Freeverb {
-    combs: [CombFilter; 8],
-    allpasses: [AllpassFilter; 4],
+    combs_l: [CombFilter; 8],
+    combs_r: [CombFilter; 8],
+    allpasses_l: [AllpassFilter; 4],
+    allpasses_r: [AllpassFilter; 4],
     room_size: f32,
     damping: f32,
     mix: f32,
@@ -189,8 +231,10 @@ impl Freeverb {
         let damping = damping.clamp(0.0, 1.0);
         let mix = mix.clamp(0.0, 1.0);
         let mut node = Freeverb {
-            combs: COMB_LENGTHS.map(CombFilter::new),
-            allpasses: ALLPASS_LENGTHS.map(AllpassFilter::new),
+            combs_l: COMB_LENGTHS.map(CombFilter::new),
+            combs_r: COMB_LENGTHS.map(|len| CombFilter::new(len + STEREO_SPREAD)),
+            allpasses_l: ALLPASS_LENGTHS.map(AllpassFilter::new),
+            allpasses_r: ALLPASS_LENGTHS.map(|len| AllpassFilter::new(len + STEREO_SPREAD)),
             room_size,
             damping,
             mix,
@@ -203,18 +247,41 @@ impl Freeverb {
     fn scale_length(base: usize, sample_rate: f64) -> usize {
         ((base as f64) * sample_rate / 44100.0).round().max(1.0) as usize
     }
+
+    #[inline]
+    fn process_channel(
+        combs: &mut [CombFilter; 8],
+        allpasses: &mut [AllpassFilter; 4],
+        input: f32,
+        room_size: f32,
+        damping: f32,
+        mix: f32,
+    ) -> f32 {
+        let mut comb_sum = 0.0f32;
+        for comb in combs.iter_mut() {
+            comb_sum += comb.process(input, room_size, damping);
+        }
+        comb_sum *= 0.125;
+
+        let mut signal = comb_sum;
+        for ap in allpasses.iter_mut() {
+            signal = ap.process(signal);
+        }
+
+        (1.0 - mix) * input + mix * signal
+    }
 }
 
 impl AudioNode for Freeverb {
     const ID: u64 = 1001;
-    type Inputs = U1;
-    type Outputs = U1;
+    type Inputs = U2;
+    type Outputs = U2;
 
     fn reset(&mut self) {
-        for c in &mut self.combs {
+        for c in self.combs_l.iter_mut().chain(self.combs_r.iter_mut()) {
             c.reset();
         }
-        for a in &mut self.allpasses {
+        for a in self.allpasses_l.iter_mut().chain(self.allpasses_r.iter_mut()) {
             a.reset();
         }
     }
@@ -222,12 +289,20 @@ impl AudioNode for Freeverb {
     fn set_sample_rate(&mut self, sample_rate: f64) {
         if self.sample_rate != sample_rate {
             self.sample_rate = sample_rate;
-            for (i, c) in self.combs.iter_mut().enumerate() {
+            for (i, c) in self.combs_l.iter_mut().enumerate() {
                 let len = Self::scale_length(COMB_LENGTHS[i], sample_rate);
                 *c = CombFilter::new(len);
             }
-            for (i, a) in self.allpasses.iter_mut().enumerate() {
+            for (i, c) in self.combs_r.iter_mut().enumerate() {
+                let len = Self::scale_length(COMB_LENGTHS[i] + STEREO_SPREAD, sample_rate);
+                *c = CombFilter::new(len);
+            }
+            for (i, a) in self.allpasses_l.iter_mut().enumerate() {
                 let len = Self::scale_length(ALLPASS_LENGTHS[i], sample_rate);
+                *a = AllpassFilter::new(len);
+            }
+            for (i, a) in self.allpasses_r.iter_mut().enumerate() {
+                let len = Self::scale_length(ALLPASS_LENGTHS[i] + STEREO_SPREAD, sample_rate);
                 *a = AllpassFilter::new(len);
             }
         }
@@ -235,25 +310,15 @@ impl AudioNode for Freeverb {
 
     #[inline]
     fn tick(&mut self, input: &Frame<f32, Self::Inputs>) -> Frame<f32, Self::Outputs> {
-        let inp = input[0];
-
-        // Sum 8 parallel comb filters
-        let mut comb_sum = 0.0f32;
-        for comb in &mut self.combs {
-            comb_sum += comb.process(inp, self.room_size, self.damping);
-        }
-        // Scale down the comb sum to avoid clipping
-        comb_sum *= 0.125;
-
-        // Series of 4 allpass filters for diffusion
-        let mut signal = comb_sum;
-        for ap in &mut self.allpasses {
-            signal = ap.process(signal);
-        }
-
-        // Dry/wet mix
-        let out = (1.0 - self.mix) * inp + self.mix * signal;
-        [out].into()
+        let out_l = Self::process_channel(
+            &mut self.combs_l, &mut self.allpasses_l,
+            input[0], self.room_size, self.damping, self.mix,
+        );
+        let out_r = Self::process_channel(
+            &mut self.combs_r, &mut self.allpasses_r,
+            input[1], self.room_size, self.damping, self.mix,
+        );
+        [out_l, out_r].into()
     }
 }
 

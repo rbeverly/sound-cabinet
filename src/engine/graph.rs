@@ -70,30 +70,73 @@ fn build_graph_inner(
         Expr::Pipe(a, b) => {
             let net_a = build_graph_inner(a, voices, wavetables, sample_rate, duration_secs, depth + 1)?;
             let net_b = build_graph_inner(b, voices, wavetables, sample_rate, duration_secs, depth + 1)?;
-            Ok(net_a >> net_b)
+
+            // Handle channel mismatches automatically:
+            if net_a.outputs() == net_b.inputs() {
+                // Channels match — pipe directly
+                Ok(net_a >> net_b)
+            } else if net_a.outputs() == 2 && net_b.inputs() == 1 && net_b.outputs() == 1 {
+                // Stereo into mono effect (1→1): duplicate effect for L and R channels
+                let net_b2 = build_graph_inner(b, voices, wavetables, sample_rate, duration_secs, depth + 1)?;
+                Ok(net_a >> (net_b | net_b2))
+            } else if net_a.outputs() == 2 && net_b.inputs() == 1 && net_b.outputs() == 2 {
+                // Stereo into mono-to-stereo effect (1→2, like pan()):
+                // Downmix to mono first, then apply the effect
+                let joiner = Net::wrap(Box::new(join::<U2>()));
+                Ok(net_a >> joiner >> net_b)
+            } else if net_a.outputs() == 1 && net_b.inputs() == 2 {
+                // Mono into stereo effect (e.g., saw(440) >> reverb()):
+                // Auto-split mono to both channels
+                let splitter = Net::wrap(Box::new(split::<U2>()));
+                Ok(net_a >> splitter >> net_b)
+            } else {
+                // Other mismatches — try anyway, let fundsp report the error
+                Ok(net_a >> net_b)
+            }
         }
 
         Expr::Sum(a, b) => {
             let net_a = build_graph_inner(a, voices, wavetables, sample_rate, duration_secs, depth + 1)?;
             let net_b = build_graph_inner(b, voices, wavetables, sample_rate, duration_secs, depth + 1)?;
-            Ok(net_a + net_b)
+            Ok(match_channels_binary(net_a, net_b, |a, b| a + b))
         }
 
         Expr::Mul(a, b) => {
             let net_a = build_graph_inner(a, voices, wavetables, sample_rate, duration_secs, depth + 1)?;
             let net_b = build_graph_inner(b, voices, wavetables, sample_rate, duration_secs, depth + 1)?;
-            Ok(net_a * net_b)
+            Ok(match_channels_binary(net_a, net_b, |a, b| a * b))
         }
 
         Expr::Sub(a, b) => {
             let net_a = build_graph_inner(a, voices, wavetables, sample_rate, duration_secs, depth + 1)?;
             let net_b = build_graph_inner(b, voices, wavetables, sample_rate, duration_secs, depth + 1)?;
-            Ok(net_a - net_b)
+            Ok(match_channels_binary(net_a, net_b, |a, b| a - b))
         }
 
         Expr::Div(_, _) => {
             Err(anyhow!("Division of signal graphs is not supported — use in instrument definitions where it constant-folds (e.g., 1000 / freq)"))
         }
+
+    }
+}
+
+/// Auto-match channel counts for binary operations (+, *, -, /).
+/// If one operand is mono and the other is stereo, split the mono
+/// operand to stereo before applying the operation.
+fn match_channels_binary(net_a: Net, net_b: Net, op: impl FnOnce(Net, Net) -> Net) -> Net {
+    if net_a.outputs() == net_b.outputs() {
+        op(net_a, net_b)
+    } else if net_a.outputs() == 1 && net_b.outputs() == 2 {
+        // Split mono A to stereo
+        let splitter = Net::wrap(Box::new(split::<U2>()));
+        op(net_a >> splitter, net_b)
+    } else if net_a.outputs() == 2 && net_b.outputs() == 1 {
+        // Split mono B to stereo
+        let splitter = Net::wrap(Box::new(split::<U2>()));
+        op(net_a, net_b >> splitter)
+    } else {
+        // Other mismatches — try anyway
+        op(net_a, net_b)
     }
 }
 
@@ -435,13 +478,35 @@ fn build_fn_call(
             Ok(pass_node * gain_node)
         }
 
-        // Stereo panner: pan(position) where -1.0 = full left, 0.0 = center, 1.0 = full right.
-        // Takes 1 mono input and produces 2 stereo outputs using fundsp's pan().
+        // Stereo panner: pan(position) or pan(start -> end) for sweep.
+        // -1.0 = full left, 0.0 = center, 1.0 = full right. Equal-power panning.
         "pan" => {
-            let position = expect_number(args, 0, name)? as f32;
-            let mut net = Net::wrap(Box::new(pan(position)));
-            net.set_sample_rate(sample_rate);
-            Ok(net)
+            match args.first() {
+                Some(Expr::Number(v)) => {
+                    // Static pan position
+                    let mut net = Net::wrap(Box::new(pan(*v as f32)));
+                    net.set_sample_rate(sample_rate);
+                    Ok(net)
+                }
+                Some(Expr::Range(start, end)) => {
+                    // Pan sweep: pan(-1.0 -> 1.0) sweeps left to right over event duration
+                    let start = *start;
+                    let end = *end;
+                    let dur = duration_secs.unwrap_or(4.0);
+                    // Build envelope for pan position
+                    let pan_env = Net::wrap(Box::new(envelope(move |t: f64| {
+                        let frac = (t / dur).min(1.0);
+                        start + (end - start) * frac
+                    })));
+                    // Use (signal | pan_envelope) >> panner
+                    // fundsp's panner with 2 inputs: signal + pan control
+                    let panner = Net::wrap(Box::new(panner()));
+                    let mut net = (Net::wrap(Box::new(pass())) | pan_env) >> panner;
+                    net.set_sample_rate(sample_rate);
+                    Ok(net)
+                }
+                _ => Err(anyhow!("pan: requires a number or range (e.g., pan(0.3) or pan(-1.0 -> 1.0))")),
+            }
         }
 
         // Parametric EQ: single biquad band.
