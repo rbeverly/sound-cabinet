@@ -476,6 +476,9 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
             | Command::MasterCurve { .. }
             | Command::MasterCurvePreset(_)
             | Command::MasterMultiband(_)
+            | Command::MasterExcite { .. }
+            | Command::MasterExpand(_)
+            | Command::MasterChain(_)
             | Command::Normalize { .. } => {
                 output.push(cmd);
             }

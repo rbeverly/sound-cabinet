@@ -231,6 +231,31 @@ pub enum Command {
     MasterCurvePreset(String),
     /// Master multiband compressor: `master multiband 0.3` or `master multiband low 0.5, mid 0.3, high 0.2`
     MasterMultiband(Vec<f64>),
+    /// Master harmonic exciter: `master excite 4000 0.3`
+    MasterExcite { cutoff: f64, amount: f64 },
+    /// Master expander: `master expand -40 2` or `master expand -40 2 0.01 0.2`
+    MasterExpand(Vec<f64>),
+    /// Master chain: `master chain compress(1.0) >> saturate(0.5) >> excite(4000, 0.3)`
+    MasterChain(Vec<MasterChainStage>),
+}
+
+/// EQ type for chain EQ stage.
+#[derive(Debug, Clone)]
+pub enum EqType {
+    Q(f64),
+    Low,
+    High,
+}
+
+/// A stage in a user-definable master chain.
+#[derive(Debug, Clone)]
+pub enum MasterChainStage {
+    Compress { params: Vec<f64> },
+    Saturate(f64),
+    Eq { freq: f64, gain_db: f64, q_or_type: EqType },
+    Excite { cutoff: f64, amount: f64 },
+    Expand { params: Vec<f64> },
+    Multiband(f64),
 }
 
 /// A complete parsed score file.

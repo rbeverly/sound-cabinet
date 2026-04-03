@@ -437,6 +437,18 @@ fn build_fn_call(
             Ok(net)
         }
 
+        // Expander: increase dynamic range (opposite of compress)
+        // expand(threshold, ratio, attack, release)
+        "expand" => {
+            let threshold = expect_number(args, 0, name)? as f32;
+            let ratio = expect_number(args, 1, name)? as f32;
+            let attack = if args.len() > 2 { expect_number(args, 2, name)? } else { 0.01 };
+            let release = if args.len() > 3 { expect_number(args, 3, name)? } else { 0.1 };
+            let mut net = Net::wrap(Box::new(An(crate::engine::effects::Expander::new(threshold, ratio, attack, release))));
+            net.set_sample_rate(sample_rate);
+            Ok(net)
+        }
+
         // Bit crusher: reduce bit depth for quantization noise
         // crush(bits) — 8.0 = retro, 4.0 = heavy, 12.0 = subtle
         "crush" => {
@@ -510,28 +522,13 @@ fn build_fn_call(
         }
 
         // Harmonic exciter: excite(freq, amount)
-        // Highpass at `freq`, saturate the highs, blend back at `amount` level.
-        // Adds "air" and "sparkle" that cuts through noisy environments.
+        // Extracts highs above `freq`, saturates them via tanh to generate new
+        // harmonics, then blends back. Creates overtones that weren't in the
+        // original signal — essential for translation to noisy environments.
         "excite" => {
             let freq = expect_number(args, 0, name)? as f32;
             let amount = if args.len() > 1 { expect_number(args, 1, name)? as f32 } else { 0.5 };
-            let drive = 2.0 + amount * 6.0;
-            // Build exciter: highpass → tanh saturation envelope → scale
-            // Using envelope as a tanh waveshaper
-            let drive_val = drive as f64;
-            let norm = 1.0 / (drive_val).tanh();
-            let saturator = Net::wrap(Box::new(envelope(move |_t: f64| { 1.0 })));
-            // Actually, simpler: use the fundsp shape function or just build inline
-            // Let's use a different approach: highpass, then use an envelope to apply tanh per-sample
-            let hp = Net::wrap(Box::new(highpass_hz(freq, 0.7)));
-            let scale = amount * 0.5;
-            // We can't easily do per-sample tanh in fundsp graphs without a custom node.
-            // Instead, use fundsp's built-in shape() or just leave as highpass + gain.
-            // The highpass alone adds presence, and the gain controls how much.
-            let gain_node = Net::wrap(Box::new(dc(scale)));
-            let excite_chain = hp * gain_node;
-            let dry = Net::wrap(Box::new(pass()));
-            let mut net = dry + excite_chain;
+            let mut net = Net::wrap(Box::new(An(crate::engine::effects::HarmonicExciter::new(freq, amount))));
             net.set_sample_rate(sample_rate);
             Ok(net)
         }

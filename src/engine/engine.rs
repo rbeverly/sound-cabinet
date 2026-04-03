@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use anyhow::Result;
 use fundsp::hacker::*;
 
-use crate::dsl::ast::{Command, DefKind, Expr};
+use crate::dsl::ast::{Command, DefKind, EqType, Expr, MasterChainStage};
 use crate::dsl::parser::{extract_voice_label, resolve_chord};
-use crate::engine::effects::MasterBus;
+use crate::engine::effects::{MasterBus, MasterStage, StageCompress, StageEq, StageExcite, StageExpand, StageMultiband, StageSaturate};
 use crate::engine::graph::{build_graph, extract_arp, extract_bus, extract_sidechain, extract_swell, strip_bus, strip_sidechain, strip_swell, substitute_freq, substitute_var, SidechainConfig};
 
 /// Built-in function names that should not be shadowed by voice/instrument/wave definitions.
@@ -20,7 +20,7 @@ fn is_reserved_name(name: &str) -> bool {
             | "compress" | "crush" | "decimate" | "degrade"
             | "lfo" | "eq" | "gain" | "loudness"
             | "arp" | "chord" | "bus" | "sidechain"
-            | "noise_gate" | "bit_crush" | "pan" | "excite"
+            | "noise_gate" | "bit_crush" | "pan" | "excite" | "expand"
     )
 }
 
@@ -176,6 +176,18 @@ impl VoiceLevelStats {
             20.0 * (self.peak as f64).log10()
         } else {
             -100.0
+        }
+    }
+
+    /// Crest factor in dB (peak - RMS). Higher = more transient/peaky.
+    /// Typical values: 3-6 dB for compressed material, 10-20 dB for dynamic material.
+    pub fn crest_db(&self) -> f64 {
+        let peak = self.peak_db();
+        let rms = self.rms_db();
+        if peak > -100.0 && rms > -100.0 {
+            peak - rms
+        } else {
+            0.0
         }
     }
 }
@@ -423,16 +435,38 @@ impl Engine {
                 }
             }
             Command::MasterCompress(params) => {
-                match params.len() {
-                    1 => self.master_bus.set_compress(params[0] as f32, self.sample_rate),
-                    2 => self.master_bus.set_compress_params(
-                        params[0] as f32, params[1] as f32, 0.010, 0.200, self.sample_rate,
-                    ),
-                    4 => self.master_bus.set_compress_params(
-                        params[0] as f32, params[1] as f32, params[2], params[3], self.sample_rate,
-                    ),
+                // Check for upward compression sentinel (-999.0 as last value)
+                let upward = params.last() == Some(&-999.0);
+                let p: Vec<f64> = if upward {
+                    params[..params.len() - 1].to_vec()
+                } else {
+                    params.clone()
+                };
+                match p.len() {
+                    1 => {
+                        self.master_bus.set_compress(p[0] as f32, self.sample_rate);
+                        if upward {
+                            self.master_bus.set_compress_upward(true);
+                        }
+                    }
+                    2 => {
+                        self.master_bus.set_compress_params(
+                            p[0] as f32, p[1] as f32, 0.010, 0.200, self.sample_rate,
+                        );
+                        if upward {
+                            self.master_bus.set_compress_upward(true);
+                        }
+                    }
+                    4 => {
+                        self.master_bus.set_compress_params(
+                            p[0] as f32, p[1] as f32, p[2], p[3], self.sample_rate,
+                        );
+                        if upward {
+                            self.master_bus.set_compress_upward(true);
+                        }
+                    }
                     _ => return Err(anyhow::anyhow!(
-                        "master compress: expected 1, 2, or 4 arguments"
+                        "master compress: expected 1, 2, or 4 arguments (plus optional 'up')"
                     )),
                 }
             }
@@ -448,6 +482,9 @@ impl Engine {
             Command::MasterCurve { low, mid, high } => {
                 self.master_bus.set_curve(low as f32, mid as f32, high as f32, self.sample_rate);
             }
+            Command::MasterExcite { cutoff, amount } => {
+                self.master_bus.set_excite(cutoff as f32, amount as f32);
+            }
             Command::MasterMultiband(params) => {
                 match params.len() {
                     1 => self.master_bus.set_multiband(params[0] as f32),
@@ -459,6 +496,17 @@ impl Engine {
                 if !self.master_bus.set_curve_preset(&name, self.sample_rate) {
                     eprintln!("Warning: unknown master curve preset '{}'. Options: car, broadcast, bright, warm, flat", name);
                 }
+            }
+            Command::MasterExpand(params) => {
+                let threshold = params.first().copied().unwrap_or(-40.0) as f32;
+                let ratio = params.get(1).copied().unwrap_or(2.0) as f32;
+                let attack = params.get(2).copied().unwrap_or(0.01);
+                let release = params.get(3).copied().unwrap_or(0.2);
+                self.master_bus.add_expand(threshold, ratio, attack, release);
+            }
+            Command::MasterChain(stages) => {
+                let chain = self.build_chain_from_stages(&stages);
+                self.master_bus.set_chain(chain);
             }
             Command::Normalize { name, target } => {
                 self.normalize_instrument(&name, target)?;
@@ -477,6 +525,61 @@ impl Engine {
             }
         }
         Ok(())
+    }
+
+    /// Build a Vec<Box<dyn MasterStage>> from parsed chain stages.
+    fn build_chain_from_stages(&self, stages: &[MasterChainStage]) -> Vec<Box<dyn MasterStage>> {
+        let sr = self.sample_rate;
+        stages.iter().map(|stage| -> Box<dyn MasterStage> {
+            match stage {
+                MasterChainStage::Compress { params } => {
+                    match params.len() {
+                        1 => Box::new(StageCompress::new(params[0] as f32, sr)),
+                        2 => Box::new(StageCompress::from_params(
+                            params[0] as f32, params[1] as f32, 0.010, 0.200, sr,
+                        )),
+                        4 => Box::new(StageCompress::from_params(
+                            params[0] as f32, params[1] as f32, params[2], params[3], sr,
+                        )),
+                        _ => Box::new(StageCompress::new(1.0, sr)),
+                    }
+                }
+                MasterChainStage::Saturate(amount) => {
+                    let drive = if *amount <= 0.0 { 0.0 } else { *amount as f32 * 4.0 };
+                    Box::new(StageSaturate { drive })
+                }
+                MasterChainStage::Eq { freq, gain_db, q_or_type } => {
+                    match q_or_type {
+                        EqType::Low => {
+                            // Use as low shelf at the given freq
+                            Box::new(StageEq::new(*gain_db as f32, 0.0, 0.0, sr))
+                        }
+                        EqType::High => {
+                            Box::new(StageEq::new(0.0, 0.0, *gain_db as f32, sr))
+                        }
+                        EqType::Q(_q) => {
+                            // Mid peak at given freq/gain
+                            Box::new(StageEq::new(0.0, *gain_db as f32, 0.0, sr))
+                        }
+                    }
+                }
+                MasterChainStage::Excite { cutoff, amount } => {
+                    Box::new(StageExcite::new(*cutoff as f32, *amount as f32))
+                }
+                MasterChainStage::Expand { params } => {
+                    let threshold = params.first().copied().unwrap_or(-40.0) as f32;
+                    let ratio = params.get(1).copied().unwrap_or(2.0) as f32;
+                    let attack = params.get(2).copied().unwrap_or(0.01);
+                    let release = params.get(3).copied().unwrap_or(0.2);
+                    Box::new(StageExpand::new(threshold, ratio, attack, release))
+                }
+                MasterChainStage::Multiband(amount) => {
+                    let mut mb = StageMultiband::new(sr);
+                    mb.multiband.set_amount(*amount as f32);
+                    Box::new(mb)
+                }
+            }
+        }).collect()
     }
 
     /// Schedule an event relative to the current playback position.

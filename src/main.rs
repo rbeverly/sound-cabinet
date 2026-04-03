@@ -33,6 +33,7 @@ fn main() -> Result<()> {
         "profile" => cmd_profile(&args[2..])?,
         "freeze" => cmd_freeze(&args[2..])?,
         "export" => cmd_export(&args[2..])?,
+        "test-master" => cmd_test_master(&args[2..])?,
         _ => {
             print_usage();
             return Err(anyhow!("Unknown command: {}", args[1]));
@@ -111,15 +112,34 @@ fn cmd_profile(args: &[String]) -> Result<()> {
     // First, do a full render to get combined levels
     let mut engine = build_engine(score_path)?;
 
-    // Render all samples (discard audio, just accumulate stats)
+    // Render all samples — accumulate both per-voice stats AND final output stats
     let mut left_buf = vec![0.0f32; 1024];
     let mut right_buf = vec![0.0f32; 1024];
+    let mut output_sum_sq = 0.0_f64;
+    let mut output_peak: f32 = 0.0;
+    let mut output_count = 0u64;
     while !engine.is_finished() {
         left_buf.fill(0.0);
         right_buf.fill(0.0);
         engine.render_samples(&mut left_buf, &mut right_buf);
+        // Measure the post-master-bus output
+        for i in 0..left_buf.len() {
+            let mono = (left_buf[i] + right_buf[i]) * 0.5;
+            output_sum_sq += (mono as f64) * (mono as f64);
+            let abs = left_buf[i].abs().max(right_buf[i].abs());
+            if abs > output_peak { output_peak = abs; }
+            output_count += 1;
+        }
     }
     let _ = engine.flush_master();
+
+    // Compute output dynamics
+    let output_rms_db = if output_count > 0 {
+        let rms = (output_sum_sq / output_count as f64).sqrt();
+        if rms > 0.0 { 20.0 * rms.log10() } else { -100.0 }
+    } else { -100.0 };
+    let output_peak_db = if output_peak > 0.0 { 20.0 * (output_peak as f64).log10() } else { -100.0 };
+    let output_crest = output_peak_db - output_rms_db;
 
     let levels = engine.voice_levels();
     if levels.is_empty() {
@@ -135,31 +155,43 @@ fn cmd_profile(args: &[String]) -> Result<()> {
     let max_rms = entries.first().map(|(_, s)| s.rms_db()).unwrap_or(-100.0);
 
     eprintln!();
-    eprintln!("  {:<20} {:>10} {:>10} {:>10}  {}", "Voice", "RMS", "Peak", "Relative", "Status");
-    eprintln!("  {:<20} {:>10} {:>10} {:>10}  {}", "─────", "───", "────", "────────", "──────");
+    eprintln!("  {:<20} {:>10} {:>10} {:>10} {:>8}  {}", "Voice", "RMS", "Peak", "Relative", "Crest", "Status");
+    eprintln!("  {:<20} {:>10} {:>10} {:>10} {:>8}  {}", "─────", "───", "────", "────────", "─────", "──────");
 
     for (name, stats) in &entries {
         let rms = stats.rms_db();
         let peak = stats.peak_db();
         let relative = rms - max_rms;
+        let crest = stats.crest_db();
 
         let status = if rms < -60.0 {
-            "INAUDIBLE — probably can't hear this"
+            "INAUDIBLE"
         } else if rms < -40.0 {
-            "Very quiet — likely masked by louder voices"
+            "Very quiet"
         } else if rms < -24.0 {
             "Quiet"
         } else if peak > -1.0 {
-            "Dominant — may clip"
+            "Dominant"
         } else if relative > -3.0 {
             "Loudest"
         } else {
             "OK"
         };
 
+        // Color coding: red for dominant/clipping, yellow for quiet, dim for inaudible
+        let color = if rms < -60.0 {
+            "\x1b[90m" // dim
+        } else if rms < -40.0 {
+            "\x1b[33m" // yellow
+        } else if peak > -1.0 {
+            "\x1b[91m" // red
+        } else {
+            "\x1b[0m" // normal
+        };
+
         eprintln!(
-            "  {:<20} {:>7.1} dB {:>7.1} dB {:>+7.1} dB  {}",
-            name, rms, peak, relative, status
+            "  {}{:<20} {:>7.1} dB {:>7.1} dB {:>+7.1} dB {:>5.1} dB  {}\x1b[0m",
+            color, name, rms, peak, relative, crest, status
         );
     }
 
@@ -178,28 +210,255 @@ fn cmd_profile(args: &[String]) -> Result<()> {
     eprintln!("  {:<20} {:>10} {:>10} {:>10} {:>10}  {}", "─────", "──────", "─────────", "─────────", "───────", "─────");
 
     for (name, stats) in &entries {
-        let sub = stats.band_rms_db(0);
-        let low = stats.band_rms_db(1);
-        let mid = stats.band_rms_db(2);
-        let high = stats.band_rms_db(3);
+        let bands = [
+            stats.band_rms_db(0),
+            stats.band_rms_db(1),
+            stats.band_rms_db(2),
+            stats.band_rms_db(3),
+        ];
 
-        // Flag sub-heavy voices and voices that may disappear under road noise
+        // Find the loudest band for this voice
+        let max_band = bands.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+
+        // Format each band with bold if it's the dominant one (within 3 dB of loudest)
+        let fmt_band = |val: f64| -> String {
+            if val > -100.0 && (val - max_band).abs() < 3.0 && max_band > -60.0 {
+                format!("\x1b[1m{:>7.1}\x1b[0m", val) // bold
+            } else {
+                format!("{:>7.1}", val)
+            }
+        };
+
+        // Flags
         let mut flags = Vec::new();
-        if sub > -20.0 && sub > mid + 6.0 {
-            flags.push("⚠ Sub-heavy");
+        if bands[0] > -20.0 && bands[0] > bands[2] + 6.0 {
+            flags.push("\x1b[91m⚠ Sub-heavy\x1b[0m");
         }
-        if mid > -60.0 && high < mid - 20.0 {
-            flags.push("⚠ No presence");
+        if bands[2] > -60.0 && bands[3] < bands[2] - 20.0 {
+            flags.push("\x1b[33m⚠ No presence\x1b[0m");
+        }
+        if bands[3] > -20.0 && bands[3] > bands[2] + 6.0 {
+            flags.push("\x1b[96m△ HF-heavy\x1b[0m");
         }
 
         let flag_str = flags.join(", ");
         eprintln!(
-            "  {:<20} {:>7.1} dB {:>7.1} dB {:>7.1} dB {:>7.1} dB  {}",
-            name, sub, low, mid, high, flag_str
+            "  {:<20} {} dB {} dB {} dB {} dB  {}",
+            name, fmt_band(bands[0]), fmt_band(bands[1]), fmt_band(bands[2]), fmt_band(bands[3]), flag_str
+        );
+    }
+
+    // Overall dynamics summary
+    eprintln!();
+    eprintln!("  \x1b[1mDynamics Summary\x1b[0m");
+
+    // Pre-master (raw voice mix)
+    let mut total_rms_sum = 0.0_f64;
+    let mut total_peak = 0.0_f32;
+    let mut total_count = 0u64;
+    for (_, stats) in &entries {
+        total_rms_sum += stats.sum_sq;
+        if stats.peak > total_peak {
+            total_peak = stats.peak;
+        }
+        total_count += stats.sample_count;
+    }
+    if total_count > 0 {
+        let pre_rms = (total_rms_sum / total_count as f64).sqrt();
+        let pre_rms_db = if pre_rms > 0.0 { 20.0 * pre_rms.log10() } else { -100.0 };
+        let pre_peak_db = if total_peak > 0.0 { 20.0 * (total_peak as f64).log10() } else { -100.0 };
+        let pre_crest = pre_peak_db - pre_rms_db;
+
+        eprintln!("  Pre-master:  RMS {:.1} dB | Peak {:.1} dB | Crest {:.1} dB", pre_rms_db, pre_peak_db, pre_crest);
+        eprintln!("  Post-master: RMS {:.1} dB | Peak {:.1} dB | Crest {:.1} dB", output_rms_db, output_peak_db, output_crest);
+
+        let crest_reduction = pre_crest - output_crest;
+        if crest_reduction.abs() > 0.1 {
+            eprintln!("  Master bus effect: {:.1} dB crest reduction", crest_reduction);
+        }
+
+        // Interpret post-master crest factor
+        let interpretation = if output_crest < 6.0 {
+            "Very compressed (radio-ready, may sound fatiguing)"
+        } else if output_crest < 10.0 {
+            "Well compressed (punchy, good for most playback)"
+        } else if output_crest < 15.0 {
+            "Moderate dynamics (natural, good for headphones)"
+        } else if output_crest < 20.0 {
+            "Dynamic (quiet parts may be lost in noisy environments)"
+        } else {
+            "Very dynamic (will disappear under road noise)"
+        };
+        eprintln!("  {}", interpretation);
+    }
+
+    eprintln!();
+    Ok(())
+}
+
+/// Test master bus: render the same score with different mastering configurations
+/// and compare the results side-by-side.
+fn cmd_test_master(args: &[String]) -> Result<()> {
+    if args.is_empty() {
+        return Err(anyhow!("Usage: sound-cabinet test-master <score.sc>"));
+    }
+
+    let score_path = args.iter()
+        .find(|a| !a.starts_with('-'))
+        .ok_or_else(|| anyhow!("Usage: sound-cabinet test-master <score.sc>"))?;
+
+    eprintln!("Testing master bus configurations on {}...\n", score_path);
+
+    // Configurations to test: (label, setup function)
+    struct TestConfig {
+        label: &'static str,
+        desc: &'static str,
+    }
+
+    let configs = [
+        TestConfig { label: "bypass", desc: "No master processing (compress 0)" },
+        TestConfig { label: "compress-0.5", desc: "Gentle compression (amount 0.5)" },
+        TestConfig { label: "compress-1.0", desc: "Default compression (amount 1.0)" },
+        TestConfig { label: "compress-2.0", desc: "Heavy compression (amount 2.0)" },
+        TestConfig { label: "saturate-0.5", desc: "Soft clipper 0.5" },
+        TestConfig { label: "saturate-1.0", desc: "Soft clipper 1.0" },
+        TestConfig { label: "curve-car", desc: "EQ curve: car translation" },
+        TestConfig { label: "excite-4k-0.3", desc: "Master exciter 4kHz 0.3" },
+        TestConfig { label: "multiband-0.5", desc: "Multiband compressor 0.5" },
+        TestConfig { label: "full-stack", desc: "Compress 1.0 + saturate 0.5 + curve car + excite" },
+    ];
+
+    // Read the source file, stripping any existing master bus settings
+    // so our test configs don't get overridden
+    let raw_source = std::fs::read_to_string(score_path)?;
+    let source: String = raw_source.lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            !trimmed.starts_with("master compress")
+                && !trimmed.starts_with("master saturate")
+                && !trimmed.starts_with("master curve")
+                && !trimmed.starts_with("master multiband")
+                && !trimmed.starts_with("master excite")
+                && !trimmed.starts_with("master gain")
+                && !trimmed.starts_with("master ceiling")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    struct TestResult {
+        label: String,
+        desc: String,
+        rms_db: f64,
+        peak_db: f64,
+        crest_db: f64,
+    }
+
+    let mut results = Vec::new();
+
+    for config in &configs {
+        // Prepend master settings to the score
+        let prefix = match config.label {
+            "bypass" => "master compress 0\n".to_string(),
+            "compress-0.5" => "master compress 0.5\n".to_string(),
+            "compress-1.0" => "master compress 1.0\n".to_string(),
+            "compress-2.0" => "master compress 2.0\n".to_string(),
+            "saturate-0.5" => "master saturate 0.5\n".to_string(),
+            "saturate-1.0" => "master saturate 1.0\n".to_string(),
+            "curve-car" => "master curve car\n".to_string(),
+            "excite-4k-0.3" => "master excite 4000 0.3\n".to_string(),
+            "multiband-0.5" => "master multiband 0.5\n".to_string(),
+            "full-stack" => "master compress 1.0\nmaster saturate 0.5\nmaster curve car\nmaster excite 4000 0.3\n".to_string(),
+            _ => String::new(),
+        };
+
+        let test_source = format!("{}{}", prefix, source);
+
+        // Parse, expand, build engine
+        let script = parse_script(&test_source)?;
+        let base_dir = Path::new(score_path.as_str()).parent().unwrap_or(Path::new("."));
+        let script = resolve_imports(script, base_dir)?;
+        let script = expand_script(script, &mut rand::thread_rng())?;
+
+        let mut engine = sound_cabinet::engine::Engine::new(SAMPLE_RATE);
+        for cmd in script.commands {
+            engine.handle_command(cmd)?;
+        }
+        engine.apply_pedal();
+
+        // Render and measure output
+        let mut left_buf = vec![0.0f32; 1024];
+        let mut right_buf = vec![0.0f32; 1024];
+        let mut sum_sq = 0.0_f64;
+        let mut peak: f32 = 0.0;
+        let mut count = 0u64;
+
+        while !engine.is_finished() {
+            left_buf.fill(0.0);
+            right_buf.fill(0.0);
+            engine.render_samples(&mut left_buf, &mut right_buf);
+            for i in 0..left_buf.len() {
+                let mono = (left_buf[i] + right_buf[i]) * 0.5;
+                sum_sq += (mono as f64) * (mono as f64);
+                let abs = left_buf[i].abs().max(right_buf[i].abs());
+                if abs > peak { peak = abs; }
+                count += 1;
+            }
+        }
+        let _ = engine.flush_master();
+
+        let rms = (sum_sq / count.max(1) as f64).sqrt();
+        let rms_db = if rms > 0.0 { 20.0 * rms.log10() } else { -100.0 };
+        let peak_db = if peak > 0.0 { 20.0 * (peak as f64).log10() } else { -100.0 };
+        let crest_db = peak_db - rms_db;
+
+        results.push(TestResult {
+            label: config.label.to_string(),
+            desc: config.desc.to_string(),
+            rms_db,
+            peak_db,
+            crest_db,
+        });
+
+        eprint!(".");
+    }
+    eprintln!(" done.\n");
+
+    // Find baseline (bypass) for comparison
+    let baseline_crest = results.first().map(|r| r.crest_db).unwrap_or(0.0);
+    let baseline_rms = results.first().map(|r| r.rms_db).unwrap_or(-100.0);
+
+    eprintln!("  {:<20} {:>8} {:>8} {:>8} {:>10} {:>10}  {}", "Config", "RMS", "Peak", "Crest", "Δ Crest", "Δ RMS", "Description");
+    eprintln!("  {:<20} {:>8} {:>8} {:>8} {:>10} {:>10}  {}", "──────", "───", "────", "─────", "───────", "─────", "───────────");
+
+    for r in &results {
+        let d_crest = r.crest_db - baseline_crest;
+        let d_rms = r.rms_db - baseline_rms;
+
+        // Color: green if crest reduced (good for translation), yellow if increased
+        let color = if r.label == "bypass" {
+            "\x1b[97m" // white for baseline
+        } else if d_crest < -1.0 {
+            "\x1b[92m" // green: meaningful crest reduction
+        } else if d_crest < 0.0 {
+            "\x1b[0m" // normal: slight improvement
+        } else if d_crest > 1.0 {
+            "\x1b[91m" // red: crest got worse
+        } else {
+            "\x1b[33m" // yellow: negligible change
+        };
+
+        eprintln!(
+            "  {}{:<20} {:>5.1} dB {:>5.1} dB {:>5.1} dB {:>+7.1} dB {:>+7.1} dB\x1b[0m  {}",
+            color, r.label, r.rms_db, r.peak_db, r.crest_db, d_crest, d_rms, r.desc
         );
     }
 
     eprintln!();
+    eprintln!("  Δ Crest: negative = tighter dynamics (better for noisy environments)");
+    eprintln!("           positive = more dynamic (better for quiet listening)");
+    eprintln!("  Δ RMS:   positive = louder overall, negative = quieter");
+    eprintln!();
+
     Ok(())
 }
 
@@ -317,6 +576,39 @@ fn cmd_freeze(args: &[String]) -> Result<()> {
                 } else if params.len() == 1 {
                     out.push_str(&format!("master multiband {}\n", params[0]));
                 }
+            }
+            Command::MasterExcite { cutoff, amount } => {
+                out.push_str(&format!("master excite {cutoff} {amount}\n"));
+            }
+            Command::MasterExpand(params) => {
+                let vals: Vec<String> = params.iter().map(|v| format!("{v}")).collect();
+                out.push_str(&format!("master expand {}\n", vals.join(" ")));
+            }
+            Command::MasterChain(stages) => {
+                let stage_strs: Vec<String> = stages.iter().map(|s| {
+                    match s {
+                        sound_cabinet::dsl::ast::MasterChainStage::Compress { params } => {
+                            let vals: Vec<String> = params.iter().map(|v| format!("{v}")).collect();
+                            format!("compress({})", vals.join(","))
+                        }
+                        sound_cabinet::dsl::ast::MasterChainStage::Saturate(v) => format!("saturate({v})"),
+                        sound_cabinet::dsl::ast::MasterChainStage::Eq { freq, gain_db, q_or_type } => {
+                            let t = match q_or_type {
+                                sound_cabinet::dsl::ast::EqType::Q(q) => format!("{q}"),
+                                sound_cabinet::dsl::ast::EqType::Low => "low".to_string(),
+                                sound_cabinet::dsl::ast::EqType::High => "high".to_string(),
+                            };
+                            format!("eq({freq},{gain_db},{t})")
+                        }
+                        sound_cabinet::dsl::ast::MasterChainStage::Excite { cutoff, amount } => format!("excite({cutoff},{amount})"),
+                        sound_cabinet::dsl::ast::MasterChainStage::Expand { params } => {
+                            let vals: Vec<String> = params.iter().map(|v| format!("{v}")).collect();
+                            format!("expand({})", vals.join(","))
+                        }
+                        sound_cabinet::dsl::ast::MasterChainStage::Multiband(v) => format!("multiband({v})"),
+                    }
+                }).collect();
+                out.push_str(&format!("master chain {}\n", stage_strs.join(" >> ")));
             }
             Command::Normalize { name, target } => {
                 out.push_str(&format!("normalize {name} {target}\n"));
@@ -507,7 +799,10 @@ fn load_definitions(score_path: &str) -> Result<Engine> {
             | Command::MasterSaturate(_)
             | Command::MasterCurve { .. }
             | Command::MasterCurvePreset(_)
-            | Command::MasterMultiband(_) => {
+            | Command::MasterMultiband(_)
+            | Command::MasterExcite { .. }
+            | Command::MasterExpand(_)
+            | Command::MasterChain(_) => {
                 engine.handle_command(cmd)?;
             }
             _ => {} // skip playback events, patterns, sections, etc.

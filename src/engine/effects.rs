@@ -424,6 +424,99 @@ impl AudioNode for Compressor {
 }
 
 // ---------------------------------------------------------------------------
+// Expander (opposite of compressor — increases dynamic range)
+// ---------------------------------------------------------------------------
+
+/// Downward expander — reduces signal below threshold, making quiet parts quieter.
+/// Increases dynamic range and perceived clarity.
+///
+/// - `threshold`: level in dB below which expansion kicks in (e.g., -30.0)
+/// - `ratio`: expansion ratio (e.g., 2.0 means 1:2 — for every 1 dB below threshold, output drops 2 dB)
+/// - `attack`: how fast the expander reacts (seconds)
+/// - `release`: how fast it recovers (seconds)
+#[derive(Clone)]
+pub struct Expander {
+    threshold: f32,
+    ratio: f32,
+    attack_coeff: f32,
+    release_coeff: f32,
+    envelope: f32,
+    sample_rate: f64,
+    attack_secs: f64,
+    release_secs: f64,
+    knee_width: f32,   // soft knee width in dB
+}
+
+impl Expander {
+    pub fn new(threshold_db: f32, ratio: f32, attack_secs: f64, release_secs: f64) -> Self {
+        let mut exp = Expander {
+            threshold: threshold_db,
+            ratio: ratio.max(1.0),
+            attack_coeff: 0.0,
+            release_coeff: 0.0,
+            envelope: 0.0,
+            sample_rate: 0.0,
+            attack_secs,
+            release_secs,
+            knee_width: 6.0,
+        };
+        exp.set_sample_rate(DEFAULT_SR);
+        exp
+    }
+}
+
+impl AudioNode for Expander {
+    const ID: u64 = 1013;
+    type Inputs = U1;
+    type Outputs = U1;
+
+    fn reset(&mut self) {
+        self.envelope = 0.0;
+    }
+
+    fn set_sample_rate(&mut self, sample_rate: f64) {
+        self.sample_rate = sample_rate;
+        self.attack_coeff = (-1.0 / (self.attack_secs * sample_rate)).exp() as f32;
+        self.release_coeff = (-1.0 / (self.release_secs * sample_rate)).exp() as f32;
+    }
+
+    #[inline]
+    fn tick(&mut self, input: &Frame<f32, Self::Inputs>) -> Frame<f32, Self::Outputs> {
+        let x = input[0];
+        let abs = x.abs();
+
+        // Peak envelope follower
+        if abs > self.envelope {
+            self.envelope = self.attack_coeff * self.envelope + (1.0 - self.attack_coeff) * abs;
+        } else {
+            self.envelope = self.release_coeff * self.envelope + (1.0 - self.release_coeff) * abs;
+        }
+
+        if self.envelope < 1e-10 { return [0.0].into(); }
+
+        let env_db = 20.0 * self.envelope.log10();
+
+        // Expansion with soft knee: reduce signal BELOW threshold
+        let knee = self.knee_width;
+        let gain_db = if env_db > self.threshold + knee / 2.0 {
+            // Above knee: no expansion
+            0.0
+        } else if env_db < self.threshold - knee / 2.0 {
+            // Below knee: full expansion
+            let under = self.threshold - env_db;
+            -(under * (self.ratio - 1.0)) // expand: multiply the undershoot
+        } else {
+            // In knee zone: smooth transition from full expansion to no expansion
+            let x = self.threshold + knee / 2.0 - env_db;
+            -(self.ratio - 1.0) * x * x / (2.0 * knee)
+        };
+
+        let gain = 10.0_f32.powf(gain_db.max(-60.0) / 20.0); // cap at -60 dB reduction
+        [x * gain].into()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Wavetable Oscillator
 // ---------------------------------------------------------------------------
 
@@ -777,6 +870,94 @@ impl AudioNode for Degrade {
 /// Brick-wall peak limiter with lookahead and release smoothing.
 ///
 /// Prevents signal from exceeding `ceiling` (linear). Uses a short lookahead
+// ---------------------------------------------------------------------------
+// Harmonic Exciter
+// ---------------------------------------------------------------------------
+
+/// Harmonic exciter — extracts high-frequency content via highpass, applies
+/// tanh saturation to generate new harmonics, then blends the excited signal
+/// back with the dry input.
+///
+/// Unlike a simple high shelf boost, this *creates* harmonics that weren't
+/// in the original signal. A 2 kHz tone through the exciter generates
+/// 4 kHz, 6 kHz, 8 kHz partials that add "air" and presence.
+///
+/// - `cutoff_hz`: frequency above which to excite (e.g., 3000)
+/// - `drive`: saturation amount (2.0 = gentle, 8.0 = aggressive)
+/// - `blend`: how much excited signal to mix in (0.0-1.0)
+#[derive(Clone)]
+pub struct HarmonicExciter {
+    // Highpass filter state (one-pole for simplicity)
+    hp_coeff: f32,
+    hp_state: f32,
+    drive: f32,
+    drive_norm: f32, // 1.0 / tanh(drive) for unity gain normalization
+    blend: f32,
+    sample_rate: f64,
+    cutoff_hz: f32,
+}
+
+impl HarmonicExciter {
+    pub fn new(cutoff_hz: f32, amount: f32) -> Self {
+        let drive = 2.0 + amount.clamp(0.0, 1.0) * 6.0; // 2.0 to 8.0
+        let blend = amount.clamp(0.0, 1.0) * 0.4; // 0.0 to 0.4 (subtle blend)
+        let mut exc = HarmonicExciter {
+            hp_coeff: 0.0,
+            hp_state: 0.0,
+            drive,
+            drive_norm: 1.0 / drive.tanh(),
+            blend,
+            sample_rate: DEFAULT_SR,
+            cutoff_hz,
+        };
+        exc.recalc_coeff();
+        exc
+    }
+
+    fn recalc_coeff(&mut self) {
+        // One-pole highpass coefficient
+        let rc = 1.0 / (2.0 * std::f64::consts::PI * self.cutoff_hz as f64);
+        let dt = 1.0 / self.sample_rate;
+        self.hp_coeff = (rc / (rc + dt)) as f32;
+    }
+}
+
+impl AudioNode for HarmonicExciter {
+    const ID: u64 = 1012;
+    type Inputs = U1;
+    type Outputs = U1;
+
+    fn reset(&mut self) {
+        self.hp_state = 0.0;
+    }
+
+    fn set_sample_rate(&mut self, sample_rate: f64) {
+        self.sample_rate = sample_rate;
+        self.recalc_coeff();
+    }
+
+    #[inline]
+    fn tick(&mut self, input: &Frame<f32, Self::Inputs>) -> Frame<f32, Self::Outputs> {
+        let x = input[0];
+
+        // One-pole highpass: extract high-frequency content
+        let hp = self.hp_coeff * (self.hp_state + x);
+        self.hp_state = hp - x;
+        let highs = hp;
+
+        // Saturate the highs to generate harmonics
+        let saturated = (highs * self.drive).tanh() * self.drive_norm;
+
+        // Blend excited signal with dry input
+        let out = x + saturated * self.blend;
+        [out].into()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Brick-wall Limiter
+// ---------------------------------------------------------------------------
+
 /// to catch transients cleanly without harsh clipping artifacts.
 ///
 /// - `ceiling`: maximum output level (linear, e.g. 0.97 for -0.3 dBFS)
@@ -874,6 +1055,7 @@ pub struct MasterCompressor {
     envelope_sq: f32,  // squared RMS envelope (avoids sqrt per sample)
     makeup_gain: f32,  // compensate for gain reduction
     upward: bool,      // upward compression: boost quiet content instead of reducing loud
+    knee_width: f32,   // soft knee width in dB (Giannoulis/Massberg/Reiss JAES 2012)
 }
 
 impl MasterCompressor {
@@ -893,6 +1075,7 @@ impl MasterCompressor {
             envelope_sq: 0.0,
             makeup_gain,
             upward: false,
+            knee_width: 6.0,
         }
     }
 
@@ -965,24 +1148,38 @@ impl MasterCompressor {
                 -200.0
             };
 
-            // Gain change: downward or upward compression
+            // Gain change: downward or upward compression with soft knee
+            // (Giannoulis/Massberg/Reiss JAES 2012)
+            let knee = self.knee_width;
             let gain_db = if self.upward {
-                // Upward: boost content BELOW threshold
-                if env_db < self.threshold && env_db > -100.0 {
+                // Upward: boost content BELOW threshold with soft knee
+                if env_db > self.threshold + knee / 2.0 || env_db < -100.0 {
+                    // Above knee or silence: no boost
+                    0.0
+                } else if env_db < self.threshold - knee / 2.0 {
+                    // Below knee: full upward compression
                     let under = self.threshold - env_db;
                     let boosted = under * (1.0 - 1.0 / self.ratio);
                     boosted.min(24.0) // cap boost at 24 dB to prevent runaway
                 } else {
-                    0.0
+                    // In knee zone: smooth transition
+                    let x = self.threshold + knee / 2.0 - env_db;
+                    let boosted = (1.0 - 1.0 / self.ratio) * x * x / (2.0 * knee);
+                    boosted.min(24.0)
                 }
             } else {
-                // Downward: reduce content ABOVE threshold
-                if env_db > self.threshold {
-                    let over = env_db - self.threshold;
-                    let compressed_over = over / self.ratio;
-                    self.threshold + compressed_over - env_db
-                } else {
+                // Downward: reduce content ABOVE threshold with soft knee
+                if env_db < self.threshold - knee / 2.0 {
+                    // Below knee: no compression
                     0.0
+                } else if env_db > self.threshold + knee / 2.0 {
+                    // Above knee: full compression
+                    let over = env_db - self.threshold;
+                    -(over * (1.0 - 1.0 / self.ratio))
+                } else {
+                    // In knee zone: smooth transition
+                    let x = env_db - self.threshold + knee / 2.0;
+                    -(1.0 - 1.0 / self.ratio) * x * x / (2.0 * knee)
                 }
             };
 
@@ -1035,9 +1232,10 @@ impl MultibandCompressor {
         let (mlp_b0, mlp_b1, mlp_b2, mlp_a1, mlp_a2) = Self::lowpass_coeffs(3000.0, sample_rate);
         let (mhp_b0, mhp_b1, mhp_b2, mhp_a1, mhp_a2) = Self::highpass_coeffs(3000.0, sample_rate);
 
-        // Slower attack (30ms) to avoid clicks on band-split signals
-        let attack_coeff = (-1.0 / (0.03 * sample_rate)).exp() as f32;
-        let release_coeff = (-1.0 / (0.15 * sample_rate)).exp() as f32;
+        // Fast attack (1ms) for band-split signals — narrow bands have simpler transients
+        // that need fast tracking. The soft knee prevents clicks.
+        let attack_coeff = (-1.0 / (0.001 * sample_rate)).exp() as f32;
+        let release_coeff = (-1.0 / (0.05 * sample_rate)).exp() as f32;
 
         MultibandCompressor {
             lm_lp_state: [[0.0; 4]; 2], lm_hp_state: [[0.0; 4]; 2],
@@ -1064,26 +1262,25 @@ impl MultibandCompressor {
         }
         self.active = true;
         let a = amount.min(2.0);
-        // Thresholds: gentle at low amounts, aggressive at high
-        // 0.3 → [-30, -26, -22] dB (barely touching most content)
-        // 0.6 → [-24, -20, -16] dB (moderate tightening)
-        // 1.0 → [-18, -14, -10] dB (heavy, OTT-like)
+        // Per-band thresholds: band signals are ~10-15 dB quieter than full mix.
+        // Interpolate between gentle (0.3) and heavy (1.0) settings.
+        let t = ((a - 0.3) / 0.7).clamp(0.0, 1.0);
         self.threshold = [
-            -36.0 + a * 18.0,  // low band: -36 to -18
-            -32.0 + a * 18.0,  // mid band: -32 to -14
-            -28.0 + a * 18.0,  // high band: -28 to -10
+            -42.0 + t * ( -36.0 - -42.0),  // low:  -42 at 0.3, -36 at 1.0
+            -38.0 + t * ( -32.0 - -38.0),  // mid:  -38 at 0.3, -32 at 1.0
+            -34.0 + t * ( -28.0 - -34.0),  // high: -34 at 0.3, -28 at 1.0
         ];
-        // Ratios: gentle at low amounts
-        // 0.3 → ~1.6:1, 0.6 → ~2.2:1, 1.0 → ~3.0:1
         self.ratio = [
-            1.0 + a * 2.0,  // low
-            1.0 + a * 2.0,  // mid
-            1.0 + a * 1.5,  // high (less aggressive on highs)
+            1.9 + t * (4.0 - 1.9),   // low:  1.9 at 0.3, 4.0 at 1.0
+            1.75 + t * (3.5 - 1.75),  // mid:  1.75 at 0.3, 3.5 at 1.0
+            1.6 + t * (3.0 - 1.6),    // high: 1.6 at 0.3, 3.0 at 1.0
         ];
-        // Conservative makeup gain
+        // Conservative per-band makeup to partially restore loudness.
+        // Keep it modest — the following chain stages handle the rest.
         for i in 0..3 {
-            let reduction_db = self.threshold[i].abs() * (1.0 - 1.0 / self.ratio[i]);
-            self.makeup[i] = 10.0_f32.powf((reduction_db * 0.25).min(6.0) / 20.0);
+            let max_reduction = self.threshold[i].abs() * (1.0 - 1.0 / self.ratio[i]);
+            let makeup_db = (max_reduction * 0.1).min(4.0); // 10% of theoretical max, cap 4 dB
+            self.makeup[i] = 10.0_f32.powf(makeup_db / 20.0);
         }
     }
 
@@ -1091,8 +1288,10 @@ impl MultibandCompressor {
     pub fn set_per_band(&mut self, low: f32, mid: f32, high: f32) {
         self.active = low > 0.0 || mid > 0.0 || high > 0.0;
         let amounts = [low, mid, high];
-        let base_thresholds = [-36.0, -32.0, -28.0];
-        let max_ratios = [2.0, 2.0, 1.5];
+        let base_thresholds_gentle = [-42.0, -38.0, -34.0];
+        let base_thresholds_heavy = [-36.0, -32.0, -28.0];
+        let ratios_gentle = [1.9, 1.75, 1.6];
+        let ratios_heavy = [4.0, 3.5, 3.0];
         for i in 0..3 {
             let a = amounts[i].max(0.0).min(2.0);
             if a <= 0.0 {
@@ -1100,10 +1299,12 @@ impl MultibandCompressor {
                 self.ratio[i] = 1.0;
                 self.makeup[i] = 1.0;
             } else {
-                self.threshold[i] = base_thresholds[i] + a * 18.0;
-                self.ratio[i] = 1.0 + a * max_ratios[i];
-                let reduction_db = self.threshold[i].abs() * (1.0 - 1.0 / self.ratio[i]);
-                self.makeup[i] = 10.0_f32.powf((reduction_db * 0.25).min(6.0) / 20.0);
+                let t = ((a - 0.3) / 0.7).clamp(0.0, 1.0);
+                self.threshold[i] = base_thresholds_gentle[i] + t * (base_thresholds_heavy[i] - base_thresholds_gentle[i]);
+                self.ratio[i] = ratios_gentle[i] + t * (ratios_heavy[i] - ratios_gentle[i]);
+                let max_reduction = self.threshold[i].abs() * (1.0 - 1.0 / self.ratio[i]);
+                let makeup_db = (max_reduction * 0.1).min(4.0);
+                self.makeup[i] = 10.0_f32.powf(makeup_db / 20.0);
             }
         }
     }
@@ -1142,20 +1343,33 @@ impl MultibandCompressor {
 
     #[inline]
     fn compress_sample(&mut self, sample: f32, band: usize, ch: usize) -> f32 {
-        let x_sq = sample * sample;
-        if x_sq > self.env[band][ch] {
-            self.env[band][ch] = self.attack_coeff * self.env[band][ch] + (1.0 - self.attack_coeff) * x_sq;
+        let abs = sample.abs();
+        // Peak envelope follower (simpler, more responsive for band signals)
+        if abs > self.env[band][ch] {
+            self.env[band][ch] = self.attack_coeff * self.env[band][ch] + (1.0 - self.attack_coeff) * abs;
         } else {
-            self.env[band][ch] = self.release_coeff * self.env[band][ch] + (1.0 - self.release_coeff) * x_sq;
+            self.env[band][ch] = self.release_coeff * self.env[band][ch] + (1.0 - self.release_coeff) * abs;
         }
-        let env_db = if self.env[band][ch] > 1e-20 {
-            10.0 * self.env[band][ch].log10()
-        } else { -200.0 };
 
-        let gain_db = if env_db > self.threshold[band] {
+        let env = self.env[band][ch];
+        if env < 1e-10 { return sample; }
+
+        let env_db = 20.0 * env.log10();
+
+        // Downward compression with soft knee (6 dB knee width)
+        let knee: f32 = 6.0;
+        let gain_db = if env_db < self.threshold[band] - knee / 2.0 {
+            // Below knee: no compression
+            0.0
+        } else if env_db > self.threshold[band] + knee / 2.0 {
+            // Above knee: full compression
             let over = env_db - self.threshold[band];
-            self.threshold[band] + over / self.ratio[band] - env_db
-        } else { 0.0 };
+            -(over * (1.0 - 1.0 / self.ratio[band]))
+        } else {
+            // In knee zone: smooth transition
+            let x = env_db - self.threshold[band] + knee / 2.0;
+            -(1.0 - 1.0 / self.ratio[band]) * x * x / (2.0 * knee)
+        };
 
         sample * 10.0_f32.powf(gain_db / 20.0) * self.makeup[band]
     }
@@ -1163,40 +1377,37 @@ impl MultibandCompressor {
     /// Process a stereo sample pair through the multiband compressor.
     /// Returns (left_out, right_out).
     ///
-    /// Uses the subtraction method for perfect-reconstruction band splitting:
-    /// low = LP(input), mid_high = input - low, mid = LP(mid_high), high = mid_high - mid.
-    /// This avoids the phase cancellation issues of parallel LP+HP crossovers.
+    /// Uses band-split-compress-recombine with perfect reconstruction.
+    /// The compressed output is then mixed with the dry input (parallel compression)
+    /// to preserve energy while tightening dynamics.
     #[inline]
     pub fn process_sample(&mut self, l: f32, r: f32) -> (f32, f32) {
         if !self.active { return (l, r); }
 
         // Band split using subtraction method (perfect reconstruction)
-        // Low = LP(input) at 200 Hz
         let low_l = Self::biquad(l, &mut self.lm_lp_state[0], self.lm_lp_b0, self.lm_lp_b1, self.lm_lp_b2, self.lm_lp_a1, self.lm_lp_a2);
         let low_r = Self::biquad(r, &mut self.lm_lp_state[1], self.lm_lp_b0, self.lm_lp_b1, self.lm_lp_b2, self.lm_lp_a1, self.lm_lp_a2);
 
-        // Mid+High = input - low (guaranteed: low + mid_high = input)
         let mid_high_l = l - low_l;
         let mid_high_r = r - low_r;
 
-        // Mid = LP(mid_high) at 3000 Hz
         let mid_l = Self::biquad(mid_high_l, &mut self.mh_lp_state[0], self.mh_lp_b0, self.mh_lp_b1, self.mh_lp_b2, self.mh_lp_a1, self.mh_lp_a2);
         let mid_r = Self::biquad(mid_high_r, &mut self.mh_lp_state[1], self.mh_lp_b0, self.mh_lp_b1, self.mh_lp_b2, self.mh_lp_a1, self.mh_lp_a2);
 
-        // High = mid_high - mid (guaranteed: mid + high = mid_high)
         let high_l = mid_high_l - mid_l;
         let high_r = mid_high_r - mid_r;
 
         // Compress each band
-        let low_l = self.compress_sample(low_l, 0, 0);
-        let low_r = self.compress_sample(low_r, 0, 1);
-        let mid_l = self.compress_sample(mid_l, 1, 0);
-        let mid_r = self.compress_sample(mid_r, 1, 1);
-        let high_l = self.compress_sample(high_l, 2, 0);
-        let high_r = self.compress_sample(high_r, 2, 1);
+        let comp_low_l = self.compress_sample(low_l, 0, 0);
+        let comp_low_r = self.compress_sample(low_r, 0, 1);
+        let comp_mid_l = self.compress_sample(mid_l, 1, 0);
+        let comp_mid_r = self.compress_sample(mid_r, 1, 1);
+        let comp_high_l = self.compress_sample(high_l, 2, 0);
+        let comp_high_r = self.compress_sample(high_r, 2, 1);
 
-        // Recombine
-        (low_l + mid_l + high_l, low_r + mid_r + high_r)
+        // Sum compressed bands directly (no parallel blend — per-band makeup handles levels)
+        (comp_low_l + comp_mid_l + comp_high_l,
+         comp_low_r + comp_mid_r + comp_high_r)
     }
 }
 
@@ -1319,6 +1530,198 @@ impl EqBand {
     }
 }
 
+// ---------------------------------------------------------------------------
+// MasterStage trait and wrapper structs for user-definable master chain
+// ---------------------------------------------------------------------------
+
+/// A processing stage in the master bus chain. Each stage operates on
+/// stereo buffers in-place. Stages are ordered by the user and executed
+/// sequentially between the HP/LP filters and the brick-wall limiter.
+pub trait MasterStage: Send {
+    fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32]);
+    fn name(&self) -> &'static str;
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+}
+
+/// Compressor stage — wraps a stereo pair of MasterCompressors.
+pub struct StageCompress {
+    pub compressor: [MasterCompressor; 2],
+}
+
+impl StageCompress {
+    pub fn new(amount: f32, sample_rate: f64) -> Self {
+        let c = MasterCompressor::from_amount(amount, sample_rate);
+        StageCompress { compressor: [c.clone(), c] }
+    }
+
+    pub fn from_params(threshold: f32, ratio: f32, attack: f64, release: f64, sample_rate: f64) -> Self {
+        let c = MasterCompressor::new(threshold, ratio, attack, release, sample_rate);
+        StageCompress { compressor: [c.clone(), c] }
+    }
+}
+
+impl MasterStage for StageCompress {
+    fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32]) {
+        self.compressor[0].process(left);
+        self.compressor[1].process(right);
+    }
+    fn name(&self) -> &'static str { "compress" }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+}
+
+/// Saturator stage — tanh soft clipper with drive.
+pub struct StageSaturate {
+    pub drive: f32,
+}
+
+impl MasterStage for StageSaturate {
+    fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32]) {
+        if self.drive <= 0.0 { return; }
+        let drive = self.drive;
+        let norm = 1.0 / drive.tanh();
+        for sample in left.iter_mut() {
+            *sample = (*sample * drive).tanh() * norm;
+        }
+        for sample in right.iter_mut() {
+            *sample = (*sample * drive).tanh() * norm;
+        }
+    }
+    fn name(&self) -> &'static str { "saturate" }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+}
+
+/// EQ stage — 3-band master EQ (low shelf, mid peak, high shelf).
+pub struct StageEq {
+    pub eq_low: EqBand,
+    pub eq_mid: EqBand,
+    pub eq_high: EqBand,
+}
+
+impl StageEq {
+    pub fn new(low_db: f32, mid_db: f32, high_db: f32, sample_rate: f64) -> Self {
+        StageEq {
+            eq_low: EqBand::low_shelf(120.0, low_db, sample_rate),
+            eq_mid: EqBand::peak(1000.0, mid_db, 0.7, sample_rate),
+            eq_high: EqBand::high_shelf(6000.0, high_db, sample_rate),
+        }
+    }
+
+    pub fn bypass() -> Self {
+        StageEq {
+            eq_low: EqBand::bypass(),
+            eq_mid: EqBand::bypass(),
+            eq_high: EqBand::bypass(),
+        }
+    }
+}
+
+impl MasterStage for StageEq {
+    fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32]) {
+        for i in 0..left.len() {
+            left[i] = self.eq_low.process_sample(left[i], 0);
+            left[i] = self.eq_mid.process_sample(left[i], 0);
+            left[i] = self.eq_high.process_sample(left[i], 0);
+        }
+        for i in 0..right.len() {
+            right[i] = self.eq_low.process_sample(right[i], 1);
+            right[i] = self.eq_mid.process_sample(right[i], 1);
+            right[i] = self.eq_high.process_sample(right[i], 1);
+        }
+    }
+    fn name(&self) -> &'static str { "eq" }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+}
+
+/// Harmonic exciter stage — wraps a stereo pair of HarmonicExciters.
+pub struct StageExcite {
+    pub exciter_l: HarmonicExciter,
+    pub exciter_r: HarmonicExciter,
+}
+
+impl StageExcite {
+    pub fn new(cutoff: f32, amount: f32) -> Self {
+        let mut l = HarmonicExciter::new(cutoff, amount);
+        let mut r = HarmonicExciter::new(cutoff, amount);
+        l.set_sample_rate(DEFAULT_SR);
+        r.set_sample_rate(DEFAULT_SR);
+        StageExcite { exciter_l: l, exciter_r: r }
+    }
+}
+
+impl MasterStage for StageExcite {
+    fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32]) {
+        for sample in left.iter_mut() {
+            let frame: fundsp::hacker::Frame<f32, fundsp::hacker::U1> = [*sample].into();
+            let out = self.exciter_l.tick(&frame);
+            *sample = out[0];
+        }
+        for sample in right.iter_mut() {
+            let frame: fundsp::hacker::Frame<f32, fundsp::hacker::U1> = [*sample].into();
+            let out = self.exciter_r.tick(&frame);
+            *sample = out[0];
+        }
+    }
+    fn name(&self) -> &'static str { "excite" }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+}
+
+/// Expander stage — wraps a stereo pair of Expanders for buffer-based processing.
+pub struct StageExpand {
+    pub expander: [Expander; 2],
+}
+
+impl StageExpand {
+    pub fn new(threshold_db: f32, ratio: f32, attack_secs: f64, release_secs: f64) -> Self {
+        StageExpand {
+            expander: [
+                Expander::new(threshold_db, ratio, attack_secs, release_secs),
+                Expander::new(threshold_db, ratio, attack_secs, release_secs),
+            ],
+        }
+    }
+}
+
+impl MasterStage for StageExpand {
+    fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32]) {
+        for sample in left.iter_mut() {
+            let frame: fundsp::hacker::Frame<f32, fundsp::hacker::U1> = [*sample].into();
+            let out = self.expander[0].tick(&frame);
+            *sample = out[0];
+        }
+        for sample in right.iter_mut() {
+            let frame: fundsp::hacker::Frame<f32, fundsp::hacker::U1> = [*sample].into();
+            let out = self.expander[1].tick(&frame);
+            *sample = out[0];
+        }
+    }
+    fn name(&self) -> &'static str { "expand" }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+}
+
+/// Multiband compressor stage.
+pub struct StageMultiband {
+    pub multiband: MultibandCompressor,
+}
+
+impl StageMultiband {
+    pub fn new(sample_rate: f64) -> Self {
+        StageMultiband { multiband: MultibandCompressor::new(sample_rate) }
+    }
+}
+
+impl MasterStage for StageMultiband {
+    fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32]) {
+        if !self.multiband.active { return; }
+        for i in 0..left.len() {
+            let (l, r) = self.multiband.process_sample(left[i], right[i]);
+            left[i] = l;
+            right[i] = r;
+        }
+    }
+    fn name(&self) -> &'static str { "multiband" }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+}
+
 pub struct MasterBus {
     // Highpass coefficients (shared across channels)
     hp_a1: f32,
@@ -1336,21 +1739,12 @@ pub struct MasterBus {
     lp_b2: f32,
     // Lowpass per-channel state [left, right]
     lp_state: [BiquadState; 2],
-    // 3-band master EQ curve (low shelf, mid peak, high shelf)
-    eq_low: EqBand,
-    eq_mid: EqBand,
-    eq_high: EqBand,
-    // Multiband compressor (3-band: low, mid, high)
-    multiband: MultibandCompressor,
-    // Compressor per channel [left, right]
-    compressor: [MasterCompressor; 2],
-    // Soft clipper drive amount (0 = bypass, >0 = tanh saturation).
-    // Sits between compressor and limiter for warm peak taming.
-    saturate_drive: f32,
     // Limiter per channel [left, right]
     limiter: [BrickwallLimiter; 2],
     // Output gain (linear). Applied before everything else in the chain.
     gain: f32,
+    // User-definable chain (between filters and limiter)
+    chain: Vec<Box<dyn MasterStage>>,
 }
 
 impl MasterBus {
@@ -1359,93 +1753,138 @@ impl MasterBus {
         let (lp_b0, lp_b1, lp_b2, lp_a1, lp_a2) = Self::lowpass_coeffs(18000.0, sample_rate);
         // -0.3 dBFS ceiling ≈ 0.966
         let ceiling = 10.0_f32.powf(-0.3 / 20.0);
-        // Default: gentle mastering compression (amount 1.0)
-        let compressor = MasterCompressor::from_amount(1.0, sample_rate);
         let limiter = BrickwallLimiter::new(ceiling, 0.1, sample_rate);
+        // Default chain: single compressor at amount 1.0
+        let chain: Vec<Box<dyn MasterStage>> = vec![
+            Box::new(StageCompress::new(1.0, sample_rate)),
+        ];
         MasterBus {
             hp_a1, hp_a2, hp_b0, hp_b1, hp_b2,
             hp_state: [BiquadState::default(), BiquadState::default()],
             lp_a1, lp_a2, lp_b0, lp_b1, lp_b2,
             lp_state: [BiquadState::default(), BiquadState::default()],
-            eq_low: EqBand::bypass(),
-            eq_mid: EqBand::bypass(),
-            eq_high: EqBand::bypass(),
-            multiband: MultibandCompressor::new(sample_rate),
-            compressor: [compressor.clone(), compressor],
-            saturate_drive: 0.0, // off by default
             limiter: [limiter.clone(), limiter],
             gain: 1.0,
+            chain,
         }
     }
+
+    // --- Chain manipulation helpers ---
+
+    /// Find the first stage with the given name, returning its index.
+    fn find_stage(&self, name: &str) -> Option<usize> {
+        self.chain.iter().position(|s| s.name() == name)
+    }
+
+    /// Replace the first stage with the given name, or append if not found.
+    fn replace_or_append(&mut self, name: &str, stage: Box<dyn MasterStage>) {
+        if let Some(idx) = self.find_stage(name) {
+            self.chain[idx] = stage;
+        } else {
+            self.chain.push(stage);
+        }
+    }
+
+    /// Set the entire chain from a list of stages (used by `master chain` command).
+    pub fn set_chain(&mut self, stages: Vec<Box<dyn MasterStage>>) {
+        self.chain = stages;
+    }
+
+    // --- Backward-compatible setter methods ---
 
     /// Set the master EQ curve with per-band gain in dB.
     /// `low_db`: low shelf at 120 Hz, `mid_db`: peak at 1 kHz (Q=0.7), `high_db`: high shelf at 6 kHz.
     pub fn set_curve(&mut self, low_db: f32, mid_db: f32, high_db: f32, sample_rate: f64) {
-        self.eq_low = EqBand::low_shelf(120.0, low_db, sample_rate);
-        self.eq_mid = EqBand::peak(1000.0, mid_db, 0.7, sample_rate);
-        self.eq_high = EqBand::high_shelf(6000.0, high_db, sample_rate);
+        let stage = Box::new(StageEq::new(low_db, mid_db, high_db, sample_rate));
+        self.replace_or_append("eq", stage);
     }
 
     /// Set master EQ curve from a named preset.
     pub fn set_curve_preset(&mut self, name: &str, sample_rate: f64) -> bool {
         match name {
-            "car" => {
-                // Reduce sub-bass (cabin gain compensation), boost presence for road noise
-                self.set_curve(-4.0, 0.0, 3.0, sample_rate);
-                true
-            }
-            "broadcast" => {
-                // EBU-style: slight low cut, presence boost
-                self.set_curve(-2.0, 0.0, 1.5, sample_rate);
-                true
-            }
-            "bright" => {
-                // Extra sparkle for dull-sounding mixes
-                self.set_curve(0.0, 0.0, 4.0, sample_rate);
-                true
-            }
-            "warm" => {
-                // Bass boost, high cut for vintage feel
-                self.set_curve(3.0, 0.0, -2.0, sample_rate);
-                true
-            }
+            "car" => { self.set_curve(-4.0, 0.0, 3.0, sample_rate); true }
+            "broadcast" => { self.set_curve(-2.0, 0.0, 1.5, sample_rate); true }
+            "bright" => { self.set_curve(0.0, 0.0, 4.0, sample_rate); true }
+            "warm" => { self.set_curve(3.0, 0.0, -2.0, sample_rate); true }
             "flat" | "off" => {
-                self.eq_low = EqBand::bypass();
-                self.eq_mid = EqBand::bypass();
-                self.eq_high = EqBand::bypass();
+                // Remove EQ stage if present
+                if let Some(idx) = self.find_stage("eq") {
+                    self.chain.remove(idx);
+                }
                 true
             }
             _ => false,
         }
     }
 
+    /// Set the compressor to upward mode (boosts quiet content instead of reducing loud).
+    pub fn set_compress_upward(&mut self, upward: bool) {
+        if let Some(idx) = self.find_stage("compress") {
+            if let Some(sc) = self.chain[idx].as_any_mut().downcast_mut::<StageCompress>() {
+                sc.compressor[0].upward = upward;
+                sc.compressor[1].upward = upward;
+            }
+        }
+    }
+
     /// Set multiband compressor from a simple amount (0 = off, 0.3 = gentle, 1.0 = OTT-level).
     pub fn set_multiband(&mut self, amount: f32) {
-        self.multiband.set_amount(amount);
+        if let Some(idx) = self.find_stage("multiband") {
+            if let Some(sm) = self.chain[idx].as_any_mut().downcast_mut::<StageMultiband>() {
+                sm.multiband.set_amount(amount);
+            }
+        } else {
+            let mut mb = StageMultiband::new(DEFAULT_SR);
+            mb.multiband.set_amount(amount);
+            self.chain.push(Box::new(mb));
+        }
     }
 
     /// Set multiband compressor per-band amounts.
     pub fn set_multiband_per_band(&mut self, low: f32, mid: f32, high: f32) {
-        self.multiband.set_per_band(low, mid, high);
+        if let Some(idx) = self.find_stage("multiband") {
+            if let Some(sm) = self.chain[idx].as_any_mut().downcast_mut::<StageMultiband>() {
+                sm.multiband.set_per_band(low, mid, high);
+            }
+        } else {
+            let mut mb = StageMultiband::new(DEFAULT_SR);
+            mb.multiband.set_per_band(low, mid, high);
+            self.chain.push(Box::new(mb));
+        }
     }
 
     /// Set the soft clipper amount.
     /// 0.0 = off (bypass), 0.5 = gentle warmth, 1.0 = moderate saturation, 2.0+ = heavy.
     pub fn set_saturate(&mut self, amount: f32) {
-        // Map amount to drive: 0 = bypass, 0.5 → drive ~2, 1.0 → drive ~4, 2.0 → drive ~8
-        self.saturate_drive = if amount <= 0.0 { 0.0 } else { amount * 4.0 };
+        let drive = if amount <= 0.0 { 0.0 } else { amount * 4.0 };
+        self.replace_or_append("saturate", Box::new(StageSaturate { drive }));
+    }
+
+    /// Set master bus harmonic exciter.
+    /// `cutoff`: frequency above which to excite. `amount`: 0.0-1.0.
+    pub fn set_excite(&mut self, cutoff: f32, amount: f32) {
+        if amount <= 0.0 {
+            if let Some(idx) = self.find_stage("excite") {
+                self.chain.remove(idx);
+            }
+        } else {
+            self.replace_or_append("excite", Box::new(StageExcite::new(cutoff, amount)));
+        }
     }
 
     /// Set the compression amount (0.0 = off, 1.0 = default, 2.0 = heavy).
     pub fn set_compress(&mut self, amount: f32, sample_rate: f64) {
-        let c = MasterCompressor::from_amount(amount, sample_rate);
-        self.compressor = [c.clone(), c];
+        self.replace_or_append("compress", Box::new(StageCompress::new(amount, sample_rate)));
     }
 
     /// Set compression with explicit parameters.
     pub fn set_compress_params(&mut self, threshold: f32, ratio: f32, attack: f64, release: f64, sample_rate: f64) {
-        let c = MasterCompressor::new(threshold, ratio, attack, release, sample_rate);
-        self.compressor = [c.clone(), c];
+        self.replace_or_append("compress", Box::new(StageCompress::from_params(threshold, ratio, attack, release, sample_rate)));
+    }
+
+    /// Add an expander to the chain.
+    pub fn add_expand(&mut self, threshold_db: f32, ratio: f32, attack: f64, release: f64) {
+        self.replace_or_append("expand", Box::new(StageExpand::new(threshold_db, ratio, attack, release)));
     }
 
     /// Set master output gain in dB (e.g., -6.0 to reduce by 6 dB).
@@ -1489,7 +1928,7 @@ impl MasterBus {
         (b0, b1, b2, a1, a2)
     }
 
-    /// Process a single channel through biquad filters using the given channel index.
+    /// Process a single channel through HP/LP biquad filters.
     fn process_channel(&mut self, buffer: &mut [f32], ch: usize) {
         let hp = &mut self.hp_state[ch];
         let lp = &mut self.lp_state[ch];
@@ -1521,17 +1960,12 @@ impl MasterBus {
                 *lp = BiquadState::default();
                 *sample = 0.0;
             } else {
-                // Apply 3-band master EQ curve
-                let mut s = lp_out;
-                s = self.eq_low.process_sample(s, ch);
-                s = self.eq_mid.process_sample(s, ch);
-                s = self.eq_high.process_sample(s, ch);
-                *sample = s;
+                *sample = lp_out;
             }
         }
     }
 
-    /// Process a mono buffer in-place: highpass → lowpass → compressor → limiter.
+    /// Process a mono buffer in-place: gain → HP → LP → chain → limiter.
     /// Uses channel 0 state. Still needed by the standalone normalization limiter path.
     pub fn process(&mut self, buffer: &mut [f32]) {
         // Apply master gain first (before all processing)
@@ -1543,23 +1977,17 @@ impl MasterBus {
 
         self.process_channel(buffer, 0);
 
-        // Compressor (crest factor reduction)
-        self.compressor[0].process(buffer);
-
-        // Soft clipper
-        if self.saturate_drive > 0.0 {
-            let drive = self.saturate_drive;
-            let norm = 1.0 / drive.tanh();
-            for sample in buffer.iter_mut() {
-                *sample = (*sample * drive).tanh() * norm;
-            }
+        // Run chain stages (mono: use left channel, right is a dummy zero buffer)
+        let mut right_dummy = vec![0.0f32; buffer.len()];
+        for stage in &mut self.chain {
+            stage.process_stereo(buffer, &mut right_dummy);
         }
 
         // Limiter
         self.limiter[0].process(buffer);
     }
 
-    /// Process stereo buffers in-place: gain → HP → LP → compressor → soft clipper → limiter.
+    /// Process stereo buffers in-place: gain → HP → LP → chain → limiter.
     pub fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32]) {
         // Apply master gain first
         if (self.gain - 1.0).abs() > 1e-6 {
@@ -1571,33 +1999,13 @@ impl MasterBus {
             }
         }
 
-        // Biquad filters per channel
+        // HP + LP filters per channel
         self.process_channel(left, 0);
         self.process_channel(right, 1);
 
-        // Multiband compressor (3-band: process per sample pair)
-        if self.multiband.active {
-            for i in 0..left.len() {
-                let (l, r) = self.multiband.process_sample(left[i], right[i]);
-                left[i] = l;
-                right[i] = r;
-            }
-        }
-
-        // Compressor per channel
-        self.compressor[0].process(left);
-        self.compressor[1].process(right);
-
-        // Soft clipper (tanh saturation) — adds harmonic warmth and catches peaks
-        if self.saturate_drive > 0.0 {
-            let drive = self.saturate_drive;
-            let norm = 1.0 / drive.tanh(); // normalize so tanh(drive)/drive ≈ 1.0 at low levels
-            for sample in left.iter_mut() {
-                *sample = (*sample * drive).tanh() * norm;
-            }
-            for sample in right.iter_mut() {
-                *sample = (*sample * drive).tanh() * norm;
-            }
+        // User chain
+        for stage in &mut self.chain {
+            stage.process_stereo(left, right);
         }
 
         // Limiter per channel

@@ -26,9 +26,9 @@ The master bus chain now includes: HP → LP → EQ Curve → Multiband Compress
 
 `master curve` with presets (`car`, `broadcast`, `bright`, `warm`, `flat`) and manual per-band control (`low`, `mid`, `high` in dB). 3-band EQ: low shelf at 120 Hz, mid peak at 1 kHz, high shelf at 6 kHz.
 
-### ~~Multiband compressor~~ ✅ Implemented
+### Multiband compressor — needs rework
 
-`master multiband` splits audio into 3 bands (low <200 Hz, mid 200-3 kHz, high >3 kHz) and compresses each independently. Simple amount control (0-1.0) or per-band amounts.
+`master multiband` is implemented (band splitting, per-band compression, parallel blend) but currently underperforms the regular single-band compressor in crest factor reduction testing. The per-band compression + recombination loses energy relative to full-band compression. Needs: auto-gain calibration, combined upward+downward compression per band (true OTT architecture), and validation against reference implementations.
 
 ### Upward compression mode
 

@@ -6,8 +6,8 @@ use pest_derive::Parser;
 use std::collections::HashMap;
 
 use super::ast::{
-    Command, DefKind, Expr, PatternEvent, PatternRef, RepeatBody, Script, SectionEntry,
-    WeightedChoice, WithMap,
+    Command, DefKind, EqType, Expr, MasterChainStage, PatternEvent, PatternRef, RepeatBody,
+    Script, SectionEntry, WeightedChoice, WithMap,
 };
 
 #[derive(Parser)]
@@ -246,12 +246,22 @@ fn try_parse_command(line: &str) -> Result<Option<Command>> {
                 .ok_or_else(|| anyhow!("Expected master sub-command"))?;
             match inner.as_rule() {
                 Rule::master_compress => {
-                    let vals: Vec<f64> = inner.into_inner()
-                        .map(|p| p.as_str().parse::<f64>())
-                        .collect::<std::result::Result<Vec<_>, _>>()
-                        .map_err(|_| anyhow!("Invalid number in master compress"))?;
+                    let mut vals: Vec<f64> = Vec::new();
+                    let mut upward = false;
+                    for p in inner.into_inner() {
+                        if p.as_str() == "up" {
+                            upward = true;
+                        } else if let Ok(v) = p.as_str().parse::<f64>() {
+                            vals.push(v);
+                        }
+                    }
                     if vals.is_empty() {
                         return Err(anyhow!("master compress requires at least one argument"));
+                    }
+                    if upward {
+                        // Mark as upward by appending a sentinel value
+                        // Convention: if last value is exactly -999.0, it's upward mode
+                        vals.push(-999.0);
                     }
                     return Ok(Some(Command::MasterCompress(vals)));
                 }
@@ -275,6 +285,15 @@ fn try_parse_command(line: &str) -> Result<Option<Command>> {
                         .as_str().parse()
                         .map_err(|_| anyhow!("Invalid number in master saturate"))?;
                     return Ok(Some(Command::MasterSaturate(val)));
+                }
+                Rule::master_excite => {
+                    let nums: Vec<f64> = inner.into_inner()
+                        .filter(|p| p.as_rule() == Rule::number)
+                        .map(|p| p.as_str().parse::<f64>().unwrap_or(0.0))
+                        .collect();
+                    let cutoff = nums.first().copied().unwrap_or(4000.0);
+                    let amount = nums.get(1).copied().unwrap_or(0.3);
+                    return Ok(Some(Command::MasterExcite { cutoff, amount }));
                 }
                 Rule::master_multiband => {
                     let mb_inner = inner.into_inner().next().unwrap();
@@ -314,6 +333,23 @@ fn try_parse_command(line: &str) -> Result<Option<Command>> {
                         }
                         _ => {}
                     }
+                }
+                Rule::master_expand => {
+                    let vals: Vec<f64> = inner.into_inner()
+                        .filter(|p| p.as_rule() == Rule::number)
+                        .map(|p| p.as_str().parse::<f64>().unwrap_or(0.0))
+                        .collect();
+                    if vals.is_empty() {
+                        return Err(anyhow!("master expand requires at least one argument"));
+                    }
+                    return Ok(Some(Command::MasterExpand(vals)));
+                }
+                Rule::master_chain => {
+                    let stages: Vec<MasterChainStage> = inner.into_inner()
+                        .filter(|p| p.as_rule() == Rule::chain_stage)
+                        .map(|p| parse_chain_stage(p))
+                        .collect::<Result<Vec<_>>>()?;
+                    return Ok(Some(Command::MasterChain(stages)));
                 }
                 _ => {}
             }
@@ -410,6 +446,81 @@ fn parse_wave_def_pair(pair: Pair<Rule>) -> Result<Command> {
         .map(|p| p.as_str().parse::<f64>().map_err(|e| anyhow!("Invalid number in wave definition: {e}")))
         .collect();
     Ok(Command::WaveDef { name, samples: samples? })
+}
+
+/// Parse a chain stage from a pest Pair.
+fn parse_chain_stage(pair: Pair<Rule>) -> Result<MasterChainStage> {
+    let inner = pair.into_inner().next()
+        .ok_or_else(|| anyhow!("Empty chain stage"))?;
+    match inner.as_rule() {
+        Rule::chain_compress => {
+            let nums: Vec<f64> = inner.into_inner()
+                .filter(|p| p.as_rule() == Rule::number)
+                .map(|p| p.as_str().parse::<f64>().unwrap_or(0.0))
+                .collect();
+            Ok(MasterChainStage::Compress { params: nums })
+        }
+        Rule::chain_saturate => {
+            let val: f64 = inner.into_inner()
+                .find(|p| p.as_rule() == Rule::number)
+                .map(|p| p.as_str().parse::<f64>().unwrap_or(0.0))
+                .unwrap_or(0.5);
+            Ok(MasterChainStage::Saturate(val))
+        }
+        Rule::chain_eq => {
+            let mut nums = Vec::new();
+            let mut eq_type_str = None;
+            for p in inner.into_inner() {
+                match p.as_rule() {
+                    Rule::number => {
+                        if let Ok(v) = p.as_str().parse::<f64>() {
+                            nums.push(v);
+                        }
+                    }
+                    Rule::ident => {
+                        eq_type_str = Some(p.as_str().to_string());
+                    }
+                    _ => {}
+                }
+            }
+            let freq = nums.first().copied().unwrap_or(1000.0);
+            let gain_db = nums.get(1).copied().unwrap_or(0.0);
+            let q_or_type = if let Some(t) = eq_type_str {
+                match t.as_str() {
+                    "low" => EqType::Low,
+                    "high" => EqType::High,
+                    _ => EqType::Q(1.0),
+                }
+            } else {
+                EqType::Q(nums.get(2).copied().unwrap_or(1.0))
+            };
+            Ok(MasterChainStage::Eq { freq, gain_db, q_or_type })
+        }
+        Rule::chain_excite => {
+            let nums: Vec<f64> = inner.into_inner()
+                .filter(|p| p.as_rule() == Rule::number)
+                .map(|p| p.as_str().parse::<f64>().unwrap_or(0.0))
+                .collect();
+            let cutoff = nums.first().copied().unwrap_or(4000.0);
+            let amount = nums.get(1).copied().unwrap_or(0.3);
+            Ok(MasterChainStage::Excite { cutoff, amount })
+        }
+        Rule::chain_expand => {
+            let nums: Vec<f64> = inner.into_inner()
+                .filter(|p| p.as_rule() == Rule::number)
+                .map(|p| p.as_str().parse::<f64>().unwrap_or(0.0))
+                .collect();
+            Ok(MasterChainStage::Expand { params: nums })
+        }
+        Rule::chain_multiband => {
+            let val: f64 = inner.into_inner()
+                .find(|p| p.as_rule() == Rule::number)
+                .map(|p| p.as_str().parse::<f64>().unwrap_or(0.0))
+                .unwrap_or(0.5);
+            Ok(MasterChainStage::Multiband(val))
+        }
+        _ => Err(anyhow!("Unknown chain stage type")),
+    }
 }
 
 /// Parse a single line of input into a Command (used by streaming mode).
