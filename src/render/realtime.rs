@@ -73,6 +73,126 @@ impl SubFoldState {
     }
 }
 
+/// A single filtered noise layer with its own LCG state and filter.
+struct NoiseLayer {
+    rng_state: u64,
+    lp_l: f64,
+    lp_r: f64,
+    alpha: f64,    // lowpass coefficient
+    hp_l: f64,     // highpass state
+    hp_r: f64,
+    hp_alpha: f64, // highpass coefficient (0 = no highpass)
+    level: f32,
+}
+
+impl NoiseLayer {
+    fn new(seed: u64, lp_freq: f64, hp_freq: f64, level: f32, sample_rate: f64) -> Self {
+        let lp_alpha = (2.0 * std::f64::consts::PI * lp_freq) / (2.0 * std::f64::consts::PI * lp_freq + sample_rate);
+        let hp_alpha = if hp_freq > 0.0 {
+            1.0 - (2.0 * std::f64::consts::PI * hp_freq) / (2.0 * std::f64::consts::PI * hp_freq + sample_rate)
+        } else {
+            0.0 // no highpass
+        };
+        NoiseLayer {
+            rng_state: seed,
+            lp_l: 0.0, lp_r: 0.0,
+            alpha: lp_alpha,
+            hp_l: 0.0, hp_r: 0.0,
+            hp_alpha,
+            level,
+        }
+    }
+
+    #[inline]
+    fn next_white(&mut self) -> (f64, f64) {
+        self.rng_state = self.rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let l = ((self.rng_state >> 33) as i32 as f64) / (i32::MAX as f64);
+        self.rng_state = self.rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let r = ((self.rng_state >> 33) as i32 as f64) / (i32::MAX as f64);
+        (l, r)
+    }
+
+    #[inline]
+    fn next(&mut self) -> (f32, f32) {
+        let (wl, wr) = self.next_white();
+
+        // Lowpass
+        self.lp_l += self.alpha * (wl - self.lp_l);
+        self.lp_r += self.alpha * (wr - self.lp_r);
+
+        let mut l = self.lp_l;
+        let mut r = self.lp_r;
+
+        // Optional highpass (bandpass = lowpass then highpass)
+        if self.hp_alpha > 0.0 {
+            let prev_hp_l = self.hp_l;
+            let prev_hp_r = self.hp_r;
+            self.hp_l = self.hp_alpha * (prev_hp_l + l - self.lp_l);
+            self.hp_r = self.hp_alpha * (prev_hp_r + r - self.lp_r);
+            // Simple DC-blocking highpass approximation
+            l = l - self.hp_l;
+            r = r - self.hp_r;
+        }
+
+        (l as f32 * self.level, r as f32 * self.level)
+    }
+}
+
+/// Stateful environmental noise generator for monitoring.
+/// Uses multiple filtered noise layers to approximate real-world noise spectra.
+struct EnvNoiseGen {
+    layers: Vec<NoiseLayer>,
+}
+
+impl EnvNoiseGen {
+    fn new(profile: EnvNoiseProfile, sample_rate: f64) -> Self {
+        let layers = match profile {
+            EnvNoiseProfile::Car => vec![
+                // Engine rumble: deep, 40-150 Hz
+                NoiseLayer::new(0xDEADBEEF11111111, 150.0, 40.0, 0.25, sample_rate),
+                // Tire noise: peaks around 800-1200 Hz
+                NoiseLayer::new(0xCAFEBABE22222222, 1200.0, 300.0, 0.20, sample_rate),
+                // Wind noise: broadband above 500 Hz
+                NoiseLayer::new(0x1234567833333333, 6000.0, 500.0, 0.12, sample_rate),
+                // A/C hiss: high frequency
+                NoiseLayer::new(0xABCDEF0044444444, 8000.0, 2000.0, 0.06, sample_rate),
+            ],
+            EnvNoiseProfile::Cafe => vec![
+                // Room tone: low ambient
+                NoiseLayer::new(0x1111111111111111, 400.0, 60.0, 0.08, sample_rate),
+                // Speech frequencies: mid-heavy chatter
+                NoiseLayer::new(0x2222222222222222, 3000.0, 300.0, 0.15, sample_rate),
+                // Coffee machine / clinking: high mid
+                NoiseLayer::new(0x3333333333333333, 6000.0, 1000.0, 0.06, sample_rate),
+            ],
+            EnvNoiseProfile::Subway => vec![
+                // Tunnel resonance: very deep
+                NoiseLayer::new(0xAAAAAAAAAAAAAAAA, 200.0, 30.0, 0.30, sample_rate),
+                // Rail rumble: low-mid
+                NoiseLayer::new(0xBBBBBBBBBBBBBBBB, 800.0, 100.0, 0.20, sample_rate),
+                // Brake screech / broadband: mid-high
+                NoiseLayer::new(0xCCCCCCCCCCCCCCCC, 4000.0, 500.0, 0.15, sample_rate),
+                // Electrical hum
+                NoiseLayer::new(0xDDDDDDDDDDDDDDDD, 200.0, 50.0, 0.10, sample_rate),
+            ],
+        };
+        EnvNoiseGen { layers }
+    }
+
+    /// Generate next noise sample pair (L, R).
+    #[inline]
+    fn next(&mut self) -> (f32, f32) {
+        let mut l = 0.0f32;
+        let mut r = 0.0f32;
+        for layer in &mut self.layers {
+            let (nl, nr) = layer.next();
+            l += nl;
+            r += nr;
+        }
+        (l, r)
+    }
+}
+
 fn play_realtime_inner(engine: Engine, flags: MonitorFlags) -> Result<()> {
     let show_vu = flags.show_vu;
     let host = cpal::default_host();
@@ -111,7 +231,10 @@ fn play_realtime_inner(engine: Engine, flags: MonitorFlags) -> Result<()> {
     };
     let subfold_clone = subfold_state.clone();
 
-    let env_noise = flags.env_noise;
+    let env_noise_gen = flags.env_noise.map(|profile| {
+        Arc::new(Mutex::new(EnvNoiseGen::new(profile, sample_rate)))
+    });
+    let env_noise_clone = env_noise_gen.clone();
 
     let stream = match sample_format {
         SampleFormat::F32 => device.build_output_stream(
@@ -140,25 +263,18 @@ fn play_realtime_inner(engine: Engine, flags: MonitorFlags) -> Result<()> {
                 }
 
                 // Interleave stereo to output channels, clamping to prevent driver clipping
-                // Also add environmental noise if enabled
-                let noise_level = match env_noise {
-                    Some(EnvNoiseProfile::Car) => 0.08,    // heavy low-mid rumble
-                    Some(EnvNoiseProfile::Cafe) => 0.04,   // lighter broadband
-                    Some(EnvNoiseProfile::Subway) => 0.12, // very heavy
-                    None => 0.0,
-                };
+                // Lock env noise generator if present (once per buffer, not per sample)
+                let mut env_gen_lock = env_noise_clone.as_ref().map(|g| g.lock().unwrap());
+
                 for (i, frame) in data.chunks_mut(channels as usize).enumerate() {
                     let mut l = if i < frame_count { lbuf[i].clamp(-1.0, 1.0) } else { 0.0 };
                     let mut r = if i < frame_count { rbuf[i].clamp(-1.0, 1.0) } else { 0.0 };
 
                     // Mix in environmental noise (monitoring only)
-                    if noise_level > 0.0 {
-                        // Simple white noise from hash function (no allocations)
-                        let seed = (i as u64).wrapping_mul(2654435761).wrapping_add(frame_count as u64);
-                        let noise = ((seed & 0xFFFF) as f32 / 32768.0) - 1.0;
-                        // Brown-ish filtering: just average with previous for low-frequency character
-                        l += noise * noise_level;
-                        r += noise * noise_level * 0.95; // slight L/R decorrelation
+                    if let Some(ref mut gen) = env_gen_lock {
+                        let (nl, nr) = gen.next();
+                        l += nl;
+                        r += nr;
                     }
                     match frame.len() {
                         1 => {

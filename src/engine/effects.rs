@@ -1035,8 +1035,9 @@ impl MultibandCompressor {
         let (mlp_b0, mlp_b1, mlp_b2, mlp_a1, mlp_a2) = Self::lowpass_coeffs(3000.0, sample_rate);
         let (mhp_b0, mhp_b1, mhp_b2, mhp_a1, mhp_a2) = Self::highpass_coeffs(3000.0, sample_rate);
 
-        let attack_coeff = (-1.0 / (0.01 * sample_rate)).exp() as f32;
-        let release_coeff = (-1.0 / (0.1 * sample_rate)).exp() as f32;
+        // Slower attack (30ms) to avoid clicks on band-split signals
+        let attack_coeff = (-1.0 / (0.03 * sample_rate)).exp() as f32;
+        let release_coeff = (-1.0 / (0.15 * sample_rate)).exp() as f32;
 
         MultibandCompressor {
             lm_lp_state: [[0.0; 4]; 2], lm_hp_state: [[0.0; 4]; 2],
@@ -1055,7 +1056,7 @@ impl MultibandCompressor {
         }
     }
 
-    /// Set from a simple amount (0 = off, 0.3 = gentle, 1.0 = OTT-level).
+    /// Set from a simple amount (0 = off, 0.3 = gentle, 1.0 = heavy/OTT-level).
     pub fn set_amount(&mut self, amount: f32) {
         if amount <= 0.0 {
             self.active = false;
@@ -1063,21 +1064,35 @@ impl MultibandCompressor {
         }
         self.active = true;
         let a = amount.min(2.0);
-        // Scale thresholds and ratios based on amount
-        self.threshold = [-30.0 / a, -24.0 / a, -20.0 / a];
-        self.ratio = [1.0 + a * 3.0, 1.0 + a * 2.5, 1.0 + a * 2.0];
-        // Makeup gain to compensate for compression
+        // Thresholds: gentle at low amounts, aggressive at high
+        // 0.3 → [-30, -26, -22] dB (barely touching most content)
+        // 0.6 → [-24, -20, -16] dB (moderate tightening)
+        // 1.0 → [-18, -14, -10] dB (heavy, OTT-like)
+        self.threshold = [
+            -36.0 + a * 18.0,  // low band: -36 to -18
+            -32.0 + a * 18.0,  // mid band: -32 to -14
+            -28.0 + a * 18.0,  // high band: -28 to -10
+        ];
+        // Ratios: gentle at low amounts
+        // 0.3 → ~1.6:1, 0.6 → ~2.2:1, 1.0 → ~3.0:1
+        self.ratio = [
+            1.0 + a * 2.0,  // low
+            1.0 + a * 2.0,  // mid
+            1.0 + a * 1.5,  // high (less aggressive on highs)
+        ];
+        // Conservative makeup gain
         for i in 0..3 {
-            self.makeup[i] = 10.0_f32.powf(
-                self.threshold[i].abs() * (1.0 - 1.0 / self.ratio[i]) * 0.3 / 20.0
-            );
+            let reduction_db = self.threshold[i].abs() * (1.0 - 1.0 / self.ratio[i]);
+            self.makeup[i] = 10.0_f32.powf((reduction_db * 0.25).min(6.0) / 20.0);
         }
     }
 
-    /// Set per-band amounts (low, mid, high).
+    /// Set per-band amounts (low, mid, high). Each 0.0-2.0.
     pub fn set_per_band(&mut self, low: f32, mid: f32, high: f32) {
         self.active = low > 0.0 || mid > 0.0 || high > 0.0;
         let amounts = [low, mid, high];
+        let base_thresholds = [-36.0, -32.0, -28.0];
+        let max_ratios = [2.0, 2.0, 1.5];
         for i in 0..3 {
             let a = amounts[i].max(0.0).min(2.0);
             if a <= 0.0 {
@@ -1085,11 +1100,10 @@ impl MultibandCompressor {
                 self.ratio[i] = 1.0;
                 self.makeup[i] = 1.0;
             } else {
-                self.threshold[i] = -24.0 / a;
-                self.ratio[i] = 1.0 + a * 3.0;
-                self.makeup[i] = 10.0_f32.powf(
-                    self.threshold[i].abs() * (1.0 - 1.0 / self.ratio[i]) * 0.3 / 20.0
-                );
+                self.threshold[i] = base_thresholds[i] + a * 18.0;
+                self.ratio[i] = 1.0 + a * max_ratios[i];
+                let reduction_db = self.threshold[i].abs() * (1.0 - 1.0 / self.ratio[i]);
+                self.makeup[i] = 10.0_f32.powf((reduction_db * 0.25).min(6.0) / 20.0);
             }
         }
     }
@@ -1148,26 +1162,30 @@ impl MultibandCompressor {
 
     /// Process a stereo sample pair through the multiband compressor.
     /// Returns (left_out, right_out).
+    ///
+    /// Uses the subtraction method for perfect-reconstruction band splitting:
+    /// low = LP(input), mid_high = input - low, mid = LP(mid_high), high = mid_high - mid.
+    /// This avoids the phase cancellation issues of parallel LP+HP crossovers.
     #[inline]
     pub fn process_sample(&mut self, l: f32, r: f32) -> (f32, f32) {
         if !self.active { return (l, r); }
 
-        // Split into 3 bands per channel
-        // Low: lowpass at 200 Hz
+        // Band split using subtraction method (perfect reconstruction)
+        // Low = LP(input) at 200 Hz
         let low_l = Self::biquad(l, &mut self.lm_lp_state[0], self.lm_lp_b0, self.lm_lp_b1, self.lm_lp_b2, self.lm_lp_a1, self.lm_lp_a2);
         let low_r = Self::biquad(r, &mut self.lm_lp_state[1], self.lm_lp_b0, self.lm_lp_b1, self.lm_lp_b2, self.lm_lp_a1, self.lm_lp_a2);
 
-        // High pass at 200 Hz (everything above low)
-        let mid_high_l = Self::biquad(l, &mut self.lm_hp_state[0], self.lm_hp_b0, self.lm_hp_b1, self.lm_hp_b2, self.lm_hp_a1, self.lm_hp_a2);
-        let mid_high_r = Self::biquad(r, &mut self.lm_hp_state[1], self.lm_hp_b0, self.lm_hp_b1, self.lm_hp_b2, self.lm_hp_a1, self.lm_hp_a2);
+        // Mid+High = input - low (guaranteed: low + mid_high = input)
+        let mid_high_l = l - low_l;
+        let mid_high_r = r - low_r;
 
-        // Mid: lowpass the mid_high at 3000 Hz
+        // Mid = LP(mid_high) at 3000 Hz
         let mid_l = Self::biquad(mid_high_l, &mut self.mh_lp_state[0], self.mh_lp_b0, self.mh_lp_b1, self.mh_lp_b2, self.mh_lp_a1, self.mh_lp_a2);
         let mid_r = Self::biquad(mid_high_r, &mut self.mh_lp_state[1], self.mh_lp_b0, self.mh_lp_b1, self.mh_lp_b2, self.mh_lp_a1, self.mh_lp_a2);
 
-        // High: highpass the mid_high at 3000 Hz
-        let high_l = Self::biquad(mid_high_l, &mut self.mh_hp_state[0], self.mh_hp_b0, self.mh_hp_b1, self.mh_hp_b2, self.mh_hp_a1, self.mh_hp_a2);
-        let high_r = Self::biquad(mid_high_r, &mut self.mh_hp_state[1], self.mh_hp_b0, self.mh_hp_b1, self.mh_hp_b2, self.mh_hp_a1, self.mh_hp_a2);
+        // High = mid_high - mid (guaranteed: mid + high = mid_high)
+        let high_l = mid_high_l - mid_l;
+        let high_r = mid_high_r - mid_r;
 
         // Compress each band
         let low_l = self.compress_sample(low_l, 0, 0);

@@ -47,6 +47,16 @@ master compress -30 2 0.01 0.1 up             // master bus upward compression
 
 `--env car|cafe|subway` mixes calibrated environmental noise into playback to test mix translation. Playback-only -- never affects rendered files. See [Mixing & Diagnostics](mixing.md#environment-simulation).
 
+### Environment simulation: realistic transients and intermittent noise
+
+The current `--env` profiles use continuous filtered noise layers. Real environments have intermittent, disruptive sounds that test a mix more aggressively:
+
+- **Car**: rhythmic tire thumps on road seams (~1-2 second intervals), occasional pothole impacts, turn signal clicks, rumble strip bursts
+- **Cafe**: espresso machine hiss bursts (~10-15 seconds), plate/cup clinks (random intervals), door opening (broadband gust), laughter peaks
+- **Subway**: periodic brake screeches, door open/close chimes, PA announcement tones, rail joint rhythmic clacking
+
+These can be implemented efficiently using pre-generated wavetables on loops with different cycle lengths (so they don't sync up and sound artificial). Each transient event is a short table (50-500ms) triggered at its loop point, mixed on top of the existing continuous noise. No runtime randomness needed -- the tables are deterministic and the non-aligning loop lengths create enough natural variation.
+
 ## ~~Sub-bass monitoring~~ ✅ Implemented
 
 Sub-bass fold-up (`--subfold`) shifts sub-bass up 1 octave for headphone monitoring. The frequency-band profile in `sc profile` shows per-voice energy in 4 bands (Sub <80, Low 80-300, Mid 300-3k, High 3k+) with warning flags (Sub-heavy, No presence). See [Mixing & Diagnostics](mixing.md#sub-bass-fold-up) and [Frequency-band Profile](mixing.md#frequency-band-profile).
