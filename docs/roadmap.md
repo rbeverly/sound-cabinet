@@ -69,6 +69,25 @@ These can be implemented efficiently using pre-generated wavetables on loops wit
 
 Sub-bass fold-up (`--subfold`) shifts sub-bass up 1 octave for headphone monitoring. The frequency-band profile in `sc profile` shows per-voice energy in 4 bands (Sub <80, Low 80-300, Mid 300-3k, High 3k+) with warning flags (Sub-heavy, No presence). See [Mixing & Diagnostics](mixing.md#sub-bass-fold-up) and [Frequency-band Profile](mixing.md#frequency-band-profile).
 
+## Timbral velocity mapping (filter cutoff / mod index)
+
+Decouple the `velocity` parameter from linear mixing volume (which is now handled by `gain` automation). Map velocity to timbral properties:
+- Subtractive: map to filter envelope amount or cutoff (harder = brighter).
+- FM: map to modulation index (harder = more complex harmonics).
+- Physical Modeling: map to noise burst frequency balance or strike force.
+
+## Extensible instrument parameters (Macros)
+
+Allow instruments to define arbitrary named parameters that can be automated from the sequencer, similar to continuous controllers (CCs) in MIDI.
+
+```sc
+// Instrument exposes a custom 'squeeze' parameter
+instrument bendybassoon = saw(freq) >> mod(squeeze, ...)
+
+// Sequencer automates the custom parameter over time
+play bendybassoon squeeze 0.0 -> 1.0
+```
+
 ## Expression ranges
 
 The `->` sweep operator currently only accepts literal numbers (`800 -> 4000`). Expression ranges would allow freq-relative sweeps inside instruments:
