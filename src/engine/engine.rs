@@ -897,6 +897,17 @@ impl Engine {
         self.schedule.is_empty()
     }
 
+    /// Toggle master bus bypass state. Returns new state.
+    pub fn toggle_master_bypass(&mut self) -> bool {
+        self.master_bus.bypass = !self.master_bus.bypass;
+        self.master_bus.bypass
+    }
+
+    /// Get current gain reduction of the master bus (dB).
+    pub fn current_gain_reduction(&self) -> f32 {
+        self.master_bus.current_gain_reduction()
+    }
+
     /// Trigger note-off for a live note. Starts the release fade on all events
     /// matching the given note_id. Safe to call if no matching events exist.
     pub fn release_note(&mut self, note_id: u16) {

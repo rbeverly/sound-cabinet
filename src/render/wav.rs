@@ -65,16 +65,13 @@ pub fn render_to_wav(engine: &mut Engine, path: &Path, target_lufs: Option<f64>)
             // Linked stereo: compute needed reduction from max(|L|, |R|),
             // apply same reduction to both channels.
             let ceiling = 10.0_f32.powf(-1.0 / 20.0);
-            let mut limiter_l = BrickwallLimiter::new(ceiling, 0.1, sample_rate as f64);
-            let mut limiter_r = BrickwallLimiter::new(ceiling, 0.1, sample_rate as f64);
+            let mut limiter = BrickwallLimiter::new(ceiling, 0.1, sample_rate as f64);
             for (l_chunk, r_chunk) in all_left.chunks_mut(1024).zip(all_right.chunks_mut(1024)) {
-                limiter_l.process(l_chunk);
-                limiter_r.process(r_chunk);
+                limiter.process_stereo(l_chunk, r_chunk);
             }
             let mut left_tail = Vec::new();
             let mut right_tail = Vec::new();
-            limiter_l.flush(&mut left_tail);
-            limiter_r.flush(&mut right_tail);
+            limiter.flush_stereo(&mut left_tail, &mut right_tail);
             all_left.extend_from_slice(&left_tail);
             all_right.extend_from_slice(&right_tail);
 

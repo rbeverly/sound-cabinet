@@ -966,12 +966,16 @@ impl AudioNode for HarmonicExciter {
 /// Not an AudioNode — operates on buffers directly for use on the master bus.
 #[derive(Clone)]
 pub struct BrickwallLimiter {
-    ceiling: f32,
-    release_coeff: f32,
-    gain_reduction: f32, // current gain reduction (0.0 = no reduction, higher = more)
-    lookahead_buf: Vec<f32>,
+    pub ceiling: f32,
+    pub release_coeff: f32,
+    pub gain_reduction: f32, // current gain reduction (0.0 = no reduction, higher = more)
+    lookahead_buf_l: Vec<f32>,
+    lookahead_buf_r: Vec<f32>,
     lookahead_pos: usize,
     lookahead_len: usize,
+    peak_hold_timer: usize,
+    history_l: [f32; 3], // for 4-point hermite true peak interpolation
+    history_r: [f32; 3],
 }
 
 impl BrickwallLimiter {
@@ -983,24 +987,50 @@ impl BrickwallLimiter {
             ceiling,
             release_coeff,
             gain_reduction: 0.0,
-            lookahead_buf: vec![0.0; lookahead_len],
+            lookahead_buf_l: vec![0.0; lookahead_len],
+            lookahead_buf_r: vec![0.0; lookahead_len],
             lookahead_pos: 0,
             lookahead_len,
+            peak_hold_timer: 0,
+            history_l: [0.0; 3],
+            history_r: [0.0; 3],
         }
     }
 
-    /// Process a buffer of samples in-place.
-    pub fn process(&mut self, buffer: &mut [f32]) {
-        for sample in buffer.iter_mut() {
-            // Write current sample into lookahead buffer, read delayed sample
-            let delayed = self.lookahead_buf[self.lookahead_pos];
-            self.lookahead_buf[self.lookahead_pos] = *sample;
+    #[inline(always)]
+    fn hermite(y0: f32, y1: f32, y2: f32, y3: f32, mu: f32) -> f32 {
+        let mu2 = mu * mu;
+        let mu3 = mu2 * mu;
+        let m0 = (y1 - y0) * 0.5 + (y2 - y1) * 0.5;
+        let m1 = (y2 - y1) * 0.5 + (y3 - y2) * 0.5;
+        let a0 = 2.0 * mu3 - 3.0 * mu2 + 1.0;
+        let a1 = mu3 - 2.0 * mu2 + mu;
+        let a2 = mu3 - mu2;
+        let a3 = -2.0 * mu3 + 3.0 * mu2;
+        a0 * y1 + a1 * m0 + a2 * m1 + a3 * y2
+    }
+
+    /// Process a stereo buffer of samples in-place.
+    pub fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32]) {
+        for (l, r) in left.iter_mut().zip(right.iter_mut()) {
+            let delayed_l = self.lookahead_buf_l[self.lookahead_pos];
+            let delayed_r = self.lookahead_buf_r[self.lookahead_pos];
+            self.lookahead_buf_l[self.lookahead_pos] = *l;
+            self.lookahead_buf_r[self.lookahead_pos] = *r;
             self.lookahead_pos = (self.lookahead_pos + 1) % self.lookahead_len;
 
-            // Compute required gain reduction from current (pre-delay) sample
-            let abs_val = sample.abs();
-            let needed = if abs_val > self.ceiling {
-                1.0 - self.ceiling / abs_val
+            // Compute required gain reduction using True Peak (4x Hermite interpolation)
+            let mut max_abs = l.abs().max(r.abs());
+            for mu in [0.25, 0.5, 0.75].iter() {
+                let interp_l = Self::hermite(self.history_l[0], self.history_l[1], self.history_l[2], *l, *mu);
+                let interp_r = Self::hermite(self.history_r[0], self.history_r[1], self.history_r[2], *r, *mu);
+                max_abs = max_abs.max(interp_l.abs()).max(interp_r.abs());
+            }
+            self.history_l = [self.history_l[1], self.history_l[2], *l];
+            self.history_r = [self.history_r[1], self.history_r[2], *r];
+
+            let needed = if max_abs > self.ceiling {
+                1.0 - self.ceiling / max_abs
             } else {
                 0.0
             };
@@ -1008,6 +1038,9 @@ impl BrickwallLimiter {
             // Attack is instant (lookahead handles smoothing), release is gradual
             if needed > self.gain_reduction {
                 self.gain_reduction = needed;
+                self.peak_hold_timer = self.lookahead_len; // Hold for lookahead window
+            } else if self.peak_hold_timer > 0 {
+                self.peak_hold_timer -= 1;
             } else {
                 self.gain_reduction =
                     self.release_coeff * self.gain_reduction + (1.0 - self.release_coeff) * needed;
@@ -1015,21 +1048,28 @@ impl BrickwallLimiter {
 
             // Apply gain to the delayed sample
             let gain = 1.0 - self.gain_reduction;
-            *sample = delayed * gain;
+            *l = delayed_l * gain;
+            *r = delayed_r * gain;
         }
     }
 
     /// Flush the lookahead buffer (call after all audio is processed).
-    pub fn flush(&mut self, output: &mut Vec<f32>) {
+    pub fn flush_stereo(&mut self, left: &mut Vec<f32>, right: &mut Vec<f32>) {
         for _ in 0..self.lookahead_len {
-            let delayed = self.lookahead_buf[self.lookahead_pos];
-            self.lookahead_buf[self.lookahead_pos] = 0.0;
+            let delayed_l = self.lookahead_buf_l[self.lookahead_pos];
+            let delayed_r = self.lookahead_buf_r[self.lookahead_pos];
+            self.lookahead_buf_l[self.lookahead_pos] = 0.0;
+            self.lookahead_buf_r[self.lookahead_pos] = 0.0;
             self.lookahead_pos = (self.lookahead_pos + 1) % self.lookahead_len;
 
             let gain = 1.0 - self.gain_reduction;
-            self.gain_reduction =
-                self.release_coeff * self.gain_reduction;
-            output.push(delayed * gain);
+            if self.peak_hold_timer > 0 {
+                self.peak_hold_timer -= 1;
+            } else {
+                self.gain_reduction = self.release_coeff * self.gain_reduction;
+            }
+            left.push(delayed_l * gain);
+            right.push(delayed_r * gain);
         }
     }
 }
@@ -1056,6 +1096,7 @@ pub struct MasterCompressor {
     makeup_gain: f32,  // compensate for gain reduction
     upward: bool,      // upward compression: boost quiet content instead of reducing loud
     knee_width: f32,   // soft knee width in dB (Giannoulis/Massberg/Reiss JAES 2012)
+    last_gr_db: f32,   // instantaneous gain reduction for metering
 }
 
 impl MasterCompressor {
@@ -1076,6 +1117,7 @@ impl MasterCompressor {
             makeup_gain,
             upward: false,
             knee_width: 6.0,
+            last_gr_db: 0.0,
         }
     }
 
@@ -1182,12 +1224,11 @@ impl MasterCompressor {
                     -(1.0 - 1.0 / self.ratio) * x * x / (2.0 * knee)
                 }
             };
-
-            let gain = 10.0_f32.powf(gain_db / 20.0) * self.makeup_gain;
-            *sample = x * gain;
-        }
-    }
+let gain = 10.0_f32.powf(gain_db / 20.0) * self.makeup_gain;
+self.last_gr_db = gain_db.min(0.0);
+*sample *= gain;
 }
+}}
 
 // ---------------------------------------------------------------------------
 // Master Bus (highpass + lowpass + compressor + limiter)
@@ -1197,55 +1238,84 @@ impl MasterCompressor {
 // Multiband Compressor (3-band: low, mid, high)
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
+struct CrossoverLR4 {
+    lp_b0: f32, lp_b1: f32, lp_b2: f32, lp_a1: f32, lp_a2: f32,
+    hp_b0: f32, hp_b1: f32, hp_b2: f32, hp_a1: f32, hp_a2: f32,
+    lp_state: [[[f32; 4]; 2]; 2], // [cascade][ch][state]
+    hp_state: [[[f32; 4]; 2]; 2],
+}
+
+impl CrossoverLR4 {
+    fn new(freq: f64, sr: f64) -> Self {
+        let (lp_b0, lp_b1, lp_b2, lp_a1, lp_a2) = MultibandCompressor::lowpass_coeffs(freq, sr);
+        let (hp_b0, hp_b1, hp_b2, hp_a1, hp_a2) = MultibandCompressor::highpass_coeffs(freq, sr);
+        Self {
+            lp_b0, lp_b1, lp_b2, lp_a1, lp_a2,
+            hp_b0, hp_b1, hp_b2, hp_a1, hp_a2,
+            lp_state: [[[0.0; 4]; 2]; 2],
+            hp_state: [[[0.0; 4]; 2]; 2],
+        }
+    }
+    
+    #[inline]
+    fn process_sample(&mut self, l: f32, r: f32) -> ((f32, f32), (f32, f32)) {
+        let lp1_l = MultibandCompressor::biquad(l, &mut self.lp_state[0][0], self.lp_b0, self.lp_b1, self.lp_b2, self.lp_a1, self.lp_a2);
+        let lp1_r = MultibandCompressor::biquad(r, &mut self.lp_state[0][1], self.lp_b0, self.lp_b1, self.lp_b2, self.lp_a1, self.lp_a2);
+        let lp2_l = MultibandCompressor::biquad(lp1_l, &mut self.lp_state[1][0], self.lp_b0, self.lp_b1, self.lp_b2, self.lp_a1, self.lp_a2);
+        let lp2_r = MultibandCompressor::biquad(lp1_r, &mut self.lp_state[1][1], self.lp_b0, self.lp_b1, self.lp_b2, self.lp_a1, self.lp_a2);
+        
+        let hp1_l = MultibandCompressor::biquad(l, &mut self.hp_state[0][0], self.hp_b0, self.hp_b1, self.hp_b2, self.hp_a1, self.hp_a2);
+        let hp1_r = MultibandCompressor::biquad(r, &mut self.hp_state[0][1], self.hp_b0, self.hp_b1, self.hp_b2, self.hp_a1, self.hp_a2);
+        let hp2_l = MultibandCompressor::biquad(hp1_l, &mut self.hp_state[1][0], self.hp_b0, self.hp_b1, self.hp_b2, self.hp_a1, self.hp_a2);
+        let hp2_r = MultibandCompressor::biquad(hp1_r, &mut self.hp_state[1][1], self.hp_b0, self.hp_b1, self.hp_b2, self.hp_a1, self.hp_a2);
+        
+        ((lp2_l, lp2_r), (hp2_l, hp2_r))
+    }
+}
+
 /// 3-band multiband compressor for the master bus.
 /// Splits signal into low (<200Hz), mid (200Hz-3kHz), and high (>3kHz) bands
-/// using 2nd-order crossover filters, compresses each band independently,
-/// then sums them back together.
+/// using 4th-order Linkwitz-Riley crossovers for perfect phase-aligned reconstruction.
 #[derive(Clone)]
 pub struct MultibandCompressor {
-    // Crossover filter states per channel [left, right]
-    // Low-mid crossover at 200 Hz
-    lm_lp_state: [[f32; 4]; 2],  // [ch][x1,x2,y1,y2]
-    lm_hp_state: [[f32; 4]; 2],
-    lm_lp_b0: f32, lm_lp_b1: f32, lm_lp_b2: f32, lm_lp_a1: f32, lm_lp_a2: f32,
-    lm_hp_b0: f32, lm_hp_b1: f32, lm_hp_b2: f32, lm_hp_a1: f32, lm_hp_a2: f32,
-    // Mid-high crossover at 3000 Hz
-    mh_lp_state: [[f32; 4]; 2],
-    mh_hp_state: [[f32; 4]; 2],
-    mh_lp_b0: f32, mh_lp_b1: f32, mh_lp_b2: f32, mh_lp_a1: f32, mh_lp_a2: f32,
-    mh_hp_b0: f32, mh_hp_b1: f32, mh_hp_b2: f32, mh_hp_a1: f32, mh_hp_a2: f32,
-    // Per-band compressor envelopes [low, mid, high] × [left, right]
-    env: [[f32; 2]; 3],
+    lm_cross: CrossoverLR4,
+    mh_cross: CrossoverLR4,
+    low_align_cross: CrossoverLR4, // Phase aligns the low band with the mid/high crossover
+
+    // Per-band compressor envelopes [low, mid, high]
+    env: [f32; 3],
     // Per-band settings
     threshold: [f32; 3],
     ratio: [f32; 3],
-    attack_coeff: f32,
-    release_coeff: f32,
+    attack_coeff: [f32; 3],
+    release_coeff: [f32; 3],
     makeup: [f32; 3],
     active: bool,
 }
 
 impl MultibandCompressor {
     pub fn new(sample_rate: f64) -> Self {
-        let (lp_b0, lp_b1, lp_b2, lp_a1, lp_a2) = Self::lowpass_coeffs(200.0, sample_rate);
-        let (hp_b0, hp_b1, hp_b2, hp_a1, hp_a2) = Self::highpass_coeffs(200.0, sample_rate);
-        let (mlp_b0, mlp_b1, mlp_b2, mlp_a1, mlp_a2) = Self::lowpass_coeffs(3000.0, sample_rate);
-        let (mhp_b0, mhp_b1, mhp_b2, mhp_a1, mhp_a2) = Self::highpass_coeffs(3000.0, sample_rate);
-
-        // Fast attack (1ms) for band-split signals — narrow bands have simpler transients
-        // that need fast tracking. The soft knee prevents clicks.
-        let attack_coeff = (-1.0 / (0.001 * sample_rate)).exp() as f32;
-        let release_coeff = (-1.0 / (0.05 * sample_rate)).exp() as f32;
+        // Attack/Release times must be frequency-dependent to avoid distortion!
+        // Low: 15ms / 150ms (avoid tracking individual bass waves)
+        // Mid: 5ms / 100ms
+        // High: 1ms / 50ms
+        let attacks = [0.015, 0.005, 0.001];
+        let releases = [0.150, 0.100, 0.050];
+        let mut attack_coeff = [0.0; 3];
+        let mut release_coeff = [0.0; 3];
+        
+        for i in 0..3 {
+            attack_coeff[i] = (-1.0 / (attacks[i] * sample_rate)).exp() as f32;
+            release_coeff[i] = (-1.0 / (releases[i] * sample_rate)).exp() as f32;
+        }
 
         MultibandCompressor {
-            lm_lp_state: [[0.0; 4]; 2], lm_hp_state: [[0.0; 4]; 2],
-            lm_lp_b0: lp_b0, lm_lp_b1: lp_b1, lm_lp_b2: lp_b2, lm_lp_a1: lp_a1, lm_lp_a2: lp_a2,
-            lm_hp_b0: hp_b0, lm_hp_b1: hp_b1, lm_hp_b2: hp_b2, lm_hp_a1: hp_a1, lm_hp_a2: hp_a2,
-            mh_lp_state: [[0.0; 4]; 2], mh_hp_state: [[0.0; 4]; 2],
-            mh_lp_b0: mlp_b0, mh_lp_b1: mlp_b1, mh_lp_b2: mlp_b2, mh_lp_a1: mlp_a1, mh_lp_a2: mlp_a2,
-            mh_hp_b0: mhp_b0, mh_hp_b1: mhp_b1, mh_hp_b2: mhp_b2, mh_hp_a1: mhp_a1, mh_hp_a2: mhp_a2,
-            env: [[0.0; 2]; 3],
-            threshold: [-24.0, -20.0, -18.0], // low, mid, high
+            lm_cross: CrossoverLR4::new(200.0, sample_rate),
+            mh_cross: CrossoverLR4::new(3000.0, sample_rate),
+            low_align_cross: CrossoverLR4::new(3000.0, sample_rate),
+            env: [0.0; 3],
+            threshold: [-24.0, -20.0, -18.0],
             ratio: [3.0, 2.5, 2.0],
             attack_coeff,
             release_coeff,
@@ -1342,70 +1412,61 @@ impl MultibandCompressor {
     }
 
     #[inline]
-    fn compress_sample(&mut self, sample: f32, band: usize, ch: usize) -> f32 {
-        let abs = sample.abs();
-        // Peak envelope follower (simpler, more responsive for band signals)
-        if abs > self.env[band][ch] {
-            self.env[band][ch] = self.attack_coeff * self.env[band][ch] + (1.0 - self.attack_coeff) * abs;
+    fn compress_stereo_sample(&mut self, l: f32, r: f32, band: usize) -> (f32, f32) {
+        let max_abs = l.abs().max(r.abs());
+        
+        // Peak envelope follower
+        if max_abs > self.env[band] {
+            self.env[band] = self.attack_coeff[band] * self.env[band] + (1.0 - self.attack_coeff[band]) * max_abs;
         } else {
-            self.env[band][ch] = self.release_coeff * self.env[band][ch] + (1.0 - self.release_coeff) * abs;
+            self.env[band] = self.release_coeff[band] * self.env[band] + (1.0 - self.release_coeff[band]) * max_abs;
         }
 
-        let env = self.env[band][ch];
-        if env < 1e-10 { return sample; }
+        let env = self.env[band];
+        if env < 1e-10 { return (l, r); }
 
         let env_db = 20.0 * env.log10();
 
         // Downward compression with soft knee (6 dB knee width)
         let knee: f32 = 6.0;
         let gain_db = if env_db < self.threshold[band] - knee / 2.0 {
-            // Below knee: no compression
             0.0
         } else if env_db > self.threshold[band] + knee / 2.0 {
-            // Above knee: full compression
             let over = env_db - self.threshold[band];
             -(over * (1.0 - 1.0 / self.ratio[band]))
         } else {
-            // In knee zone: smooth transition
             let x = env_db - self.threshold[band] + knee / 2.0;
             -(1.0 - 1.0 / self.ratio[band]) * x * x / (2.0 * knee)
         };
 
-        sample * 10.0_f32.powf(gain_db / 20.0) * self.makeup[band]
+        let gain = 10.0_f32.powf(gain_db / 20.0) * self.makeup[band];
+        (l * gain, r * gain)
     }
 
     /// Process a stereo sample pair through the multiband compressor.
     /// Returns (left_out, right_out).
     ///
-    /// Uses band-split-compress-recombine with perfect reconstruction.
-    /// The compressed output is then mixed with the dry input (parallel compression)
-    /// to preserve energy while tightening dynamics.
+    /// Uses 4th-order Linkwitz-Riley crossovers for perfect phase-aligned reconstruction.
     #[inline]
     pub fn process_sample(&mut self, l: f32, r: f32) -> (f32, f32) {
         if !self.active { return (l, r); }
 
-        // Band split using subtraction method (perfect reconstruction)
-        let low_l = Self::biquad(l, &mut self.lm_lp_state[0], self.lm_lp_b0, self.lm_lp_b1, self.lm_lp_b2, self.lm_lp_a1, self.lm_lp_a2);
-        let low_r = Self::biquad(r, &mut self.lm_lp_state[1], self.lm_lp_b0, self.lm_lp_b1, self.lm_lp_b2, self.lm_lp_a1, self.lm_lp_a2);
+        // Low/Mid-High Split
+        let (low_unaligned, mid_high) = self.lm_cross.process_sample(l, r);
+        
+        // Mid/High Split
+        let (mid, high) = self.mh_cross.process_sample(mid_high.0, mid_high.1);
+        
+        // Phase align the low band with the mid/high crossover delay
+        let (low_lp, low_hp) = self.low_align_cross.process_sample(low_unaligned.0, low_unaligned.1);
+        let low = (low_lp.0 + low_hp.0, low_lp.1 + low_hp.1);
 
-        let mid_high_l = l - low_l;
-        let mid_high_r = r - low_r;
+        // Compress each band independently, with stereo-linked gain
+        let (comp_low_l, comp_low_r) = self.compress_stereo_sample(low.0, low.1, 0);
+        let (comp_mid_l, comp_mid_r) = self.compress_stereo_sample(mid.0, mid.1, 1);
+        let (comp_high_l, comp_high_r) = self.compress_stereo_sample(high.0, high.1, 2);
 
-        let mid_l = Self::biquad(mid_high_l, &mut self.mh_lp_state[0], self.mh_lp_b0, self.mh_lp_b1, self.mh_lp_b2, self.mh_lp_a1, self.mh_lp_a2);
-        let mid_r = Self::biquad(mid_high_r, &mut self.mh_lp_state[1], self.mh_lp_b0, self.mh_lp_b1, self.mh_lp_b2, self.mh_lp_a1, self.mh_lp_a2);
-
-        let high_l = mid_high_l - mid_l;
-        let high_r = mid_high_r - mid_r;
-
-        // Compress each band
-        let comp_low_l = self.compress_sample(low_l, 0, 0);
-        let comp_low_r = self.compress_sample(low_r, 0, 1);
-        let comp_mid_l = self.compress_sample(mid_l, 1, 0);
-        let comp_mid_r = self.compress_sample(mid_r, 1, 1);
-        let comp_high_l = self.compress_sample(high_l, 2, 0);
-        let comp_high_r = self.compress_sample(high_r, 2, 1);
-
-        // Sum compressed bands directly (no parallel blend — per-band makeup handles levels)
+        // Sum compressed bands directly
         (comp_low_l + comp_mid_l + comp_high_l,
          comp_low_r + comp_mid_r + comp_high_r)
     }
@@ -1541,6 +1602,8 @@ pub trait MasterStage: Send {
     fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32]);
     fn name(&self) -> &'static str;
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+    /// Return instantaneous gain reduction in dB
+    fn gain_reduction_db(&self) -> f32 { 0.0 }
 }
 
 /// Compressor stage — wraps a stereo pair of MasterCompressors.
@@ -1740,11 +1803,15 @@ pub struct MasterBus {
     // Lowpass per-channel state [left, right]
     lp_state: [BiquadState; 2],
     // Limiter per channel [left, right]
-    limiter: [BrickwallLimiter; 2],
+    limiter: BrickwallLimiter,
     // Output gain (linear). Applied before everything else in the chain.
     gain: f32,
     // User-definable chain (between filters and limiter)
     chain: Vec<Box<dyn MasterStage>>,
+    pub bypass: bool,
+    // For bypass loudness matching
+    rms_dry: f32,
+    rms_wet: f32,
 }
 
 impl MasterBus {
@@ -1763,9 +1830,12 @@ impl MasterBus {
             hp_state: [BiquadState::default(), BiquadState::default()],
             lp_a1, lp_a2, lp_b0, lp_b1, lp_b2,
             lp_state: [BiquadState::default(), BiquadState::default()],
-            limiter: [limiter.clone(), limiter],
+            limiter,
             gain: 1.0,
             chain,
+            bypass: false,
+            rms_dry: 0.0,
+            rms_wet: 0.0,
         }
     }
 
@@ -1897,7 +1967,7 @@ impl MasterBus {
     pub fn set_ceiling(&mut self, db: f32, sample_rate: f64) {
         let ceiling = 10.0_f32.powf(db / 20.0);
         let l = BrickwallLimiter::new(ceiling, 0.1, sample_rate);
-        self.limiter = [l.clone(), l];
+        self.limiter = l;
     }
 
     /// 2nd-order Butterworth highpass biquad coefficients.
@@ -1984,11 +2054,15 @@ impl MasterBus {
         }
 
         // Limiter
-        self.limiter[0].process(buffer);
+        self.limiter.process_stereo(buffer, &mut right_dummy);
     }
 
     /// Process stereo buffers in-place: gain → HP → LP → chain → limiter.
     pub fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32]) {
+        // Save dry buffers for bypass
+        let dry_l = left.to_vec();
+        let dry_r = right.to_vec();
+
         // Apply master gain first
         if (self.gain - 1.0).abs() > 1e-6 {
             for sample in left.iter_mut() {
@@ -2008,20 +2082,53 @@ impl MasterBus {
             stage.process_stereo(left, right);
         }
 
-        // Limiter per channel
-        self.limiter[0].process(left);
-        self.limiter[1].process(right);
+        // Limiter stereo
+        self.limiter.process_stereo(left, right);
+
+        // Calculate RMS for auto-gain volume matching during bypass
+        let mut dry_sq = 0.0;
+        let mut wet_sq = 0.0;
+        for i in 0..left.len() {
+            dry_sq += dry_l[i]*dry_l[i] + dry_r[i]*dry_r[i];
+            wet_sq += left[i]*left[i] + right[i]*right[i];
+        }
+        let alpha = 0.005; // slow follower
+        self.rms_dry = self.rms_dry * (1.0 - alpha) + dry_sq * alpha;
+        self.rms_wet = self.rms_wet * (1.0 - alpha) + wet_sq * alpha;
+
+        if self.bypass {
+            let makeup = if self.rms_dry > 1e-6 { (self.rms_wet / self.rms_dry).sqrt() } else { 1.0 };
+            // cap makeup to avoid exploding noise
+            let makeup = makeup.min(10.0);
+            for i in 0..left.len() {
+                left[i] = dry_l[i] * makeup;
+                right[i] = dry_r[i] * makeup;
+            }
+        }
+    }
+
+    pub fn current_gain_reduction(&self) -> f32 {
+        if self.bypass { return 0.0; }
+        let mut gr = 0.0;
+        for stage in &self.chain {
+            gr += stage.gain_reduction_db();
+        }
+        if self.limiter.gain_reduction > 0.0 {
+            let lim_gain_db = 20.0 * (1.0 - self.limiter.gain_reduction).log10();
+            gr += lim_gain_db;
+        }
+        gr
     }
 
     /// Flush limiter lookahead tail (mono — uses channel 0).
     pub fn flush(&mut self, output: &mut Vec<f32>) {
-        self.limiter[0].flush(output);
+        let mut dummy = Vec::new();
+        self.limiter.flush_stereo(output, &mut dummy);
     }
 
     /// Flush both limiter channels for stereo output.
     pub fn flush_stereo(&mut self, left: &mut Vec<f32>, right: &mut Vec<f32>) {
-        self.limiter[0].flush(left);
-        self.limiter[1].flush(right);
+        self.limiter.flush_stereo(left, right);
     }
 }
 

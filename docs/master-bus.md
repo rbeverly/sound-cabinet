@@ -6,23 +6,50 @@ Every render in Sound Cabinet passes through an automatic master bus chain befor
 
 ## Master Bus Chain
 
-The chain runs in this order:
+The chain has always-present bookends (HP/LP filters and limiter) with a user-definable processing chain in between:
 
-1. **Highpass at 30 Hz** -- removes inaudible sub-bass that eats headroom (Butterworth 2nd-order)
-2. **Lowpass at 18 kHz** -- removes ultrasonic content from aliasing and filter resonance (Butterworth 2nd-order)
-3. **EQ Curve** -- static frequency shaping for translation (presets or manual 3-band)
-4. **Multiband compressor** -- per-band dynamic control across low/mid/high
-5. **RMS compressor** -- reduces crest factor (the gap between peak transients and sustained content), raising perceived loudness
-6. **Soft clipper** -- tanh waveshaper that catches peaks with warm saturation
-7. **Brick-wall limiter at -0.3 dBFS** -- prevents peaks from hitting 0 dBFS, with 5ms lookahead for clean transient handling
+1. **Highpass at 30 Hz** -- removes inaudible sub-bass that eats headroom (Butterworth 2nd-order) *(always present)*
+2. **Lowpass at 18 kHz** -- removes ultrasonic content from aliasing and filter resonance (Butterworth 2nd-order) *(always present)*
+3. **User-definable chain** -- any combination and ordering of effects (default: `compress(1.0)`)
+4. **Brick-wall limiter at -0.3 dBFS** -- prevents peaks from hitting 0 dBFS, with 5ms lookahead for clean transient handling *(always present)*
 
 ```
-HP 30Hz → LP 18kHz → EQ Curve → Multiband Compressor → Compressor → Soft Clipper → Limiter
+HP 30Hz → LP 18kHz → [ user-definable chain ] → Limiter
 ```
 
-The master bandpass reclaims headroom stolen by inaudible frequencies, the EQ curve shapes frequency balance for translation, the multiband compressor controls per-band dynamics, the compressor tightens overall dynamics, the soft clipper adds harmonic density, and the limiter catches peaks.
+The HP/LP filters and limiter are always-present bookends that cannot be removed or reordered. Everything in between is fully configurable via the `master chain` directive or individual `master` commands.
+
+## User-Definable Chain
+
+The `master chain` directive lets you specify the exact processing order. Effects execute left to right, connected by `>>`. You can use any combination and ordering, including duplicates:
+
+```sc
+// User-definable master chain — effects execute left to right
+master chain eq(80, -3, low) >> compress(1.0) >> eq(3000, 2, high) >> compress(0.5) >> saturate(0.3) >> excite(4000, 0.3)
+
+// Serial compression (two gentle passes = more transparent than one heavy pass)
+master chain compress(0.5) >> compress(0.5)
+
+// Pre/post EQ with compression
+master chain eq(80, -3, low) >> compress(1.0) >> eq(3000, 2, high)
+
+// Clean then tighten (expand noise floor, then compress)
+master chain expand(-35, 2) >> compress(1.0) >> saturate(0.3)
+```
+
+Individual `master` commands still work and build the chain in order of appearance:
+
+```sc
+master compress 1.0
+master saturate 0.5
+master excite 4000 0.3
+```
+
+If no `master chain` or individual `master` commands are specified, the default chain is `compress(1.0)`.
 
 ## Configuring Compression
+
+The compressor uses a 6 dB soft knee (Giannoulis/Massberg/Reiss, JAES 2012) for smoother, more transparent dynamics control. The soft knee gradually transitions into compression around the threshold rather than applying an abrupt ratio change.
 
 Control the master compressor from within a score using the `master compress` directive:
 
@@ -51,6 +78,37 @@ master compress -18 2 0.05 0.2     // threshold, ratio, attack (s), release (s)
 ```
 
 A slow attack (50-100ms) lets transients punch through before compression engages.
+
+## Master Expander
+
+The expander reduces the level of signals below a threshold -- the opposite of a compressor. Use it to clean up the noise floor before compression, or to add definition to quiet passages by pushing them further down.
+
+Like the compressor, the expander uses a 6 dB soft knee (Giannoulis/Massberg/Reiss, JAES 2012) for a smooth transition around the threshold.
+
+```sc
+master expand -30 2                       // threshold (dB), ratio
+master expand -35 3 0.01 0.2             // threshold, ratio, attack (s), release (s)
+```
+
+Parameters:
+
+- **threshold** -- dB level below which expansion kicks in (e.g. -30)
+- **ratio** -- expansion ratio (e.g. 2 = 2:1 reduction below threshold)
+- **attack** -- how fast the expander responds (seconds, default: 0.01)
+- **release** -- how fast it recovers (seconds, default: 0.1)
+
+| Threshold | Ratio | Character |
+|-----------|-------|-----------|
+| -40 dB | 1.5:1 | Gentle noise floor cleanup |
+| -30 dB | 2:1 | Standard gating -- pushes quiet content down |
+| -20 dB | 3:1 | Aggressive -- strong separation between signal and noise |
+
+The expander is most effective when placed before the compressor in the chain. Compression raises the noise floor; expanding first cleans it up so the compressor has less noise to amplify:
+
+```sc
+// Clean then tighten
+master chain expand(-35, 2) >> compress(1.0) >> saturate(0.3)
+```
 
 ## Master EQ Curve
 
@@ -98,15 +156,17 @@ Each value is in dB relative to unity. Positive values boost, negative values cu
 
 ## Multiband Compressor
 
-Splits audio into 3 frequency bands and compresses each independently. This is the core tool for making mixes translate -- it brings up quiet details and tames loud transients within each band without affecting the others.
+Splits audio into 3 frequency bands using 4th-order Linkwitz-Riley (LR4) crossovers and compresses each independently. LR4 crossovers provide phase-coherent summation at the crossover points -- the low band uses allpass delay compensation to maintain phase alignment across all three bands.
 
-### Band Splits
+Each band uses frequency-dependent attack and release times tuned to the content in that range:
 
-| Band | Frequency Range | Typical Content |
-|------|----------------|-----------------|
-| Low | Below 200 Hz | Sub-bass, kick fundamental, bass body |
-| Mid | 200 Hz -- 3 kHz | Vocals, guitar, snare body, melodic content |
-| High | Above 3 kHz | Hi-hats, cymbals, vocal sibilance, air |
+| Band | Frequency Range | Attack | Release | Typical Content |
+|------|----------------|--------|---------|-----------------|
+| Low | Below 200 Hz | 15 ms | scaled | Sub-bass, kick fundamental, bass body |
+| Mid | 200 Hz -- 3 kHz | 5 ms | scaled | Vocals, guitar, snare body, melodic content |
+| High | Above 3 kHz | 1 ms | scaled | Hi-hats, cymbals, vocal sibilance, air |
+
+At amount 1.0, the multiband compressor achieves approximately 4.4 dB of crest factor reduction.
 
 ### Simple Amount Control
 
@@ -211,6 +271,29 @@ The normalizer applies gain after rendering to hit the target. If the resulting 
 | Apple Music | -16 LUFS |
 | YouTube | -14 LUFS |
 | Broadcast (EBU R128) | -23 LUFS |
+
+## Realtime A/B Master Toggle & Gain Reduction
+
+When using `play` or `piano` mode, you can instantly bypass the entire master bus chain by pressing `m` or `\`.
+
+```bash
+# In play or piano mode
+m  or  \  : Toggle master bus bypass
+```
+
+**Auto-Volume Matching:** Bypassing automatically matches the RMS volume of the dry signal to the wet signal in real-time. This ensures that you aren't fooled by "louder is better" and can accurately judge the sonic improvements of your chain.
+
+**Gain Reduction Metering:** The terminal output provides a live `[ GR -2.4 dB ]` meter, showing the total instantaneous gain reduction applied by the master compressor, multiband compressor, and limiter combined. This helps you dial in thresholds and ratios accurately.
+
+## Test Master Command
+
+The `test-master` command runs automated A/B testing of your master bus configuration. It renders the score with and without the master bus processing and reports the differences in loudness, crest factor, and frequency balance:
+
+```bash
+sound-cabinet test-master song.sc
+```
+
+Use this to verify that your master bus is actually improving the mix rather than just making it louder. The command compares the processed and bypassed versions and reports whether the master chain is achieving its intended effect.
 
 ## CLI Overrides
 

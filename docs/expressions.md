@@ -98,7 +98,8 @@ Effects process a signal in the pipe chain -- place them after the source and an
 | `chorus(sep, var, freq)` | Detuned copies for width. `sep`/`var` in seconds, `freq` in Hz | `triangle(E5) >> chorus(0.015, 0.005, 0.3)` |
 | `delay(time, fb, mix)` | Feedback delay. `time` in seconds, `fb` 0.0-1.0 (recirculation), `mix` 0.0-1.0 (dry/wet). Auto-damped HF in feedback path | `triangle(G5) >> delay(0.3, 0.5, 0.4)` |
 | `reverb(size, damp, mix)` | Freeverb algorithmic reverb. `size` 0.0-1.0 (room size), `damp` 0.0-1.0 (HF absorption), `mix` 0.0-1.0 (dry/wet) | `saw(C4) >> reverb(0.8, 0.4, 0.3)` |
-| `compress(thresh, ratio, atk, rel)` | Dynamic range compression. `thresh` in dB, `ratio` e.g. 4 = 4:1, `atk`/`rel` in seconds | `saw(C2) >> compress(-15, 4, 0.01, 0.1)` |
+| `compress(thresh, ratio, atk, rel)` | Dynamic range compression. `thresh` in dB, `ratio` e.g. 4 = 4:1, `atk`/`rel` in seconds. 6 dB soft knee | `saw(C2) >> compress(-15, 4, 0.01, 0.1)` |
+| `expand(thresh, ratio, atk, rel)` | Downward expansion. Reduces level below `thresh` (dB) by `ratio`. 6 dB soft knee. `atk`/`rel` in seconds (default: 0.01/0.1) | `saw(C2) >> expand(-30, 2, 0.01, 0.1)` |
 | `crush(bits)` | Bit depth reduction. 8 = retro, 10 = subtle grit, 4 = destroyed | `saw(C3) >> crush(8)` |
 | `decimate(factor)` | Sample rate reduction. 2 = half rate, 8 = heavy digital dirt | `sine(A4) >> decimate(4)` |
 | `degrade(amount)` | Combined tape/medium degradation (lowpass + decimate + crush + noise). 0.3 = warm, 0.6 = worn tape, 1.0 = destroyed | `triangle(C4) >> degrade(0.5)` |
@@ -222,6 +223,26 @@ instrument vocal_synth = triangle(freq) >> lowpass(freq * 3, 0.7) >> excite(2500
 Unlike a high shelf EQ (which boosts existing content), the exciter generates new harmonic content above the cutoff. This makes it effective for signals that lack high-frequency energy -- the exciter creates what isn't there, rather than amplifying what is.
 
 The exciter works well in combination with the `master curve` and `--env` simulation tools for tuning mixes that need to translate to car stereos, phone speakers, and other challenging playback environments.
+
+### Downward Expander
+
+Reduces the level of signals that fall below a threshold -- the opposite of compression. Useful for cleaning up noise floors, adding definition to quiet passages, and gating bleed between instruments.
+
+Both the compressor and expander use a 6 dB soft knee (Giannoulis/Massberg/Reiss, JAES 2012) for smooth, transparent transitions around the threshold.
+
+```sc
+saw(C2) >> expand(-30, 2, 0.01, 0.1)    // threshold, ratio, attack, release
+pad >> expand(-40, 1.5)                   // gentle noise floor cleanup (default attack/release)
+```
+
+Parameters:
+
+- `threshold` -- dB level below which expansion kicks in (e.g. -30)
+- `ratio` -- expansion ratio (e.g. 2 = 2:1 reduction below threshold)
+- `attack` -- how fast the expander responds (seconds, default: 0.01)
+- `release` -- how fast it recovers (seconds, default: 0.1)
+
+The expander is also available on the master bus via `master expand`. See [Master Bus & Loudness](master-bus.md#master-expander) for master bus usage.
 
 ## Effect Chains (`fx`)
 

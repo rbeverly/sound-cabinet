@@ -307,9 +307,32 @@ fn play_realtime_inner(engine: Engine, flags: MonitorFlags) -> Result<()> {
     // Track number of VU lines printed for terminal cleanup
     let mut vu_lines: usize = 0;
 
+    use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+
     // Wait until the engine finishes
     loop {
         std::thread::sleep(std::time::Duration::from_millis(50));
+        
+        // Handle Master Bypass shortcut: m or \
+        if crossterm::event::poll(std::time::Duration::from_millis(0)).unwrap_or(false) {
+            if let Ok(Event::Key(key)) = crossterm::event::read() {
+                if key.code == KeyCode::Char('m') || key.code == KeyCode::Char('\\') {
+                    let mut eng = engine.lock().unwrap();
+                    let bypassed = eng.toggle_master_bypass();
+                    if bypassed {
+                        eprintln!("  \x1b[93m[ MASTER BYPASSED ]\x1b[0m");
+                        vu_lines += 1;
+                    } else {
+                        eprintln!("  \x1b[92m[ MASTER ACTIVE ]\x1b[0m");
+                        vu_lines += 1;
+                    }
+                }
+                if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    break;
+                }
+            }
+        }
+
         let eng = engine.lock().unwrap();
 
         if show_vu {
@@ -380,6 +403,17 @@ fn play_realtime_inner(engine: Engine, flags: MonitorFlags) -> Result<()> {
                         name_color, name, bar, level_db, status
                     );
                 }
+                
+                // Print Master Gain Reduction
+                let gr = eng.current_gain_reduction();
+                if gr < -0.1 {
+                    eprint!("  \x1b[96m{:<14}\x1b[0m       [ GR {:>5.1} dB ]\r\n", "MASTER", gr);
+                    vu_lines += 1;
+                } else {
+                    eprint!("  \x1b[90m{:<14}\x1b[0m       [ GR   0.0 dB ]\r\n", "MASTER");
+                    vu_lines += 1;
+                }
+                
                 use std::io::Write;
                 let _ = std::io::stderr().flush();
             }

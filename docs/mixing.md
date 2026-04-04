@@ -156,6 +156,25 @@ The 4 bands:
 - **Sub-heavy** -- the voice has significant energy below 80 Hz. This may cause problems on car stereos and subwoofers. Consider adding `highpass(40)` or reducing the voice's low-frequency content.
 - **No presence** -- the voice has little energy in the mid and high bands relative to its low-frequency content. It may disappear in noisy environments. Consider using `excite()` to add high-frequency harmonics, or EQ to boost the 2-5 kHz range.
 
+## Test Master Command
+
+The `test-master` command runs automated A/B testing of your master bus configuration. It renders the score twice -- once with the master bus active and once bypassed -- and compares the results:
+
+```bash
+sound-cabinet test-master song.sc
+```
+
+Use this to verify that your master bus chain is actually improving the mix. The command reports differences in loudness, crest factor, and frequency balance between the processed and bypassed versions, so you can see whether each stage of the chain is having its intended effect.
+
+Typical workflow:
+
+1. Set up your master chain in the score (`master chain`, `master compress`, `master saturate`, etc.)
+2. Run `sound-cabinet test-master song.sc` to see the before/after comparison
+3. Adjust parameters and re-run until the numbers match your intent
+4. Use `--env car` or `--env subway` alongside `test-master` to check translation
+
+See [Master Bus & Loudness](master-bus.md#test-master-command) for more detail on the master bus chain.
+
 ## Voice Level Summary on Render
 
 Every `render` command automatically prints a per-voice level summary after completing. This gives the same information as `profile` without a separate command.

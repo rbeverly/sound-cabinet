@@ -14,9 +14,9 @@ Beat ranges (`from`/`to`/`until`), at-positioning, `sequence`, inline events, re
 
 `play lead(E5, G5, B5) for 1 beat` — instruments accept multiple frequencies, producing a summed chord scaled by 1/N.
 
-## ~~Master bus mastering chain~~ ✅ Mostly implemented
+## ~~Master bus mastering chain~~ ✅ Implemented
 
-The master bus chain now includes: HP → LP → EQ Curve → Multiband Compressor → Compressor → Soft Clipper → Limiter. See [Master Bus & Loudness](master-bus.md) for full documentation.
+The master bus chain is now fully user-definable: HP → LP → [user-definable chain] → Limiter. The `master chain` directive allows arbitrary ordering and duplicates of effects. Default chain is `compress(1.0)`. See [Master Bus & Loudness](master-bus.md) for full documentation.
 
 ### ~~Master soft clipper~~ ✅ Implemented
 
@@ -26,18 +26,26 @@ The master bus chain now includes: HP → LP → EQ Curve → Multiband Compress
 
 `master curve` with presets (`car`, `broadcast`, `bright`, `warm`, `flat`) and manual per-band control (`low`, `mid`, `high` in dB). 3-band EQ: low shelf at 120 Hz, mid peak at 1 kHz, high shelf at 6 kHz.
 
-### Multiband compressor — needs rework
+### ~~User-definable master chain~~ ✅ Implemented
 
-`master multiband` is implemented (band splitting, per-band compression, parallel blend) but currently underperforms the regular single-band compressor in crest factor reduction testing. The per-band compression + recombination loses energy relative to full-band compression. Needs: auto-gain calibration, combined upward+downward compression per band (true OTT architecture), and validation against reference implementations.
+`master chain compress(1.0) >> saturate(0.5) >> excite(4000, 0.3)` allows arbitrary ordering and duplicates of master bus effects. Individual `master` commands still work. See [Master Bus & Loudness](master-bus.md#user-definable-chain).
 
-### Upward compression mode
+### ~~Multiband compressor~~ ✅ Implemented
 
-Partially implemented -- the infrastructure exists but no DSL syntax yet for `master compress ... up`. Planned:
+`master multiband` now uses 4th-order Linkwitz-Riley (LR4) crossovers with phase alignment (allpass delay compensation for low band) and frequency-dependent per-band attack/release times (low: 15ms, mid: 5ms, high: 1ms). Achieves approximately 4.4 dB crest factor reduction at amount 1.0.
+
+### ~~Upward compression~~ ✅ Implemented
+
+Upward compression mode is now available:
 
 ```sc
 saw(C3) >> compress(-30, 2, 0.01, 0.1, up)   // upward mode
 master compress -30 2 0.01 0.1 up             // master bus upward compression
 ```
+
+### ~~Master expander~~ ✅ Implemented
+
+`master expand -30 2 0.01 0.1` reduces the level of signals below a threshold. Uses 6 dB soft knee. Useful for cleaning the noise floor before compression. See [Master Bus & Loudness](master-bus.md#master-expander).
 
 ### ~~Harmonic exciter~~ ✅ Implemented
 

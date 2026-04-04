@@ -128,6 +128,9 @@ sound-cabinet piano voices/kit.sc piano --midi --velocity supersoft
 # Stream mode — pipe in lines for real-time playback
 sound-cabinet stream
 
+# Test master bus configuration (A/B comparison)
+sound-cabinet test-master song.sc
+
 # Generate phrases from pattern files
 sound-cabinet generate --pattern patterns/bass/walking-jazz.yaml \
   --key D --mode dorian --chords "Dm7 G7 Cmaj7 Am7" \
@@ -284,6 +287,16 @@ normalize piano 0.5
 // Master bus control
 master compress 1.0
 master gain -3
+
+// User-definable master chain — effects execute left to right
+master chain compress(1.0) >> saturate(0.5) >> excite(4000, 0.3)
+
+// Serial compression (two gentle passes = more transparent than one heavy pass)
+master chain compress(0.5) >> compress(0.5)
+
+// Master expander — clean noise floor before compression
+master expand -30 2                       // threshold, ratio
+master expand -35 3 0.01 0.2             // with explicit attack/release
 
 // Master EQ curve — shape frequency balance for translation
 master curve car                          // preset: reduces sub-bass, boosts presence
