@@ -384,6 +384,7 @@ impl Engine {
                 duration_beats,
                 source,
                 voice_label,
+                velocity,
             } => {
                 let start_sample = self.beats_to_samples(beat);
 
@@ -592,6 +593,7 @@ impl Engine {
                 duration_beats,
                 source,
                 voice_label,
+                velocity,
             } => {
                 let offset = self.beats_to_samples(beat);
                 let start_sample = self.current_sample + offset;

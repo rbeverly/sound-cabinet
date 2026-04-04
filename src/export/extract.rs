@@ -61,6 +61,7 @@ pub fn extract_notes(commands: &[Command]) -> ExtractedScore {
                 duration_beats,
                 source,
                 voice_label,
+                velocity,
             } => {
                 let (voice_name, freq_hz, gain) = extract_voice_and_freq(expr);
                 let pitch = freq_hz.map(Pitch::from_hz);

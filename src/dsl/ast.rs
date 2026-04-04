@@ -84,6 +84,12 @@ pub struct PatternEvent {
 /// Voice substitution map: maps pattern voice names to actual voice/instrument names.
 pub type WithMap = HashMap<String, String>;
 
+#[derive(Debug, Clone)]
+pub enum GainAutomation {
+    Constant(f64),
+    Points(Vec<(f64, f64)>), // (beat, linear_gain)
+}
+
 /// A placement within a section.
 #[derive(Debug, Clone)]
 pub enum SectionEntry {
@@ -94,11 +100,12 @@ pub enum SectionEntry {
         from_beat: Option<f64>,
         to_beat: Option<f64>,
         with_map: Option<WithMap>,
+        gain: Option<GainAutomation>,
     },
     /// `play jazz_chords [from 8] [with {melody = rhodes}]`
-    Play { pattern: PatternRef, with_map: Option<WithMap> },
+    Play { pattern: PatternRef, with_map: Option<WithMap>, gain: Option<GainAutomation> },
     /// `at 8 play fill [with {...}]`
-    AtPlay { beat: f64, pattern: PatternRef, with_map: Option<WithMap> },
+    AtPlay { beat: f64, pattern: PatternRef, with_map: Option<WithMap>, gain: Option<GainAutomation> },
     /// `at 16 repeat hats [every 1 beat] [from 16] [to 32] [with {...}]`
     AtRepeat {
         beat: f64,
@@ -107,9 +114,10 @@ pub enum SectionEntry {
         from_beat: Option<f64>,
         to_beat: Option<f64>,
         with_map: Option<WithMap>,
+        gain: Option<GainAutomation>,
     },
     /// `sequence bass_sparse, bass_active [with {...}]`
-    Sequence { patterns: Vec<PatternRef>, with_map: Option<WithMap> },
+    Sequence { patterns: Vec<PatternRef>, with_map: Option<WithMap>, gain: Option<GainAutomation> },
     /// `repeat 4 { pick [...] }` inside a section
     RepeatBlock { count: u32, body: Vec<RepeatBody> },
     /// `at 0 play sine(440) >> lowpass(800) for 2 beats` — inline event inside a section
@@ -171,6 +179,8 @@ pub enum Command {
         /// E.g., if `with duelingpiano1 = piano`, this is "duelingpiano1" even
         /// though `expr` resolves to the `piano` instrument.
         voice_label: Option<String>,
+        /// Gain multiplier (velocity) for this event. 1.0 by default.
+        velocity: f64,
     },
     /// Import another .sc file: `import voices/kick.sc`
     Import { path: String },
@@ -189,8 +199,13 @@ pub enum Command {
         entries: Vec<SectionEntry>,
         with_map: Option<WithMap>,
     },
-    /// Top-level sequential play: `play intro`
-    PlaySequential { pattern: PatternRef },
+    /// Top-level sequential play: `play intro [gain 0.5] [fade in 4 beats] [fade out 4 beats]`
+    PlaySequential { 
+        pattern: PatternRef,
+        gain: Option<GainAutomation>,
+        fade_in: Option<f64>,
+        fade_out: Option<f64>,
+    },
     /// Repeat block: `repeat 4 { ... }`
     RepeatBlock {
         count: u32,

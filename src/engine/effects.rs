@@ -1785,6 +1785,31 @@ impl MasterStage for StageMultiband {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
 }
 
+#[derive(Clone, Debug)]
+pub struct GainRamp {
+    pub start_sample: u64,
+    pub end_sample: u64,
+    pub start_gain: f32,
+    pub end_gain: f32,
+    pub current_sample: u64,
+}
+
+impl GainRamp {
+    fn step(&mut self) -> f32 {
+        if self.current_sample <= self.start_sample {
+            self.current_sample += 1;
+            return self.start_gain;
+        }
+        if self.current_sample >= self.end_sample {
+            self.current_sample += 1;
+            return self.end_gain;
+        }
+        let t = (self.current_sample - self.start_sample) as f32 / (self.end_sample - self.start_sample) as f32;
+        self.current_sample += 1;
+        self.start_gain + t * (self.end_gain - self.start_gain)
+    }
+}
+
 pub struct MasterBus {
     // Highpass coefficients (shared across channels)
     hp_a1: f32,
@@ -1809,6 +1834,7 @@ pub struct MasterBus {
     // User-definable chain (between filters and limiter)
     chain: Vec<Box<dyn MasterStage>>,
     pub bypass: bool,
+    pub gain_automation: Option<GainRamp>,
     // For bypass loudness matching
     rms_dry: f32,
     rms_wet: f32,
@@ -1834,6 +1860,7 @@ impl MasterBus {
             gain: 1.0,
             chain,
             bypass: false,
+            gain_automation: None,
             rms_dry: 0.0,
             rms_wet: 0.0,
         }
@@ -2063,13 +2090,15 @@ impl MasterBus {
         let dry_l = left.to_vec();
         let dry_r = right.to_vec();
 
-        // Apply master gain first
-        if (self.gain - 1.0).abs() > 1e-6 {
-            for sample in left.iter_mut() {
-                *sample *= self.gain;
+        // Apply master gain and automation first
+        for i in 0..left.len() {
+            let mut total_gain = self.gain;
+            if let Some(ramp) = &mut self.gain_automation {
+                total_gain *= ramp.step();
             }
-            for sample in right.iter_mut() {
-                *sample *= self.gain;
+            if (total_gain - 1.0).abs() > 1e-6 {
+                left[i] *= total_gain;
+                right[i] *= total_gain;
             }
         }
 

@@ -182,7 +182,7 @@ fn try_parse_command(line: &str) -> Result<Option<Command>> {
         if let Ok(pairs) = ScoreParser::parse(Rule::play_stmt, line) {
             for pair in pairs {
                 let pref = parse_pattern_ref(pair.into_inner().next().unwrap())?;
-                return Ok(Some(Command::PlaySequential { pattern: pref }));
+                return Ok(Some(Command::PlaySequential { pattern: pref, gain: None, fade_in: None, fade_out: None }));
             }
         }
     }
@@ -561,13 +561,59 @@ fn parse_mappings(pairs: pest::iterators::Pairs<Rule>) -> WithMap {
 /// Parse an optional with_clause from a pair's inner iterator.
 /// Returns Some(WithMap) if a with_clause is present, None otherwise.
 fn parse_optional_with(inner: &mut pest::iterators::Pairs<Rule>) -> Option<WithMap> {
-    // Peek at remaining pairs for a with_clause
-    for pair in inner {
+    for pair in inner.clone() {
         if pair.as_rule() == Rule::with_clause {
             return Some(parse_mappings(pair.into_inner()));
         }
     }
     None
+}
+
+fn parse_optional_gain(inner: &mut pest::iterators::Pairs<Rule>) -> Result<Option<crate::dsl::ast::GainAutomation>> {
+    for pair in inner.clone() {
+        if pair.as_rule() == Rule::gain_clause {
+            let mut gain_inner = pair.into_inner();
+            let first = gain_inner.next().unwrap();
+            match first.as_rule() {
+                Rule::number => {
+                    let val: f64 = first.as_str().parse()?;
+                    return Ok(Some(crate::dsl::ast::GainAutomation::Constant(val)));
+                }
+                Rule::gain_points => {
+                    let mut points = Vec::new();
+                    for point_pair in first.into_inner() {
+                        let mut pi = point_pair.into_inner();
+                        let beat: f64 = pi.next().unwrap().as_str().parse()?;
+                        let val: f64 = pi.next().unwrap().as_str().parse()?;
+                        points.push((beat, val));
+                    }
+                    return Ok(Some(crate::dsl::ast::GainAutomation::Points(points)));
+                }
+                _ => return Err(anyhow::anyhow!("Invalid gain clause")),
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn parse_optional_fade_in(inner: &mut pest::iterators::Pairs<Rule>) -> Result<Option<f64>> {
+    for pair in inner.clone() {
+        if pair.as_rule() == Rule::fade_in_clause {
+            let beat: f64 = pair.into_inner().next().unwrap().as_str().parse()?;
+            return Ok(Some(beat));
+        }
+    }
+    Ok(None)
+}
+
+fn parse_optional_fade_out(inner: &mut pest::iterators::Pairs<Rule>) -> Result<Option<f64>> {
+    for pair in inner.clone() {
+        if pair.as_rule() == Rule::fade_out_clause {
+            let beat: f64 = pair.into_inner().next().unwrap().as_str().parse()?;
+            return Ok(Some(beat));
+        }
+    }
+    Ok(None)
 }
 
 fn parse_pattern_def(header: &str, body: &[String]) -> Result<Command> {
@@ -714,7 +760,7 @@ fn parse_section_entry(line: &str) -> Result<SectionEntry> {
                     .map_err(|e| anyhow!("Section inline event parse error:\n{e}"))?;
                 let at_pair = at_pairs.into_iter().next().unwrap();
                 let parsed = parse_at(at_pair)?;
-                if let Command::PlayAt { beat, expr, duration_beats, source, voice_label } = parsed {
+                if let Command::PlayAt { beat, expr, duration_beats, source, voice_label, velocity } = parsed {
                     return Ok(SectionEntry::InlineEvent { beat, expr, duration_beats, voice_label });
                 }
                 unreachable!()
@@ -727,7 +773,7 @@ fn parse_section_entry(line: &str) -> Result<SectionEntry> {
                 let beat: f64 = ei.next().unwrap().as_str().parse()?;
                 let pref = parse_pattern_ref(ei.next().unwrap())?;
                 let entry_with = parse_optional_with(&mut ei);
-                Ok(SectionEntry::AtPlay { beat, pattern: pref, with_map: entry_with })
+                Ok(SectionEntry::AtPlay { beat, pattern: pref, with_map: entry_with, gain: None })
             }
         } else if line.contains(" repeat ") {
             let entry_pairs = ScoreParser::parse(Rule::section_entry_at_repeat, line)
@@ -738,6 +784,7 @@ fn parse_section_entry(line: &str) -> Result<SectionEntry> {
             let pref = parse_pattern_ref(ei.next().unwrap())?;
             let (every, from, to) = parse_repeat_modifiers(&mut ei);
             let entry_with = parse_optional_with(&mut ei);
+            let gain = parse_optional_gain(&mut ei)?;
             Ok(SectionEntry::AtRepeat {
                 beat,
                 pattern: pref,
@@ -745,6 +792,7 @@ fn parse_section_entry(line: &str) -> Result<SectionEntry> {
                 from_beat: from,
                 to_beat: to,
                 with_map: entry_with,
+                gain,
             })
         } else {
             Err(anyhow!(
@@ -765,6 +813,7 @@ fn parse_section_entry(line: &str) -> Result<SectionEntry> {
             from_beat: from,
             to_beat: to,
             with_map: entry_with,
+            gain: None,
         })
     } else if line.starts_with("play ") {
         let entry_pairs = ScoreParser::parse(Rule::section_entry_play, line)
@@ -794,9 +843,9 @@ fn parse_section_entry(line: &str) -> Result<SectionEntry> {
             wm
         };
         if let Some(beat) = play_from_beat {
-            Ok(SectionEntry::AtPlay { beat, pattern: pref, with_map: entry_with })
+            Ok(SectionEntry::AtPlay { beat, pattern: pref, with_map: entry_with, gain: None })
         } else {
-            Ok(SectionEntry::Play { pattern: pref, with_map: entry_with })
+            Ok(SectionEntry::Play { pattern: pref, with_map: entry_with, gain: None })
         }
     } else if line.starts_with("sequence ") {
         let entry_pairs = ScoreParser::parse(Rule::section_entry_sequence, line)
@@ -813,7 +862,12 @@ fn parse_section_entry(line: &str) -> Result<SectionEntry> {
                 _ => {}
             }
         }
-        Ok(SectionEntry::Sequence { patterns, with_map: entry_with })
+        
+        let entry_pairs2 = ScoreParser::parse(Rule::section_entry_sequence, line).unwrap();
+        let mut ei2 = entry_pairs2.into_iter().next().unwrap().into_inner();
+        let gain = parse_optional_gain(&mut ei2)?;
+
+        Ok(SectionEntry::Sequence { patterns, with_map: entry_with, gain })
     } else if line.starts_with("pattern ") {
         Err(anyhow!(
             "Can't nest a pattern inside a section.\n  Hint: Define the pattern separately (outside the section), then reference it by name:\n    pattern my_pat = 4 beats\n      at 0 play ... for ...\n    section my_section = 16 beats\n      repeat my_pat every 4 beats"
@@ -951,6 +1005,7 @@ fn parse_at(pair: Pair<Rule>) -> Result<Command> {
         duration_beats,
         source: None,
         voice_label,
+        velocity: 1.0,
     })
 }
 
