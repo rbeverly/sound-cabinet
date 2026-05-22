@@ -6,23 +6,19 @@ A DSL-driven sound synthesis tool. Write compositions in a simple text format, r
 
 ## Install
 
-### Pre-built binaries
-
-Download the latest release for your platform from [Releases](https://github.com/rbeverly/sound-cabinet/releases):
+### Quick install
 
 ```bash
-# macOS (Apple Silicon)
-curl -L https://github.com/rbeverly/sound-cabinet/releases/latest/download/sound-cabinet-aarch64-apple-darwin.tar.gz | tar xz
-sudo mv sound-cabinet /usr/local/bin/
-
-# macOS (Intel)
-curl -L https://github.com/rbeverly/sound-cabinet/releases/latest/download/sound-cabinet-x86_64-apple-darwin.tar.gz | tar xz
-sudo mv sound-cabinet /usr/local/bin/
-
-# Linux (x86_64)
-curl -L https://github.com/rbeverly/sound-cabinet/releases/latest/download/sound-cabinet-x86_64-unknown-linux-gnu.tar.gz | tar xz
-sudo mv sound-cabinet /usr/local/bin/
+curl -fsSL https://raw.githubusercontent.com/rbeverly/sound-cabinet/master/install.sh | bash
 ```
+
+Detects your platform (Linux x86_64 / aarch64, macOS Apple Silicon), prompts you for the version, downloads + SHA-256-verifies the binary, and installs it to `/usr/local/bin` (or `~/.local/bin` with `--user`). See `install.sh --help` for the full flag list: `--version`, `--prerelease`, `--prefix`, `--user`, `--non-interactive`, `--dry-run`.
+
+Linux users: the installer prints a one-line `apt-get` / `dnf` / `pacman` advisory if the ALSA runtime library is missing (see [Platform dependencies](#platform-dependencies)).
+
+### Manual install
+
+For air-gapped hosts or anywhere you can't pipe `curl` into `bash`: grab the matching asset from the [Releases page](https://github.com/rbeverly/sound-cabinet/releases) by hand. Assets are named `sound-cabinet-<tag>-<target-triple>` (no extension) with a matching `.sha256` file. Supported triples: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin`. Verify, `chmod +x`, and move the binary onto your `PATH`.
 
 On Windows, download `sound-cabinet-x86_64-pc-windows-msvc.zip` from [Releases](https://github.com/rbeverly/sound-cabinet/releases), extract it, and add the folder to your PATH (or move `sound-cabinet.exe` to a directory already in your PATH).
 
