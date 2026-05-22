@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Mock uname. MOCK_UNAME_S/M control the reported OS/arch.
+case "${1:-}" in
+  -s) echo "${MOCK_UNAME_S:-Linux}" ;;
+  -m) echo "${MOCK_UNAME_M:-x86_64}" ;;
+  "") echo "${MOCK_UNAME_S:-Linux} ${MOCK_UNAME_M:-x86_64}" ;;
+  *) echo "${MOCK_UNAME_S:-Linux}" ;;
+esac

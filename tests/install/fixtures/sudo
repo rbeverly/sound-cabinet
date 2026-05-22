@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Mock sudo. Records argv to $SUDO_LOG, then exec's the wrapped command so the
+# call is observable without privilege escalation. In --dry-run, the install
+# script never invokes this — it just prints the intended sudo command.
+echo "sudo: $*" >> "${SUDO_LOG:-/tmp/sound-cabinet-sudo.log}"
+exec "$@"
