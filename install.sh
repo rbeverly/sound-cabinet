@@ -63,7 +63,7 @@ detect_target_triple() {
     Linux/x86_64) TRIPLE="x86_64-unknown-linux-gnu" ;;
     Linux/aarch64) TRIPLE="aarch64-unknown-linux-gnu" ;;
     Darwin/aarch64) TRIPLE="aarch64-apple-darwin" ;;
-    Darwin/x86_64) echo "ERROR: Intel Mac is out of scope for this installer; build from source per README." >&2; exit 1 ;;
+    Darwin/x86_64) TRIPLE="x86_64-apple-darwin" ;;
     *) echo "ERROR: no pre-built binary for ${OS}/${arch}; build from source per README." >&2; exit 1 ;;
   esac
 }
@@ -170,16 +170,17 @@ download_and_verify() {
   CURRENT_STEP="download_and_verify"
   local tag="$1" tmpdir="$2"
   local base="${BINARY_NAME}-${tag}-${TRIPLE}"
-  local binary_url="${RELEASES_BASE}/${tag}/${base}"
-  local checksum_url="${binary_url}.sha256"
+  local archive="${base}.tar.gz"
+  local archive_url="${RELEASES_BASE}/${tag}/${archive}"
+  local checksum_url="${archive_url}.sha256"
   cd "$tmpdir"
-  dry_or_run curl -fSL --proto =https --tlsv1.2 -o "${base}" "${binary_url}"
-  dry_or_run curl -fSL --proto =https --tlsv1.2 -o "${base}.sha256" "${checksum_url}"
-  if [[ $DRY_RUN -eq 1 ]]; then echo "[dry-run] ${SHA256_VERIFY[*]} -c ${base}.sha256"; return; fi
-  if ! "${SHA256_VERIFY[@]}" -c "${base}.sha256" >/dev/null 2>&1; then
+  dry_or_run curl -fSL --proto =https --tlsv1.2 -o "${archive}" "${archive_url}"
+  dry_or_run curl -fSL --proto =https --tlsv1.2 -o "${archive}.sha256" "${checksum_url}"
+  if [[ $DRY_RUN -eq 1 ]]; then echo "[dry-run] ${SHA256_VERIFY[*]} -c ${archive}.sha256"; return; fi
+  if ! "${SHA256_VERIFY[@]}" -c "${archive}.sha256" >/dev/null 2>&1; then
     local computed expected
-    computed=$("${SHA256_VERIFY[@]}" "$base" | awk '{print $1}')
-    expected=$(awk '{print $1}' "${base}.sha256")
+    computed=$("${SHA256_VERIFY[@]}" "$archive" | awk '{print $1}')
+    expected=$(awk '{print $1}' "${archive}.sha256")
     echo "ERROR: SHA-256 verification failed." >&2
     echo "  computed: $computed" >&2
     echo "  expected: $expected" >&2
@@ -188,17 +189,27 @@ download_and_verify() {
   fi
 }
 
+extract_archive() {
+  CURRENT_STEP="extract_archive"
+  local tag="$1" tmpdir="$2"
+  local archive="${BINARY_NAME}-${tag}-${TRIPLE}.tar.gz"
+  dry_or_run tar -xzf "${tmpdir}/${archive}" -C "$tmpdir"
+  if [[ $DRY_RUN -eq 0 ]]; then
+    [[ -x "${tmpdir}/${BINARY_NAME}" ]] || { echo "ERROR: extracted archive did not contain ${BINARY_NAME}." >&2; exit 1; }
+  fi
+}
+
 install_binary() {
   CURRENT_STEP="install_binary"
   local tag="$1" tmpdir="$2" install_path="$3"
-  local src="${tmpdir}/${BINARY_NAME}-${tag}-${TRIPLE}"
+  local src="${tmpdir}/${BINARY_NAME}"
   local dst="${install_path}/${BINARY_NAME}"
   local maybe_sudo=()
   if [[ "$install_path" == "/usr/local/bin" && "$(id -u)" != "0" ]]; then
     maybe_sudo=(sudo)
   fi
-  dry_or_run "${maybe_sudo[@]}" mkdir -p "$install_path"
-  dry_or_run "${maybe_sudo[@]}" install -m 755 "$src" "$dst"
+  dry_or_run ${maybe_sudo[@]+"${maybe_sudo[@]}"} mkdir -p "$install_path"
+  dry_or_run ${maybe_sudo[@]+"${maybe_sudo[@]}"} install -m 755 "$src" "$dst"
 }
 
 path_check_and_hint() {
@@ -238,6 +249,7 @@ main() {
   TMPDIR_WORKSPACE=$(mktemp -d)
   linux_alsa_check
   download_and_verify "$tag" "$TMPDIR_WORKSPACE"
+  extract_archive "$tag" "$TMPDIR_WORKSPACE"
   install_binary "$tag" "$TMPDIR_WORKSPACE" "$install_path"
   path_check_and_hint "$install_path"
   [[ $DRY_RUN -eq 0 ]] && { rm -rf "$TMPDIR_WORKSPACE"; TMPDIR_WORKSPACE=""; }

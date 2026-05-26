@@ -5,10 +5,12 @@ set -euo pipefail
 
 OUT=""
 URL=""
+HEAD=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -o) OUT="$2"; shift 2 ;;
-    -f|-s|-S|-L|-fsSL|-fSL|-fL|-sS) shift ;;
+    -I|--head) HEAD=1; shift ;;
+    -f|-s|-S|-L|-fsSL|-fSL|-fL|-sS|-fsSI|-fSI) shift ;;
     --tlsv1.2|--insecure) shift ;;
     --proto) shift 2 ;;
     --proto=*) shift ;;
@@ -26,25 +28,44 @@ emit() {
   if [[ -n "$OUT" ]]; then cp "$src" "$OUT"; else cat "$src"; fi
 }
 
+# Resolve the archive/checksum file the URL points at (if any) under archives/.
+resolve_archive_fixture() {
+  local url="$1" basename src
+  basename="${url##*/}"
+  src="${FIXTURES_DIR}/archives/${basename}"
+  echo "$src"
+}
+
 case "$URL" in
   */repos/*/releases)
+    if [[ $HEAD -eq 1 ]]; then
+      printf 'HTTP/1.1 200 OK\n'
+      exit 0
+    fi
     emit "${FIXTURES_DIR}/releases.json" ;;
-  *.sha256)
+  *.tar.gz.sha256|*.zip.sha256)
     [[ -n "${CURL_404_CHECKSUM:-}" ]] && exit 22
     basename="${URL##*/}"
-    binname="${basename%.sha256}"
+    archive_name="${basename%.sha256}"
     if [[ -n "${CURL_BAD_CHECKSUM:-}" ]]; then
-      src="${FIXTURES_DIR}/binaries/${binname}.bad-checksum.sha256"
+      src="${FIXTURES_DIR}/archives/${archive_name}.bad-checksum.sha256"
     else
-      src="${FIXTURES_DIR}/binaries/${basename}"
+      src="${FIXTURES_DIR}/archives/${basename}"
     fi
     [[ -f "$src" ]] || exit 22
+    if [[ $HEAD -eq 1 ]]; then
+      printf 'HTTP/1.1 200 OK\n'
+      exit 0
+    fi
     emit "$src" ;;
-  *sound-cabinet-*-*)
+  *sound-cabinet-*-*.tar.gz|*sound-cabinet-*-*.zip)
     [[ -n "${CURL_404_BINARY:-}" ]] && exit 22
-    basename="${URL##*/}"
-    src="${FIXTURES_DIR}/binaries/${basename}"
+    src=$(resolve_archive_fixture "$URL")
     [[ -f "$src" ]] || exit 22
+    if [[ $HEAD -eq 1 ]]; then
+      printf 'HTTP/1.1 200 OK\n'
+      exit 0
+    fi
     emit "$src" ;;
   *)
     exit 22 ;;

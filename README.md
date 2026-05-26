@@ -12,15 +12,25 @@ A DSL-driven sound synthesis tool. Write compositions in a simple text format, r
 curl -fsSL https://raw.githubusercontent.com/rbeverly/sound-cabinet/master/install.sh | bash
 ```
 
-Detects your platform (Linux x86_64 / aarch64, macOS Apple Silicon), prompts you for the version, downloads + SHA-256-verifies the binary, and installs it to `/usr/local/bin` (or `~/.local/bin` with `--user`). See `install.sh --help` for the full flag list: `--version`, `--prerelease`, `--prefix`, `--user`, `--non-interactive`, `--dry-run`.
+Detects your platform (Linux x86_64 / aarch64, macOS Apple Silicon / Intel), prompts you for the version, downloads + SHA-256-verifies the `.tar.gz` archive, extracts the `sound-cabinet` binary, and installs it to `/usr/local/bin` (or `~/.local/bin` with `--user`). See `install.sh --help` for the full flag list: `--version`, `--prerelease`, `--prefix`, `--user`, `--non-interactive`, `--dry-run`.
 
 Linux users: the installer prints a one-line `apt-get` / `dnf` / `pacman` advisory if the ALSA runtime library is missing (see [Platform dependencies](#platform-dependencies)).
 
 ### Manual install
 
-For air-gapped hosts or anywhere you can't pipe `curl` into `bash`: grab the matching asset from the [Releases page](https://github.com/rbeverly/sound-cabinet/releases) by hand. Assets are named `sound-cabinet-<tag>-<target-triple>` (no extension) with a matching `.sha256` file. Supported triples: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin`. Verify, `chmod +x`, and move the binary onto your `PATH`.
+For air-gapped hosts or anywhere you can't pipe `curl` into `bash`: grab the matching asset from the [Releases page](https://github.com/rbeverly/sound-cabinet/releases) by hand. Unix assets are named `sound-cabinet-<tag>-<target-triple>.tar.gz` with a matching `.tar.gz.sha256` checksum file. Supported Unix triples: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin`, `x86_64-apple-darwin`. Verify, extract, and move the binary onto your `PATH`:
 
-On Windows, download `sound-cabinet-x86_64-pc-windows-msvc.zip` from [Releases](https://github.com/rbeverly/sound-cabinet/releases), extract it, and add the folder to your PATH (or move `sound-cabinet.exe` to a directory already in your PATH).
+```bash
+TAG=v0.1.0          # set to the release you want
+TRIPLE=x86_64-unknown-linux-gnu   # or your matching triple
+curl -fSLO "https://github.com/rbeverly/sound-cabinet/releases/download/${TAG}/sound-cabinet-${TAG}-${TRIPLE}.tar.gz"
+curl -fSLO "https://github.com/rbeverly/sound-cabinet/releases/download/${TAG}/sound-cabinet-${TAG}-${TRIPLE}.tar.gz.sha256"
+sha256sum -c "sound-cabinet-${TAG}-${TRIPLE}.tar.gz.sha256"   # macOS: shasum -a 256 -c
+tar -xzf "sound-cabinet-${TAG}-${TRIPLE}.tar.gz"
+sudo install -m 755 sound-cabinet /usr/local/bin/
+```
+
+On Windows, download `sound-cabinet-<tag>-x86_64-pc-windows-msvc.zip` (and the matching `.zip.sha256`) from [Releases](https://github.com/rbeverly/sound-cabinet/releases). In PowerShell, verify the digest with `Get-FileHash`, run `Expand-Archive sound-cabinet-<tag>-x86_64-pc-windows-msvc.zip -DestinationPath .`, and add the folder containing `sound-cabinet.exe` to your `PATH` (or move `sound-cabinet.exe` to a directory already on your `PATH`).
 
 ### Build from source
 
