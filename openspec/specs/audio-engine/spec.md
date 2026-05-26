@@ -4,9 +4,7 @@
 Define the synthesis primitives that compose a signal graph in Sound Cabinet expressions: oscillators, custom waveforms, filters, envelopes, effects, panning, chord generation, the arpeggiator, signal-graph operators, and parameter automation. The DSL surface that names and composes these primitives is defined in [[dsl-syntax]]; the master bus that all rendered audio passes through afterward is defined in [[master-bus]].
 
 All synthesis SHALL run at 44.1 kHz sample rate. All output SHALL be stereo (2-channel). Voices without an explicit `pan()` SHALL play centered (equal energy to both channels).
-
 ## Requirements
-
 ### Requirement: Oscillator primitives
 
 The expression language SHALL provide these oscillator function calls. Each accepts a frequency in Hz (or a note name resolved to Hz) and produces a signal in the range approximately [-1.0, +1.0]:
@@ -307,8 +305,6 @@ When a `normalize <name> <target>` directive is present (see [[dsl-syntax]]), th
 - **AND** computes a single gain correction
 - **AND** all subsequent uses of `bass` are scaled by that gain so the average RMS is approximately -6 dB
 
-## ADDED Requirements
-
 ### Requirement: Arpeggiator allocation bounded
 
 The engine SHALL validate the arp rate and the derived step count
@@ -355,3 +351,4 @@ aborted the process.
 - **WHEN** the engine handles the resulting `PlayAt` command
 - **THEN** the command succeeds — the bound is enforced only above
   the documented upper limit
+

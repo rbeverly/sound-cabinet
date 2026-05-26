@@ -4,9 +4,7 @@
 Define the syntax and structural semantics of the Sound Cabinet score language (`.sc` files): top-level directives, declarations (`voice`, `instrument`, `fx`, `wave`), composition primitives (`pattern`, `section`, `play`, `repeat`, `sequence`, `sample`, `pick`, `shuffle`), tempo/swing/humanize controls, sustain pedal, voice substitution, imports, and the lexical structure (note names, chord names, comments, identifiers, numbers).
 
 This spec defines the *language surface* — what syntax is accepted and how its constructs compose. The audible result of an expression's signal chain is defined in the [[audio-engine]] spec; the always-on master bus chain is defined in [[master-bus]].
-
 ## Requirements
-
 ### Requirement: Lexical structure
 
 A `.sc` file SHALL be UTF-8 text composed of statements separated by newlines. Lines beginning with `//` (after optional whitespace) SHALL be comments and ignored by the parser. Whitespace within a statement SHALL be a space or tab; multiple whitespace characters SHALL be equivalent to one. Blank lines SHALL be permitted and ignored.
@@ -362,8 +360,6 @@ The parser SHALL warn when a declared name collides with a built-in function nam
 - **WHEN** the user writes `voice sine = ...`
 - **THEN** the parser emits a warning that `sine` shadows a built-in function
 
-## ADDED Requirements
-
 ### Requirement: Section and pattern reference cycles rejected
 
 The expander SHALL detect cycles in section and pattern references
@@ -391,11 +387,6 @@ non-cyclic section SHALL continue to expand without error: the
 cycle-tracking state is scoped to a single recursive descent, not
 shared across sibling top-level statements.
 
-This requirement protects against a denial-of-service crash on
-user-controlled `.sc` input: previously a self-referencing section
-caused `expand_script` to recurse until the thread stack overflowed
-and the process aborted with `SIGABRT`.
-
 #### Scenario: Direct self-reference rejected
 - **GIVEN** a `.sc` file containing
   ```
@@ -420,7 +411,7 @@ and the process aborted with `SIGABRT`.
 - **GIVEN** a section with no explicit `= N beats` duration whose
   body plays itself
 - **WHEN** any caller asks for that section's duration (e.g. via
-  `compute_section_duration`) or expands it
+  `play sample(section, 0, 4)`) or expands it
 - **THEN** the operation returns `Err` rather than recursing into
   `compute_section_duration` until the stack overflows
 
@@ -430,3 +421,4 @@ and the process aborted with `SIGABRT`.
 - **WHEN** the DSL expander processes the script
 - **THEN** both statements expand successfully — the cycle-tracking
   state from the first does not block the second
+
