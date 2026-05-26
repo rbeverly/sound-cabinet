@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Test shim for tar. Recognizes `-xzf <archive> -C <dir>` invocations and
+# writes a known-content sound-cabinet binary to the target dir if a
+# corresponding fixture archive exists.
+set -euo pipefail
+archive=""
+dest=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -xzf) archive="$2"; shift 2 ;;
+    -C) dest="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+base=$(basename "$archive")
+if [[ -e "${TESTS_FIXTURES_DIR:-tests/install/fixtures}/archives/$base" ]]; then
+  printf '#!/usr/bin/env bash\necho "fake sound-cabinet"\n' > "$dest/sound-cabinet"
+  chmod 755 "$dest/sound-cabinet"
+else
+  echo "tar shim: no fixture for $base" >&2
+  exit 2
+fi

@@ -41,6 +41,12 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
             cross: false
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            cross: false
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            cross: false
 
     runs-on: ${{ matrix.os }}
 
@@ -71,34 +77,52 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Strip binary (Linux)
-        if: runner.os != 'macOS'
+        if: runner.os == 'Linux'
         run: strip target/${{ matrix.target }}/release/sound-cabinet
 
-      - name: Rename binary
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
         run: |
-          cp target/${{ matrix.target }}/release/sound-cabinet \
-             sound-cabinet-${{ github.ref_name }}-${{ matrix.target }}
+          tar czf "sound-cabinet-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" \
+            -C target/${{ matrix.target }}/release sound-cabinet
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = "sound-cabinet-${{ github.ref_name }}-${{ matrix.target }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/sound-cabinet.exe" -DestinationPath $archive
 
       - name: Compute SHA-256 (Linux)
         if: runner.os == 'Linux'
         run: |
-          BIN="sound-cabinet-${{ github.ref_name }}-${{ matrix.target }}"
-          sha256sum "$BIN" > "$BIN.sha256"
+          ARCHIVE="sound-cabinet-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
+          sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
 
       - name: Compute SHA-256 (macOS)
         if: runner.os == 'macOS'
         run: |
-          BIN="sound-cabinet-${{ github.ref_name }}-${{ matrix.target }}"
-          DIGEST=$(shasum -a 256 "$BIN" | awk '{print $1}')
-          printf '%s  %s\n' "$DIGEST" "$BIN" > "$BIN.sha256"
+          ARCHIVE="sound-cabinet-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
+          DIGEST=$(shasum -a 256 "$ARCHIVE" | awk '{print $1}')
+          printf '%s  %s\n' "$DIGEST" "$ARCHIVE" > "$ARCHIVE.sha256"
+
+      - name: Compute SHA-256 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = "sound-cabinet-${{ github.ref_name }}-${{ matrix.target }}.zip"
+          $digest = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
+          "$digest  $archive`n" | Out-File -NoNewline -Encoding ASCII "$archive.sha256"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: binaries-${{ matrix.target }}
           path: |
-            sound-cabinet-${{ github.ref_name }}-${{ matrix.target }}
-            sound-cabinet-${{ github.ref_name }}-${{ matrix.target }}.sha256
+            sound-cabinet-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+            sound-cabinet-${{ github.ref_name }}-${{ matrix.target }}.tar.gz.sha256
+            sound-cabinet-${{ github.ref_name }}-${{ matrix.target }}.zip
+            sound-cabinet-${{ github.ref_name }}-${{ matrix.target }}.zip.sha256
 
   publish:
     needs: build

@@ -17,6 +17,7 @@ setup_test() {
   export SUDO_LOG="$TEST_TMPDIR/sudo.log"
   : > "$SUDO_LOG"
   export PATH="$FIXTURES_DIR:$PATH"
+  export TESTS_FIXTURES_DIR="$FIXTURES_DIR"
   export MOCK_UNAME_S="${MOCK_UNAME_S:-Linux}"
   export MOCK_UNAME_M="${MOCK_UNAME_M:-x86_64}"
   unset CURL_404_BINARY CURL_404_CHECKSUM CURL_BAD_CHECKSUM
