@@ -1089,6 +1089,14 @@ impl Engine {
             None => return Ok(None),
         };
 
+        // Reject non-finite or non-positive durations before they can be
+        // multiplied by the rate into a step count.
+        if !duration_beats.is_finite() || duration_beats <= 0.0 {
+            return Err(anyhow::anyhow!(
+                "arp: duration must be a finite positive number of beats (got {duration_beats})"
+            ));
+        }
+
         if arp_args.len() < 2 {
             return Err(anyhow::anyhow!(
                 "arp requires at least one note and a rate"
@@ -1156,9 +1164,21 @@ impl Engine {
         let rate_end = opts.rate_end.unwrap_or(rate_start);
         let has_ramp = opts.rate_end.is_some();
 
-        // Estimate total steps from average rate (or exact for fixed rate)
+        // Estimate total steps from average rate (or exact for fixed rate).
+        // `parse_arp_options` already rejected non-finite/non-positive rates
+        // and `try_handle_arp` rejected non-finite/non-positive
+        // `duration_beats`, so `avg_rate * duration_beats` is a finite
+        // non-negative number; the cast to `usize` saturates at
+        // `usize::MAX` if it overflows. Either way the bound check below
+        // rejects values exceeding `MAX_ARP_STEPS` before allocation.
         let avg_rate = (rate_start + rate_end) / 2.0;
         let total_steps = (duration_beats * avg_rate).round() as usize;
+
+        if total_steps > MAX_ARP_STEPS {
+            return Err(anyhow::anyhow!(
+                "arp: requested {total_steps} steps exceeds the maximum of {MAX_ARP_STEPS} (reduce rate or duration)"
+            ));
+        }
 
         // For random direction, we need an RNG per cycle
         let mut rng_state: u64 = 42; // deterministic seed
@@ -1398,6 +1418,76 @@ mod tests {
         // Beat 12: 4 at 60 + 4 at 120 + 4 at 240 = 4 + 2 + 1 = 7 seconds
         assert_eq!(engine.beats_to_samples(12.0), 44100 * 7);
     }
+
+    /// Helper: schedule a `PlayAt` carrying a bare `arp(...)` call.
+    fn play_arp(
+        engine: &mut Engine,
+        arp_args: Vec<Expr>,
+        duration_beats: f64,
+    ) -> Result<()> {
+        engine.handle_command(Command::PlayAt {
+            beat: 0.0,
+            expr: Expr::FnCall {
+                name: "arp".to_string(),
+                args: arp_args,
+            },
+            duration_beats,
+            source: None,
+            voice_label: None,
+            velocity: 1.0,
+        })
+    }
+
+    #[test]
+    fn arp_rejects_excessive_rate() {
+        let mut engine = Engine::new(44100.0);
+        // A4 = 440 Hz, rate = 1e18 → step count saturates well above the
+        // 1,000,000-step ceiling. Must return Err, not panic via
+        // Vec::with_capacity capacity overflow.
+        let err = play_arp(&mut engine, vec![Expr::Number(440.0), Expr::Number(1e18)], 4.0)
+            .expect_err("excessive rate should produce an Err");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("arp: rate") || msg.contains("exceeds the maximum"),
+            "unexpected error message: {msg}"
+        );
+    }
+
+    #[test]
+    fn arp_rejects_non_positive_rate() {
+        for bad_rate in [0.0_f64, -1.0_f64] {
+            let mut engine = Engine::new(44100.0);
+            let result = play_arp(
+                &mut engine,
+                vec![Expr::Number(440.0), Expr::Number(bad_rate)],
+                4.0,
+            );
+            let err = result
+                .err()
+                .unwrap_or_else(|| panic!("rate {bad_rate} should produce Err"));
+            let msg = format!("{err}");
+            assert!(
+                msg.contains("must be a finite positive number"),
+                "unexpected error message for rate {bad_rate}: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn arp_rejects_non_finite_duration() {
+        let mut engine = Engine::new(44100.0);
+        let result = play_arp(
+            &mut engine,
+            vec![Expr::Number(440.0), Expr::Number(4.0)],
+            f64::INFINITY,
+        );
+        let err = result.expect_err("infinite duration should produce Err");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("duration must be a finite positive number"),
+            "unexpected error message: {msg}"
+        );
+    }
 }
 
 /// Convert a sample position back to beats using a tempo map.
@@ -1427,6 +1517,13 @@ fn samples_to_beats_static(sample: u64, sample_rate: f64, tempo_map: &[(f64, f64
 // ---------------------------------------------------------------------------
 // Arp options parsing
 // ---------------------------------------------------------------------------
+
+/// Upper bound on the number of arp steps that can be allocated. A musically
+/// reasonable arp tops out at ~64 notes per beat over a handful of beats;
+/// one million steps is orders of magnitude beyond that and guards against
+/// `Vec::with_capacity` aborting on attacker-controlled `.sc` input
+/// (e.g. `arp(A4, 1e18) for 4 beats`).
+const MAX_ARP_STEPS: usize = 1_000_000;
 
 #[derive(Debug, Clone, PartialEq)]
 enum ArpDirection {
@@ -1551,6 +1648,25 @@ fn parse_arp_options(args: &[Expr]) -> Result<ArpOptions> {
             opts.rate_end = Some(*end);
         }
         _ => unreachable!(),
+    }
+
+    // Reject non-finite or non-positive rates before they can be multiplied
+    // into a step count. `Vec::with_capacity` aborts the process on capacity
+    // overflow, so this is a denial-of-service guard against crafted input.
+    let rate_ok = |v: f64| v.is_finite() && v > 0.0;
+    if !rate_ok(opts.rate_start) {
+        return Err(anyhow::anyhow!(
+            "arp: rate must be a finite positive number (got {v})",
+            v = opts.rate_start
+        ));
+    }
+    if let Some(end) = opts.rate_end {
+        if !rate_ok(end) {
+            return Err(anyhow::anyhow!(
+                "arp: rate must be a finite positive number (got {v})",
+                v = end
+            ));
+        }
     }
 
     opts.notes_end = rate_idx;
