@@ -1,7 +1,11 @@
 [package]
 name = "sound-cabinet"
-version = "0.1.0"
+version = "0.12.2"
 edition = "2021"
+
+[profile.release]
+strip = "symbols"
+lto = "thin"
 
 [dependencies]
 fundsp = "0.18"
