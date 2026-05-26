@@ -1,9 +1,6 @@
 # piano-mode Specification
 
-## Purpose
-Play any instrument, voice, or custom waveform from a `.sc` score file interactively using the QWERTY keyboard and/or a MIDI keyboard. Supports velocity sensitivity (via MIDI) with selectable mapping curves, sustain pedal, and recording of played notes to `.sc` files for later use in compositions.
-
-## Requirements
+## ADDED Requirements
 
 ### Requirement: `piano` command loads a score's definitions and plays an instrument live
 

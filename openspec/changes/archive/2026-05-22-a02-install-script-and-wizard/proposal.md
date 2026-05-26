@@ -11,7 +11,7 @@ The wizard is constrained by a real-world tension: when invoked as `curl … | b
 - **NEW**: `install.sh` at the repo root. Pure bash, target ~150-200 lines including comments and help text. Strict mode (`set -euo pipefail`), `trap` on `ERR` reporting the last labeled step, no exotic dependencies (uses tools that ship on every standard macOS and Debian install: `curl`, `tar`, `uname`, `mktemp`, `install`, `sha256sum` or `shasum`, `ldconfig` on Linux, `id`, `sudo` if available).
 - **NEW**: harness tests under `tests/install/` — bash-based fixture tests that prepend a mock PATH and run `install.sh` with `--dry-run` against synthetic GitHub Releases API responses. The autocoder sandbox CAN execute these (no real network, no real sudo, no real install to /usr/local/bin). This is the testability story.
 - **MODIFIED**: README — replace the current "Install → Pre-built binaries" subsection with a "Quick install" section using the one-liner; demote the existing manual binary instructions to a "Manual install" subsection further down; keep "Build from source" unchanged.
-- **DEPENDS ON**: `release-pipeline-github-actions` change being merged AND at least one stable tag pushed. Without published binaries, the installer has nothing to download. The agent SHOULD NOT attempt to push tags or trigger the release workflow — that is the maintainer's manual step.
+- **DEPENDS ON**: `a01-release-pipeline-github-actions` change being merged AND at least one stable tag pushed. Without published binaries, the installer has nothing to download. The agent SHOULD NOT attempt to push tags or trigger the release workflow — that is the maintainer's manual step.
 
 ### Installer behavior
 
@@ -114,7 +114,7 @@ A small test runner script `tests/install/run.sh` iterates `*.test.sh` files and
   - `tests/install/` — new directory: `run.sh`, `fixtures/` (curl + uname + sudo shims, `releases.json`), and one `*.test.sh` per scenario above.
   - `README.md` — replace "Pre-built binaries" with "Quick install" section; demote and trim the manual binary instructions.
 - **Operator-visible behavior**: a working `curl -fsSL <url>/install.sh | bash` one-liner. The interactive prompt lists the most recent stable releases; defaults match user expectations.
-- **Dependencies**: requires the `release-pipeline-github-actions` change to be merged AND at least one stable tag (`vX.Y.Z`, no dash suffix) to be published. The installer's tests use fixture JSON, so the test suite does NOT depend on a real release — but the README's published one-liner does.
+- **Dependencies**: requires the `a01-release-pipeline-github-actions` change to be merged AND at least one stable tag (`vX.Y.Z`, no dash suffix) to be published. The installer's tests use fixture JSON, so the test suite does NOT depend on a real release — but the README's published one-liner does.
 - **Breaking**: no. The existing `cargo build --release` path remains documented.
 - **Acceptance**:
   - `bash -n install.sh` clean.
