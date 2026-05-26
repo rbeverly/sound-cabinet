@@ -251,6 +251,7 @@ mod tests {
                 duration_beats: 1.0,
                 source: Some("verse_a".to_string()),
                 voice_label: None,
+                velocity: 1.0,
             },
             Command::PlayAt {
                 beat: 1.0,
@@ -258,6 +259,7 @@ mod tests {
                 duration_beats: 0.5,
                 source: Some("drums_a".to_string()),
                 voice_label: None,
+                velocity: 1.0,
             },
         ];
 

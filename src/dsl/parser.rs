@@ -1454,7 +1454,7 @@ repeat 4 {
     fn test_parse_play_sequential() {
         let script = parse_script("play intro\n").unwrap();
         match &script.commands[0] {
-            Command::PlaySequential { pattern } => assert_eq!(pattern.name(), "intro"),
+            Command::PlaySequential { pattern, .. } => assert_eq!(pattern.name(), "intro"),
             _ => panic!("Expected PlaySequential"),
         }
     }

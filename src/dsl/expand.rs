@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
@@ -114,6 +115,22 @@ fn resolve_entry_with(section_with: &WithMap, entry_with: Option<&WithMap>) -> W
 struct ExpansionContext {
     patterns: HashMap<String, PatternInfo>,
     sections: HashMap<String, SectionInfo>,
+    /// Names of sections / patterns currently being expanded or whose duration is
+    /// being computed. Used to detect cyclic references that would otherwise
+    /// stack-overflow. Cleared at each top-level entry in `expand_script`.
+    active_stack: RefCell<Vec<String>>,
+}
+
+/// RAII guard that pops the active expansion stack on drop, so that early
+/// returns via `?` still leave the stack balanced.
+struct StackGuard<'a> {
+    stack: &'a RefCell<Vec<String>>,
+}
+
+impl Drop for StackGuard<'_> {
+    fn drop(&mut self) {
+        self.stack.borrow_mut().pop();
+    }
 }
 
 impl ExpansionContext {
@@ -121,17 +138,35 @@ impl ExpansionContext {
         Self {
             patterns: HashMap::new(),
             sections: HashMap::new(),
+            active_stack: RefCell::new(Vec::new()),
         }
+    }
+
+    /// Push `name` onto the active expansion stack, returning an error if it
+    /// would re-enter a name that is already being expanded. The returned
+    /// guard pops the entry on drop.
+    fn push_name(&self, name: &str) -> Result<StackGuard<'_>> {
+        let mut stack = self.active_stack.borrow_mut();
+        if stack.iter().any(|n| n == name) {
+            let chain = stack.join(" -> ");
+            return Err(anyhow!("Circular reference: {} -> {}", chain, name));
+        }
+        stack.push(name.to_string());
+        drop(stack);
+        Ok(StackGuard { stack: &self.active_stack })
     }
 
     fn duration_of(&self, name: &str) -> Result<f64> {
         if let Some(p) = self.patterns.get(name) {
             Ok(p.duration_beats)
         } else if let Some(s) = self.sections.get(name) {
-            // If section has explicit duration, use it. Otherwise compute from entries.
+            // If section has explicit duration, use it. Otherwise compute from
+            // entries — and guard the recursion against cycles, since the
+            // computation walks the same section/pattern graph as expansion.
             if let Some(d) = s.duration_beats {
                 Ok(d)
             } else {
+                let _guard = self.push_name(name)?;
                 self.compute_section_duration(&s.entries)
             }
         } else {
@@ -151,37 +186,39 @@ impl ExpansionContext {
                         max_end = max_end.max(*to);
                     } else {
                         // Without a to_beat and no section duration, we need every_beats
-                        let every = every_beats.unwrap_or_else(|| {
-                            self.duration_of_ref(pattern).unwrap_or(4.0)
-                        });
+                        let every = match every_beats {
+                            Some(e) => *e,
+                            None => self.duration_of_ref(pattern)?,
+                        };
                         let from = from_beat.unwrap_or(0.0);
                         // Single tile if no upper bound
                         max_end = max_end.max(from + every);
                     }
                 }
                 SectionEntry::Play { pattern, .. } => {
-                    let dur = self.duration_of_ref(pattern).unwrap_or(4.0);
+                    let dur = self.duration_of_ref(pattern)?;
                     seq_cursor += dur;
                     max_end = max_end.max(seq_cursor);
                 }
                 SectionEntry::AtPlay { beat, pattern, .. } => {
-                    let dur = self.duration_of_ref(pattern).unwrap_or(4.0);
+                    let dur = self.duration_of_ref(pattern)?;
                     max_end = max_end.max(beat + dur);
                 }
                 SectionEntry::AtRepeat { beat, pattern, to_beat, every_beats, .. } => {
                     if let Some(to) = to_beat {
                         max_end = max_end.max(*to);
                     } else {
-                        let every = every_beats.unwrap_or_else(|| {
-                            self.duration_of_ref(pattern).unwrap_or(4.0)
-                        });
+                        let every = match every_beats {
+                            Some(e) => *e,
+                            None => self.duration_of_ref(pattern)?,
+                        };
                         max_end = max_end.max(beat + every);
                     }
                 }
                 SectionEntry::Sequence { patterns, .. } => {
                     let mut seq_total = 0.0;
                     for pref in patterns {
-                        seq_total += self.duration_of_ref(pref).unwrap_or(4.0);
+                        seq_total += self.duration_of_ref(pref)?;
                     }
                     max_end = max_end.max(seq_total);
                 }
@@ -193,15 +230,15 @@ impl ExpansionContext {
                     let mut body_dur = 0.0;
                     for item in body {
                         match item {
-                            RepeatBody::Play(name) => body_dur += self.duration_of(name).unwrap_or(4.0),
+                            RepeatBody::Play(name) => body_dur += self.duration_of(name)?,
                             RepeatBody::Pick(choices) => {
                                 if let Some(c) = choices.first() {
-                                    body_dur += self.duration_of(&c.name).unwrap_or(4.0);
+                                    body_dur += self.duration_of(&c.name)?;
                                 }
                             }
                             RepeatBody::Shuffle(names) => {
                                 for n in names {
-                                    body_dur += self.duration_of(n).unwrap_or(4.0);
+                                    body_dur += self.duration_of(n)?;
                                 }
                             }
                         }
@@ -215,6 +252,9 @@ impl ExpansionContext {
     }
 
     fn expand_name(&self, name: &str, base_beat: f64, global_swing: f64, global_humanize: f64, bpm: f64, with_map: &WithMap, rng: &mut impl Rng, gain_automation: Option<&GainAutomation>) -> Result<Vec<Command>> {
+        // Cycle check before dispatch: returns Err if `name` is already on the
+        // active expansion stack. The guard pops on drop, including via `?`.
+        let _guard = self.push_name(name)?;
         if let Some(p) = self.patterns.get(name) {
             let swing = p.swing.unwrap_or(global_swing);
             let humanize = p.humanize.unwrap_or(global_humanize);
@@ -269,9 +309,14 @@ impl ExpansionContext {
             inherited_with.clone()
         };
 
-        // Resolve section duration (explicit or computed)
-        let section_duration = section.duration_beats
-            .unwrap_or_else(|| self.compute_section_duration(&section.entries).unwrap_or(0.0));
+        // Resolve section duration (explicit or computed). Propagate cycle
+        // errors from the duration path rather than swallowing them with
+        // `unwrap_or`, so that a self-referencing implicit-length section
+        // fails fast instead of falling through to expansion.
+        let section_duration = match section.duration_beats {
+            Some(d) => d,
+            None => self.compute_section_duration(&section.entries)?,
+        };
 
         for entry in &section.entries {
             let entry_with_map = entry_with_map(entry);
@@ -279,7 +324,10 @@ impl ExpansionContext {
 
             match entry {
                 SectionEntry::RepeatEvery { pattern, every_beats, from_beat, to_beat, gain, .. } => {
-                    let every = every_beats.unwrap_or_else(|| self.duration_of_ref(pattern).unwrap_or(4.0));
+                    let every = match every_beats {
+                        Some(e) => *e,
+                        None => self.duration_of_ref(pattern)?,
+                    };
                     let start = from_beat.unwrap_or(0.0);
                     let end = to_beat.unwrap_or(section_duration);
                     let abs_end = base_beat + end;
@@ -313,7 +361,10 @@ impl ExpansionContext {
                     }
                 }
                 SectionEntry::AtRepeat { beat, pattern, every_beats, from_beat, to_beat, gain, .. } => {
-                    let every = every_beats.unwrap_or_else(|| self.duration_of_ref(pattern).unwrap_or(4.0));
+                    let every = match every_beats {
+                        Some(e) => *e,
+                        None => self.duration_of_ref(pattern)?,
+                    };
                     let start = from_beat.unwrap_or(*beat);
                     let end = to_beat.unwrap_or(section_duration);
                     let abs_end = base_beat + end;
@@ -330,7 +381,7 @@ impl ExpansionContext {
                     let mut seq_cursor = 0.0;
                     for pref in patterns {
                         let name_with = resolve_entry_with(&section_with, entry_with_map);
-                        let dur = self.duration_of_ref(pref).unwrap_or(4.0);
+                        let dur = self.duration_of_ref(pref)?;
                         let final_gain = gain.as_ref().or(section_gain);
                         let cmds = self.expand_pattern_ref(pref, base_beat + seq_cursor, global_swing, global_humanize, bpm, &name_with, rng, final_gain)?;
                         output.extend(cmds);
@@ -539,7 +590,12 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
                     .insert(name, SectionInfo { duration_beats, entries, with_map });
             }
             Command::PlaySequential { pattern, gain, fade_in: _, fade_out: _ } => {
+                // Each top-level statement is its own recursive descent: clear
+                // the cycle-tracking stack so independent `play` statements
+                // that reference the same non-cyclic section do not collide.
+                ctx.active_stack.borrow_mut().clear();
                 let duration = ctx.duration_of_ref(&pattern)?;
+                ctx.active_stack.borrow_mut().clear();
                 let events = ctx.expand_pattern_ref(&pattern, cursor, global_swing, global_humanize, bpm, &global_with, rng, gain.as_ref())?;
                 output.extend(events);
                 cursor += duration;
@@ -549,14 +605,18 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
                     for item in &body {
                         match item {
                             RepeatBody::Play(name) => {
+                                ctx.active_stack.borrow_mut().clear();
                                 let duration = ctx.duration_of(name)?;
+                                ctx.active_stack.borrow_mut().clear();
                                 let events = ctx.expand_name(name, cursor, global_swing, global_humanize, bpm, &global_with, rng, None)?;
                                 output.extend(events);
                                 cursor += duration;
                             }
                             RepeatBody::Pick(choices) => {
                                 let name = weighted_pick(choices, rng);
+                                ctx.active_stack.borrow_mut().clear();
                                 let duration = ctx.duration_of(&name)?;
+                                ctx.active_stack.borrow_mut().clear();
                                 let events = ctx.expand_name(&name, cursor, global_swing, global_humanize, bpm, &global_with, rng, None)?;
                                 output.extend(events);
                                 cursor += duration;
@@ -565,7 +625,9 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
                                 let mut shuffled = names.clone();
                                 shuffle_vec(&mut shuffled, rng);
                                 for name in &shuffled {
+                                    ctx.active_stack.borrow_mut().clear();
                                     let duration = ctx.duration_of(name)?;
+                                    ctx.active_stack.borrow_mut().clear();
                                     let events = ctx.expand_name(name, cursor, global_swing, global_humanize, bpm, &global_with, rng, None)?;
                                     output.extend(events);
                                     cursor += duration;
@@ -649,9 +711,15 @@ mod tests {
                 },
                 Command::PlaySequential {
                     pattern: PatternRef::Name("drums".into()),
+                    gain: None,
+                    fade_in: None,
+                    fade_out: None,
                 },
                 Command::PlaySequential {
                     pattern: PatternRef::Name("drums".into()),
+                    gain: None,
+                    fade_in: None,
+                    fade_out: None,
                 },
             ],
         };
@@ -713,6 +781,9 @@ mod tests {
                 },
                 Command::PlaySequential {
                     pattern: PatternRef::Name("verse".into()),
+                    gain: None,
+                    fade_in: None,
+                    fade_out: None,
                 },
             ],
         };
@@ -741,6 +812,7 @@ mod tests {
                 duration_beats: 2.0,
                 source: None,
                 voice_label: None,
+                velocity: 1.0,
             }],
         };
 
@@ -751,6 +823,105 @@ mod tests {
             Command::PlayAt { beat, .. } => assert_eq!(*beat, 10.0),
             _ => panic!("Expected PlayAt"),
         }
+    }
+
+    #[test]
+    fn expand_rejects_direct_section_self_cycle() {
+        // `section loop` plays itself, then top-level `play loop` triggers
+        // expansion. Without cycle detection this stack-overflows.
+        let source = "\
+section loop
+  play loop
+
+play loop
+";
+        let script = crate::dsl::parser::parse_script(source).unwrap();
+        let mut rng = make_rng();
+        let err = expand_script(script, &mut rng).expect_err(
+            "expected Err for self-referencing section, got Ok",
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Circular reference"),
+            "error message should contain 'Circular reference', got: {msg}",
+        );
+        assert!(
+            msg.contains("loop"),
+            "error message should name 'loop' in the cycle chain, got: {msg}",
+        );
+    }
+
+    #[test]
+    fn expand_rejects_two_step_section_cycle() {
+        // section a plays b; section b plays a; top-level plays a.
+        // The cycle is a -> b -> a; the error must name both.
+        let source = "\
+section a
+  play b
+
+section b
+  play a
+
+play a
+";
+        let script = crate::dsl::parser::parse_script(source).unwrap();
+        let mut rng = make_rng();
+        let err = expand_script(script, &mut rng).expect_err(
+            "expected Err for two-step section cycle, got Ok",
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Circular reference"),
+            "error message should contain 'Circular reference', got: {msg}",
+        );
+        assert!(
+            msg.contains("a") && msg.contains("b"),
+            "error message should name both 'a' and 'b' in the cycle chain, got: {msg}",
+        );
+    }
+
+    #[test]
+    fn compute_section_duration_rejects_self_cycle() {
+        // Implicit-length section: no `= N beats` clause. The section's body
+        // plays itself, so any caller computing its duration would recurse
+        // into compute_section_duration until the stack overflows. Cycle
+        // detection on the duration path must intervene.
+        let source = "\
+section loop
+  play loop
+
+play loop
+";
+        let script = crate::dsl::parser::parse_script(source).unwrap();
+
+        // Direct duration-path test: register the section, then ask
+        // duration_of(...) — bypassing expansion entirely. This proves the
+        // duration path returns Err rather than stack-overflowing before
+        // expand_section is even reached.
+        let mut ctx = ExpansionContext::new();
+        for cmd in script.commands.clone() {
+            if let Command::SectionDef { name, duration_beats, entries, with_map } = cmd {
+                ctx.sections.insert(
+                    name,
+                    SectionInfo { duration_beats, entries, with_map },
+                );
+            }
+        }
+        let err = ctx.duration_of("loop").expect_err(
+            "expected Err from duration_of for self-cycling implicit section",
+        );
+        assert!(
+            err.to_string().contains("Circular reference"),
+            "duration_of should return 'Circular reference' error, got: {err}",
+        );
+
+        // End-to-end: expand_script must also error rather than panic.
+        let mut rng = make_rng();
+        let result = expand_script(script, &mut rng);
+        assert!(
+            result.is_err(),
+            "expand_script should return Err for implicit self-cycle",
+        );
     }
 }
 
