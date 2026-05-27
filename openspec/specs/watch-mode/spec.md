@@ -1,10 +1,8 @@
 # watch-mode Specification
 
 ## Purpose
-Run continuous playback of a `.sc` score while watching its containing directory for `.sc` file changes, rebuilding and swapping the engine in real time without dropping the audio stream. Designed for iterative live-coding workflows where you edit the score in an editor and want changes to take effect on save.
-
+TBD - created by archiving change initial-spec-baseline. Update Purpose after archive.
 ## Requirements
-
 ### Requirement: `watch` command plays a score and reloads on save
 
 The `watch` subcommand SHALL accept a `.sc` source file, immediately begin real-time playback of its rendered, fully-mastered output, AND watch the file's parent directory recursively for changes to any `.sc` file. When an `.sc` file changes, the engine SHALL be rebuilt from the original score path and atomically swapped without stopping the audio stream.
@@ -61,3 +59,4 @@ The `watch` command SHALL handle Ctrl+C by shutting down the audio thread and th
 - **THEN** the audio stream is stopped
 - **AND** the file watcher is shut down
 - **AND** the program exits with status 0
+

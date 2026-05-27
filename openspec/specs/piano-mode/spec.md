@@ -1,10 +1,8 @@
 # piano-mode Specification
 
 ## Purpose
-Play any instrument, voice, or custom waveform from a `.sc` score file interactively using the QWERTY keyboard and/or a MIDI keyboard. Supports velocity sensitivity (via MIDI) with selectable mapping curves, sustain pedal, and recording of played notes to `.sc` files for later use in compositions.
-
+TBD - created by archiving change initial-spec-baseline. Update Purpose after archive.
 ## Requirements
-
 ### Requirement: `piano` command loads a score's definitions and plays an instrument live
 
 The `piano` subcommand SHALL accept a `.sc` source file as its first positional argument and an optional instrument/voice/wave name as its second positional argument. The score's voice/instrument/fx/wave definitions and master bus configuration SHALL be loaded; no playback events are scheduled. With no instrument name given, a default sine + decay tone SHALL be used.
@@ -153,3 +151,4 @@ The output of an F2 save SHALL be valid `.sc` syntax that, when imported into an
 - **THEN** the imported events use the `piano` instrument from the original voice file
 - **AND** the playback tempo matches the recording's 120 BPM
 - **AND** each note's beat offset and duration matches what was played live
+

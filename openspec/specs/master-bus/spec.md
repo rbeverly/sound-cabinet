@@ -1,16 +1,8 @@
 # master-bus Specification
 
 ## Purpose
-Define the always-on master bus chain that all rendered audio passes through (in `render`, `play`, `watch`, `piano`, and `stream` modes), the user-configurable mastering processors that can be inserted into it, and the LUFS measurement and normalization that accompany every render.
-
-The chain has fixed bookends (HP/LP filters and a brick-wall limiter) with a user-definable processing block in between:
-
-```
-HP 30 Hz → LP 18 kHz → [ user-definable chain ] → Brick-wall limiter
-```
-
+TBD - created by archiving change initial-spec-baseline. Update Purpose after archive.
 ## Requirements
-
 ### Requirement: Always-present master bus bookends
 
 Every audio output path SHALL apply, in order:
@@ -228,3 +220,4 @@ During `play` (and `piano`), the keys `m` and `\` SHALL toggle the user-definabl
 #### Scenario: Always-present bookends still apply when bypassed
 - **WHEN** the user chain is bypassed via `m`/`\` (or via `test-master`)
 - **THEN** the HP 30 Hz, LP 18 kHz, and brick-wall limiter still apply
+

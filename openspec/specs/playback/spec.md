@@ -1,10 +1,8 @@
 # playback Specification
 
 ## Purpose
-Play a `.sc` score in real time through the default audio output device, with diagnostic monitoring options for soloing voices, displaying live level meters, fold-up sub-bass monitoring, environmental-noise simulation, and beat skipping. The full master bus chain runs in real time and exposes a runtime bypass toggle.
-
+TBD - created by archiving change initial-spec-baseline. Update Purpose after archive.
 ## Requirements
-
 ### Requirement: `play` command streams the score in real time
 
 The `play` subcommand SHALL accept a `.sc` source file and stream the rendered, fully-mastered output through the default audio output device until the score finishes or the user interrupts with Ctrl+C. Playback SHALL be stereo (2-channel) at 44.1 kHz.
@@ -116,3 +114,4 @@ During playback (and piano mode), pressing `m` or `\` SHALL toggle the entire us
 #### Scenario: Gain reduction meter visible
 - **WHEN** playback is active
 - **THEN** the terminal displays a `[ GR -<N> dB ]` indicator showing the instantaneous combined gain reduction from compressor, multiband, and limiter
+

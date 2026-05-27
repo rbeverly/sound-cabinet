@@ -1,10 +1,8 @@
 # mix-diagnostics Specification
 
 ## Purpose
-Diagnostic and inspection commands for understanding the levels, frequency balance, and structure of a `.sc` score. These are read-only analytical tools that help composers find mixing problems and verify their master bus configuration without producing audio output. Covers `profile`, `test-master`, and `freeze`.
-
+TBD - created by archiving change initial-spec-baseline. Update Purpose after archive.
 ## Requirements
-
 ### Requirement: `profile` command reports per-voice levels and frequency-band energy
 
 The `profile` subcommand SHALL accept a `.sc` source file, perform a full render in memory, and print two tables to stderr: a level table and a frequency-band breakdown.
@@ -101,3 +99,4 @@ After every successful `render` invocation, the engine SHALL print the same per-
 - **WHEN** the user runs `sound-cabinet render <score.sc> -o out.wav` and the render succeeds
 - **THEN** stderr contains a per-voice level summary table with `Voice`, `RMS`, `Peak`, `Status` columns
 - **AND** the table is sorted by RMS descending
+

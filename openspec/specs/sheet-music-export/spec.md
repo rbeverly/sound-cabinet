@@ -1,10 +1,8 @@
 # sheet-music-export Specification
 
 ## Purpose
-Export a `.sc` score (or a slice of one) as LilyPond notation, or rendered as PDF via the LilyPond toolchain. Lets composers turn computed scores into readable sheet music for human players or printing.
-
+TBD - created by archiving change initial-spec-baseline. Update Purpose after archive.
 ## Requirements
-
 ### Requirement: `export` command writes LilyPond or PDF sheet music
 
 The `export` subcommand SHALL accept a `.sc` source file and an `-o <output>` flag, and SHALL write either a LilyPond (`.ly`) source file or a rendered PDF, depending on the `--format` flag and the output extension.
@@ -100,3 +98,4 @@ The `--key <key>` flag SHALL set the LilyPond key signature (e.g. `Am`, `C`, `D`
 #### Scenario: Custom time signature
 - **WHEN** `--time 3/4` is given
 - **THEN** the notation uses 3/4 time
+

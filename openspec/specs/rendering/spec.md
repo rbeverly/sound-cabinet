@@ -1,10 +1,8 @@
 # rendering Specification
 
 ## Purpose
-Render a `.sc` score file to a stereo 16-bit PCM WAV file, applying the score's master bus chain and reporting integrated loudness and true peak. Provides optional loudness normalization to a target LUFS and CLI overrides for the master bus.
-
+TBD - created by archiving change initial-spec-baseline. Update Purpose after archive.
 ## Requirements
-
 ### Requirement: Render command writes stereo WAV at 44.1 kHz
 
 The `render` subcommand SHALL accept a `.sc` source file and write a stereo (2-channel) 16-bit PCM WAV file at 44.1 kHz sample rate to the path given by `-o`. The render SHALL traverse the full expanded score from beat 0 to the last scheduled event and apply the score's master bus chain to the output.
@@ -104,3 +102,4 @@ The render SHALL apply the score's full master bus chain (HP 30 Hz → LP 18 kHz
 - **WHEN** the score includes `master chain compress(1.0) >> saturate(0.5)` and the user runs `render`
 - **THEN** the WAV output reflects compression then saturation in the master path
 - **AND** the always-present HP/LP bookends and limiter are also applied
+

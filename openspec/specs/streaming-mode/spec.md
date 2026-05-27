@@ -1,10 +1,8 @@
 # streaming-mode Specification
 
 ## Purpose
-Read `.sc` lines from stdin and play them through the speakers in real time. Each line is parsed independently and applied to a live engine — voice definitions take effect immediately, BPM changes update the live tempo, and `at N` event timings are interpreted as offsets from "now" rather than from beat 0. Designed as the foundation for generative music: any program (LLM, script, HTTP source) that emits `.sc` lines can drive playback.
-
+TBD - created by archiving change initial-spec-baseline. Update Purpose after archive.
 ## Requirements
-
 ### Requirement: `stream` command reads stdin and plays in real time
 
 The `stream` subcommand SHALL take no positional arguments. It SHALL start an audio output stream immediately and read lines from stdin until EOF (Ctrl+D), parsing each non-empty non-comment line as a single `.sc` directive and applying it to the live engine.
@@ -78,3 +76,4 @@ When a stdin line fails to parse, the dispatcher SHALL emit `Parse error: <reaso
 - **THEN** stderr contains `Parse error: <reason>`
 - **AND** the next stdin line is still parsed and applied
 - **AND** the program does NOT exit
+
