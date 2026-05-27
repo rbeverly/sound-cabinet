@@ -1,7 +1,7 @@
 # release-pipeline Specification
 
 ## Purpose
-Define the GitHub Actions workflow that builds release binaries from tag pushes, attaches per-binary `.sha256` checksums, publishes to GitHub Releases with automatic pre-release detection from the SemVer dash-suffix convention, and the maintainer-facing release procedure documentation.
+TBD - created by archiving change a01-release-pipeline-github-actions. Update Purpose after archive.
 ## Requirements
 ### Requirement: Tag-triggered release workflow produces architecture-specific binaries with checksums on GitHub Releases
 

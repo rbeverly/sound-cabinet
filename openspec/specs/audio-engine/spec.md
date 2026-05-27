@@ -1,9 +1,7 @@
 # audio-engine Specification
 
 ## Purpose
-Define the synthesis primitives that compose a signal graph in Sound Cabinet expressions: oscillators, custom waveforms, filters, envelopes, effects, panning, chord generation, the arpeggiator, signal-graph operators, and parameter automation. The DSL surface that names and composes these primitives is defined in [[dsl-syntax]]; the master bus that all rendered audio passes through afterward is defined in [[master-bus]].
-
-All synthesis SHALL run at 44.1 kHz sample rate. All output SHALL be stereo (2-channel). Voices without an explicit `pan()` SHALL play centered (equal energy to both channels).
+TBD - created by archiving change initial-spec-baseline. Update Purpose after archive.
 ## Requirements
 ### Requirement: Oscillator primitives
 

@@ -1,10 +1,8 @@
 # algorithmic-generation Specification
 
 ## Purpose
-Generate musical phrases (bass lines, melodies, accompaniments, drum patterns, and full multi-part songs) from reusable YAML pattern files resolved against a key, mode, chord progression, and instrument range. Produces ready-to-play `.sc` source containing one or more named pattern variations. Designed as a compositional aid for batch-producing options to cherry-pick from, not a finished-song generator.
-
+TBD - created by archiving change initial-spec-baseline. Update Purpose after archive.
 ## Requirements
-
 ### Requirement: `generate` command consumes a YAML pattern file and produces `.sc` variations
 
 The `generate` subcommand SHALL require these flags:
@@ -143,3 +141,4 @@ The `--chords` value SHALL be parsed as space-separated chord names matching the
 #### Scenario: Empty chord progression
 - **WHEN** `--chords ""` resolves to no chords
 - **THEN** the program exits non-zero with `At least one chord is required`
+

@@ -1,7 +1,7 @@
 # install-script Specification
 
 ## Purpose
-Define the curl-runnable bash installer (`install.sh` at the repo root) that detects platform, resolves a release tag interactively (with `/dev/tty` fallback to non-interactive defaults), downloads + sha256-verifies the matching binary, installs to a writable PATH location, and emits Linux-specific ALSA advisories. Also pins the harness-test contract that makes the installer reproducibly testable in a sandbox.
+TBD - created by archiving change a02-install-script-and-wizard. Update Purpose after archive.
 ## Requirements
 ### Requirement: Curl-runnable bash installer at repo root
 

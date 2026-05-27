@@ -1,9 +1,7 @@
 # dsl-syntax Specification
 
 ## Purpose
-Define the syntax and structural semantics of the Sound Cabinet score language (`.sc` files): top-level directives, declarations (`voice`, `instrument`, `fx`, `wave`), composition primitives (`pattern`, `section`, `play`, `repeat`, `sequence`, `sample`, `pick`, `shuffle`), tempo/swing/humanize controls, sustain pedal, voice substitution, imports, and the lexical structure (note names, chord names, comments, identifiers, numbers).
-
-This spec defines the *language surface* — what syntax is accepted and how its constructs compose. The audible result of an expression's signal chain is defined in the [[audio-engine]] spec; the always-on master bus chain is defined in [[master-bus]].
+TBD - created by archiving change initial-spec-baseline. Update Purpose after archive.
 ## Requirements
 ### Requirement: Lexical structure
 
