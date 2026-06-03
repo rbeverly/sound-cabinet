@@ -124,6 +124,13 @@ impl ExpansionContext {
                     } else {
                         section_with.clone()
                     };
+                    // A non-positive interval would never advance `beat`, spinning the
+                    // tiling loop forever and growing `output` without bound. Reject it.
+                    if *every_beats <= 0.0 {
+                        return Err(anyhow!(
+                            "section repeat interval must be positive, got {every_beats} beats for '{name}'"
+                        ));
+                    }
                     let mut beat = 0.0;
                     while beat < section.duration_beats {
                         let cmds = self.expand_name(name, base_beat + beat, global_swing, global_humanize, bpm, &entry_with, rng)?;
@@ -452,6 +459,56 @@ mod tests {
             Command::PlayAt { beat, .. } => assert_eq!(*beat, 4.0),
             _ => panic!("Expected PlayAt"),
         }
+    }
+
+    /// Build a script whose only section repeats a pattern at `every_beats`.
+    fn repeat_interval_script(every_beats: f64) -> Script {
+        Script {
+            commands: vec![
+                Command::PatternDef {
+                    name: "drums".into(),
+                    duration_beats: 4.0,
+                    events: vec![PatternEvent {
+                        beat_offset: 0.0,
+                        expr: Expr::VoiceRef("kick".into()),
+                        duration_beats: 0.5,
+                    }],
+                    swing: None,
+                    humanize: None,
+                },
+                Command::SectionDef {
+                    name: "verse".into(),
+                    duration_beats: 16.0,
+                    entries: vec![SectionEntry::RepeatEvery {
+                        name: "drums".into(),
+                        every_beats,
+                        with_map: None,
+                    }],
+                    with_map: None,
+                },
+                Command::PlaySequential {
+                    name: "verse".into(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn expand_rejects_zero_repeat_interval() {
+        // A zero interval previously spun the tiling loop forever (DoS). It must
+        // now fail fast with an error rather than hang.
+        let script = repeat_interval_script(0.0);
+        let result = expand_script(script, &mut make_rng());
+        assert!(result.is_err(), "zero repeat interval must be rejected");
+        assert!(result.unwrap_err().to_string().contains("must be positive"));
+    }
+
+    #[test]
+    fn expand_rejects_negative_repeat_interval() {
+        let script = repeat_interval_script(-1.0);
+        let result = expand_script(script, &mut make_rng());
+        assert!(result.is_err(), "negative repeat interval must be rejected");
+        assert!(result.unwrap_err().to_string().contains("must be positive"));
     }
 
     #[test]
