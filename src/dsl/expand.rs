@@ -307,6 +307,12 @@ fn weighted_pick(
     rng: &mut impl Rng,
 ) -> String {
     let total: f64 = choices.iter().map(|c| c.weight).sum();
+    // Defense in depth: a non-positive total would make `gen_range(0.0..total)`
+    // sample an empty/invalid range and panic. Parsing rejects non-positive
+    // weights, but if one ever reaches here, fall back to the last choice.
+    if total <= 0.0 {
+        return choices.last().unwrap().name.clone();
+    }
     let mut r = rng.gen_range(0.0..total);
     for choice in choices {
         r -= choice.weight;
@@ -467,5 +473,17 @@ mod tests {
             Command::PlayAt { beat, .. } => assert_eq!(*beat, 10.0),
             _ => panic!("Expected PlayAt"),
         }
+    }
+
+    #[test]
+    fn test_weighted_pick_zero_weight_does_not_panic() {
+        let choices = vec![WeightedChoice {
+            name: "a".into(),
+            weight: 0.0,
+        }];
+        let mut rng = make_rng();
+        // A non-positive total must not sample an empty range; the selector
+        // falls back to the last (here, only) choice.
+        assert_eq!(weighted_pick(&choices, &mut rng), "a");
     }
 }

@@ -518,6 +518,11 @@ fn parse_repeat_block(header: &str, body: &[String]) -> Result<Command> {
                         .next()
                         .map(|n| n.as_str().parse::<f64>().unwrap_or(1.0))
                         .unwrap_or(1.0);
+                    if weight <= 0.0 {
+                        return Err(anyhow!(
+                            "pick weight must be positive, got {weight} for '{name}'"
+                        ));
+                    }
                     choices.push(WeightedChoice { name, weight });
                 }
             }
@@ -1105,5 +1110,23 @@ repeat 3 {
         assert!(resolve_chord("foo").is_none());
         assert!(resolve_chord("X7").is_none());
         assert!(resolve_chord("C").is_none()); // bare letter, not a chord
+    }
+
+    #[test]
+    fn test_parse_pick_zero_weight_rejected() {
+        let result = parse_script("repeat 1 {\n  pick [a:0]\n}\n");
+        assert!(
+            result.is_err(),
+            "expected zero-weight pick to be rejected, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_pick_negative_weight_rejected() {
+        let result = parse_script("repeat 1 {\n  pick [a:-1]\n}\n");
+        assert!(
+            result.is_err(),
+            "expected negative-weight pick to be rejected, got {result:?}"
+        );
     }
 }
