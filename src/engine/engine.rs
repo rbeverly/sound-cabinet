@@ -868,9 +868,11 @@ impl Engine {
                 fade_in.min(fade_out)
             });
 
-            // Accent: boost every Nth step
+            // Accent: boost every Nth step. Guard `n > 0` so a zero divisor can
+            // never reach `i % n` (defense in depth; parse_arp_options already
+            // rejects accent < 1).
             let accent_gain = if let Some(n) = opts.accent_every {
-                if i % n == 0 { 1.5 } else { 0.7 }
+                if n > 0 && i % n == 0 { 1.5 } else { 0.7 }
             } else {
                 1.0
             };
@@ -999,6 +1001,78 @@ mod tests {
 
         // Beat 12: 4 at 60 + 4 at 120 + 4 at 240 = 4 + 2 + 1 = 7 seconds
         assert_eq!(engine.beats_to_samples(12.0), 44100 * 7);
+    }
+
+    #[test]
+    fn test_arp_accent_zero_rejected_at_parse() {
+        // arp(C4, 4, accent, 0) — accent value of 0 would cause `i % 0` panic.
+        let args = vec![
+            Expr::Number(261.63),
+            Expr::Number(4.0),
+            Expr::VoiceRef("accent".into()),
+            Expr::Number(0.0),
+        ];
+        let result = parse_arp_options(&args);
+        assert!(result.is_err(), "accent 0 should be rejected");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("accent") && msg.contains("positive integer"),
+            "error should mention accent must be a positive integer, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_arp_accent_negative_rejected_at_parse() {
+        // arp(C4, 4, accent, -1) — negative saturates to 0 on `as usize`.
+        let args = vec![
+            Expr::Number(261.63),
+            Expr::Number(4.0),
+            Expr::VoiceRef("accent".into()),
+            Expr::Number(-1.0),
+        ];
+        let result = parse_arp_options(&args);
+        assert!(result.is_err(), "negative accent should be rejected");
+    }
+
+    #[test]
+    fn test_arp_accent_zero_play_command_errors_without_panic() {
+        // Scheduling `sine(440) >> arp(C4, 4, accent, 0)` must return Err, not panic.
+        let mut engine = Engine::new(44100.0);
+        let arp = Expr::FnCall {
+            name: "arp".into(),
+            args: vec![
+                Expr::VoiceRef("C4".into()),
+                Expr::Number(4.0),
+                Expr::VoiceRef("accent".into()),
+                Expr::Number(0.0),
+            ],
+        };
+        let sine = Expr::FnCall {
+            name: "sine".into(),
+            args: vec![Expr::Number(440.0)],
+        };
+        let expr = Expr::Pipe(Box::new(sine), Box::new(arp));
+        let result = engine.handle_command(Command::PlayAt {
+            beat: 0.0,
+            expr,
+            duration_beats: 4.0,
+            source: None,
+            voice_label: None,
+        });
+        assert!(result.is_err(), "accent 0 play command should return Err");
+    }
+
+    #[test]
+    fn test_arp_accent_two_still_parses() {
+        // Regression: a valid accent value (>= 1) is honored as before.
+        let args = vec![
+            Expr::Number(261.63),
+            Expr::Number(4.0),
+            Expr::VoiceRef("accent".into()),
+            Expr::Number(2.0),
+        ];
+        let opts = parse_arp_options(&args).expect("accent 2 should parse");
+        assert_eq!(opts.accent_every, Some(2));
     }
 }
 
@@ -1179,6 +1253,15 @@ fn parse_arp_options(args: &[Expr]) -> Result<ArpOptions> {
                 } else if name == "accent" {
                     oi += 1;
                     if let Some(Expr::Number(v)) = option_args.get(oi) {
+                        // `accent` boosts every Nth step via `i % n`, so `n` must be
+                        // a positive integer. `*v < 1.0` covers `0` and negatives
+                        // (which would otherwise saturate to `0` on `as usize` and
+                        // cause a remainder-by-zero panic at the use site).
+                        if *v < 1.0 {
+                            return Err(anyhow::anyhow!(
+                                "arp: 'accent' must be a positive integer"
+                            ));
+                        }
                         opts.accent_every = Some(*v as usize);
                     } else {
                         return Err(anyhow::anyhow!("arp: 'accent' requires a number"));
