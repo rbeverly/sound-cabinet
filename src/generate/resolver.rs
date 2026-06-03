@@ -66,7 +66,7 @@ pub fn resolve_pattern(
         }
 
         // Determine active chord at this beat position
-        let chord = active_chord(&params.chords, beat_offset, bar_beats);
+        let chord = active_chord(&params.chords, beat_offset, bar_beats)?;
 
         // Initialize cursor from chord root if this is the first note
         let effective_cursor = cursor_pitch.or_else(|| {
@@ -100,12 +100,12 @@ pub fn resolve_pattern(
 }
 
 /// Determine which chord is active at a given beat position.
-fn active_chord<'a>(chords: &'a [Chord], beat: f64, bar_beats: f64) -> &'a Chord {
+fn active_chord<'a>(chords: &'a [Chord], beat: f64, bar_beats: f64) -> Result<&'a Chord> {
     if chords.is_empty() {
-        panic!("No chords provided");
+        return Err(anyhow!("no chords provided for contour resolution"));
     }
     if chords.len() == 1 {
-        return &chords[0];
+        return Ok(&chords[0]);
     }
     // Each chord gets equal share of bars. If pattern is 4 beats (1 bar)
     // and there are 4 chords, each chord gets 1 beat.
@@ -114,7 +114,7 @@ fn active_chord<'a>(chords: &'a [Chord], beat: f64, bar_beats: f64) -> &'a Chord
     // Actually: distribute chords evenly across the pattern
     // For now: one chord per bar, cycling
     let bar_index = (beat / bar_beats).floor() as usize;
-    &chords[bar_index % chords.len()]
+    Ok(&chords[bar_index % chords.len()])
 }
 
 /// Get the root pitch of the next bar's chord (for 'approach' token).
@@ -374,5 +374,28 @@ contour: [root, step_up, step_up, approach]
         let approach = &notes[3];
         // next chord root is G, approach = G - 1 semitone = F#
         assert_eq!(approach.pitch.pitch_class(), 6); // F# = 6
+    }
+
+    #[test]
+    fn test_empty_chords_errors_not_panics() {
+        // A non-rest contour token with an empty chord list must surface an
+        // error from resolve_pattern rather than panicking in active_chord.
+        let yaml = r#"
+name: Test Empty Chords
+type: bass
+time: "4/4"
+rhythm:
+  hits: ["1/4"]
+contour: [root]
+"#;
+        let pattern = PatternFile::from_yaml(yaml).unwrap();
+        // No chords at all.
+        let params = make_params(PitchClass::C, Mode::Major, &[], "C2-G3");
+
+        let result = resolve_pattern(&pattern, &params);
+        assert!(
+            result.is_err(),
+            "expected an error when resolving a non-rest contour with no chords"
+        );
     }
 }

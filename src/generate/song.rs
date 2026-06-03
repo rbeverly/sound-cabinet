@@ -89,6 +89,10 @@ pub fn run_generate_song(song: &SongFile, config: &GenerateConfig) -> Result<()>
             default_chords.clone()
         };
 
+        if chords.is_empty() {
+            return Err(anyhow!("song part '{part_name}': chords override is empty"));
+        }
+
         // Use part-specific range if provided
         let range = if let Some(ref r) = part.range {
             PitchRange::parse(r)?
@@ -320,5 +324,45 @@ arrangement: [verse, refrain, verse, refrain]
         // Should not panic
         let result = run_generate_song(&song, &config);
         assert!(result.is_ok(), "Song generation failed: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_empty_part_chords_errors_not_panics() {
+        // A part that overrides chords with an empty string must produce an
+        // error, not a panic, even though the CLI supplies a valid progression.
+        let yaml = r#"
+name: Evil
+time: "4/4"
+parts:
+  verse:
+    motif:
+      rhythm: ["1/4"]
+      contour: [root]
+    chords: ""
+arrangement: [verse]
+"#;
+        let song = SongFile::from_yaml(yaml).unwrap();
+        let config = GenerateConfig {
+            pattern_path: String::new(),
+            key: "C".into(),
+            mode: "major".into(),
+            chords: "Cmaj".into(),
+            voice: "mel".into(),
+            range: None,
+            variations: 1,
+            seed: 42,
+            output: None,
+        };
+
+        let result = run_generate_song(&song, &config);
+        assert!(
+            result.is_err(),
+            "expected an error for an empty per-part chord override"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("verse"),
+            "error should identify the offending part, got: {msg}"
+        );
     }
 }
