@@ -256,6 +256,17 @@ impl SongFile {
                     part.motif.contour.len()
                 ));
             }
+            if !part.motif.emphasis.is_empty()
+                && part.motif.emphasis.len() != part.motif.rhythm.len()
+            {
+                return Err(anyhow!(
+                    "Song '{}', part '{}': motif emphasis has {} entries but rhythm has {}",
+                    self.name,
+                    name,
+                    part.motif.emphasis.len(),
+                    part.motif.rhythm.len()
+                ));
+            }
         }
         super::rhythm::parse_time_sig(&self.time)?;
         Ok(())
@@ -399,6 +410,34 @@ rhythm:
 contour: [root, step_up]
 "#;
         assert!(PatternFile::from_yaml(yaml).is_err());
+    }
+
+    #[test]
+    fn test_song_part_emphasis_mismatch_rejected() {
+        // A song part whose motif emphasis length disagrees with its rhythm
+        // length must be rejected at load, naming the offending part.
+        let yaml = r#"
+name: Evil
+time: "4/4"
+parts:
+  verse:
+    motif:
+      rhythm: ["1/4", "1/4"]
+      contour: [root, step_up]
+      emphasis: [strong]
+    structure: [return]
+arrangement: [verse]
+"#;
+        let result = SongFile::from_yaml(yaml);
+        assert!(
+            result.is_err(),
+            "expected mismatched motif emphasis to be rejected"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("verse") && msg.contains("emphasis"),
+            "error should identify the part and emphasis mismatch, got: {msg}"
+        );
     }
 
     #[test]
