@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, Result};
 use rand::Rng;
@@ -93,19 +93,33 @@ impl ExpansionContext {
         }
     }
 
-    fn expand_name(&self, name: &str, base_beat: f64, global_swing: f64, global_humanize: f64, bpm: f64, with_map: &WithMap, rng: &mut impl Rng) -> Result<Vec<Command>> {
+    fn expand_name(&self, name: &str, base_beat: f64, global_swing: f64, global_humanize: f64, bpm: f64, with_map: &WithMap, rng: &mut impl Rng, active: &mut HashSet<String>) -> Result<Vec<Command>> {
         if let Some(p) = self.patterns.get(name) {
+            // Patterns cannot reference sections, so they never recurse — no
+            // cycle tracking is needed for them.
             let swing = p.swing.unwrap_or(global_swing);
             let humanize = p.humanize.unwrap_or(global_humanize);
             Ok(expand_pattern_events(&p.events, base_beat, swing, humanize, bpm, with_map, Some(name.to_string()), rng))
         } else if let Some(s) = self.sections.get(name) {
-            self.expand_section(name, s, base_beat, global_swing, global_humanize, bpm, with_map, rng)
+            self.expand_section(name, s, base_beat, global_swing, global_humanize, bpm, with_map, rng, active)
         } else {
             Err(anyhow!("Unknown pattern or section: '{name}'"))
         }
     }
 
-    fn expand_section(&self, section_name: &str, section: &SectionInfo, base_beat: f64, global_swing: f64, global_humanize: f64, bpm: f64, inherited_with: &WithMap, rng: &mut impl Rng) -> Result<Vec<Command>> {
+    fn expand_section(&self, section_name: &str, section: &SectionInfo, base_beat: f64, global_swing: f64, global_humanize: f64, bpm: f64, inherited_with: &WithMap, rng: &mut impl Rng, active: &mut HashSet<String>) -> Result<Vec<Command>> {
+        // Cycle guard: a section entry that re-enters a section already on the
+        // expansion call stack (directly, or through a cycle of sections) would
+        // recurse without bound and overflow the stack. Reject it before
+        // recursing. The active set is scoped to the call stack — `section_name`
+        // is removed on exit — so the same section may still be played multiple
+        // times from independent, non-nested positions.
+        if !active.insert(section_name.to_string()) {
+            return Err(anyhow!(
+                "Circular section reference detected: '{section_name}'"
+            ));
+        }
+
         let mut output = Vec::new();
 
         // Merge inherited with_map with section-level with_map
@@ -133,7 +147,7 @@ impl ExpansionContext {
                     }
                     let mut beat = 0.0;
                     while beat < section.duration_beats {
-                        let cmds = self.expand_name(name, base_beat + beat, global_swing, global_humanize, bpm, &entry_with, rng)?;
+                        let cmds = self.expand_name(name, base_beat + beat, global_swing, global_humanize, bpm, &entry_with, rng, active)?;
                         output.extend(cmds);
                         beat += every_beats;
                     }
@@ -144,12 +158,15 @@ impl ExpansionContext {
                     } else {
                         section_with.clone()
                     };
-                    let cmds = self.expand_name(name, base_beat, global_swing, global_humanize, bpm, &entry_with, rng)?;
+                    let cmds = self.expand_name(name, base_beat, global_swing, global_humanize, bpm, &entry_with, rng, active)?;
                     output.extend(cmds);
                 }
             }
         }
 
+        // Pop this section off the active stack so it can be replayed from
+        // other, non-nested positions later in the score.
+        active.remove(section_name);
         Ok(output)
     }
 }
@@ -266,7 +283,7 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
             }
             Command::PlaySequential { name } => {
                 let duration = ctx.duration_of(&name)?;
-                let events = ctx.expand_name(&name, cursor, global_swing, global_humanize, bpm, &global_with, rng)?;
+                let events = ctx.expand_name(&name, cursor, global_swing, global_humanize, bpm, &global_with, rng, &mut HashSet::new())?;
                 output.extend(events);
                 cursor += duration;
             }
@@ -276,14 +293,14 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
                         match item {
                             RepeatBody::Play(name) => {
                                 let duration = ctx.duration_of(name)?;
-                                let events = ctx.expand_name(name, cursor, global_swing, global_humanize, bpm, &global_with, rng)?;
+                                let events = ctx.expand_name(name, cursor, global_swing, global_humanize, bpm, &global_with, rng, &mut HashSet::new())?;
                                 output.extend(events);
                                 cursor += duration;
                             }
                             RepeatBody::Pick(choices) => {
                                 let name = weighted_pick(choices, rng);
                                 let duration = ctx.duration_of(&name)?;
-                                let events = ctx.expand_name(&name, cursor, global_swing, global_humanize, bpm, &global_with, rng)?;
+                                let events = ctx.expand_name(&name, cursor, global_swing, global_humanize, bpm, &global_with, rng, &mut HashSet::new())?;
                                 output.extend(events);
                                 cursor += duration;
                             }
@@ -292,7 +309,7 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
                                 shuffle_vec(&mut shuffled, rng);
                                 for name in &shuffled {
                                     let duration = ctx.duration_of(name)?;
-                                    let events = ctx.expand_name(name, cursor, global_swing, global_humanize, bpm, &global_with, rng)?;
+                                    let events = ctx.expand_name(name, cursor, global_swing, global_humanize, bpm, &global_with, rng, &mut HashSet::new())?;
                                     output.extend(events);
                                     cursor += duration;
                                 }
@@ -542,5 +559,117 @@ mod tests {
         // A non-positive total must not sample an empty range; the selector
         // falls back to the last (here, only) choice.
         assert_eq!(weighted_pick(&choices, &mut rng), "a");
+    }
+
+    #[test]
+    fn expand_rejects_self_referential_section() {
+        // A section whose only entry plays itself drives unbounded recursion
+        // (stack overflow) without a cycle guard. It must now fail fast with an
+        // error instead of crashing the process.
+        let script = Script {
+            commands: vec![
+                Command::SectionDef {
+                    name: "a".into(),
+                    duration_beats: 16.0,
+                    entries: vec![SectionEntry::Play {
+                        name: "a".into(),
+                        with_map: None,
+                    }],
+                    with_map: None,
+                },
+                Command::PlaySequential { name: "a".into() },
+            ],
+        };
+        let result = expand_script(script, &mut make_rng());
+        assert!(result.is_err(), "self-referential section must be rejected");
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Circular section reference detected"));
+    }
+
+    #[test]
+    fn expand_rejects_mutually_recursive_sections() {
+        // section a plays b, section b plays a — a cycle of sections that would
+        // recurse without bound. The guard must reject it.
+        let script = Script {
+            commands: vec![
+                Command::SectionDef {
+                    name: "a".into(),
+                    duration_beats: 16.0,
+                    entries: vec![SectionEntry::Play {
+                        name: "b".into(),
+                        with_map: None,
+                    }],
+                    with_map: None,
+                },
+                Command::SectionDef {
+                    name: "b".into(),
+                    duration_beats: 16.0,
+                    entries: vec![SectionEntry::Play {
+                        name: "a".into(),
+                        with_map: None,
+                    }],
+                    with_map: None,
+                },
+                Command::PlaySequential { name: "a".into() },
+            ],
+        };
+        let result = expand_script(script, &mut make_rng());
+        assert!(
+            result.is_err(),
+            "mutually recursive sections must be rejected"
+        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Circular section reference detected"));
+    }
+
+    #[test]
+    fn expand_allows_section_replayed_from_independent_positions() {
+        // The active set is scoped to the call stack, NOT a global "seen" set:
+        // the same section may be played from multiple non-nested top-level
+        // positions. If the guard used a persistent set, the second `play
+        // verse` below would be wrongly rejected.
+        let script = Script {
+            commands: vec![
+                Command::PatternDef {
+                    name: "drums".into(),
+                    duration_beats: 4.0,
+                    events: vec![PatternEvent {
+                        beat_offset: 0.0,
+                        expr: Expr::VoiceRef("kick".into()),
+                        duration_beats: 0.5,
+                    }],
+                    swing: None,
+                    humanize: None,
+                },
+                Command::SectionDef {
+                    name: "verse".into(),
+                    duration_beats: 4.0,
+                    entries: vec![SectionEntry::Play {
+                        name: "drums".into(),
+                        with_map: None,
+                    }],
+                    with_map: None,
+                },
+                Command::PlaySequential { name: "verse".into() },
+                Command::PlaySequential { name: "verse".into() },
+            ],
+        };
+        let mut rng = make_rng();
+        let expanded =
+            expand_script(script, &mut rng).expect("replaying a section must succeed");
+        // One PlayAt per top-level play of `verse`, at cursor 0 then 4.
+        assert_eq!(expanded.commands.len(), 2);
+        match &expanded.commands[0] {
+            Command::PlayAt { beat, .. } => assert_eq!(*beat, 0.0),
+            _ => panic!("Expected PlayAt"),
+        }
+        match &expanded.commands[1] {
+            Command::PlayAt { beat, .. } => assert_eq!(*beat, 4.0),
+            _ => panic!("Expected PlayAt"),
+        }
     }
 }
