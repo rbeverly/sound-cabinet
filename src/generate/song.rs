@@ -365,4 +365,47 @@ arrangement: [verse]
             "error should identify the offending part, got: {msg}"
         );
     }
+
+    #[test]
+    fn test_song_part_short_emphasis_errors_not_panics() {
+        // A part whose motif emphasis is shorter than its rhythm must produce an
+        // error that names the part — not an out-of-bounds panic during the
+        // `return` transform's emphasis slice. The mismatch is rejected at load;
+        // even if it slipped through, `motif_emphasis` normalizes the length so
+        // expansion cannot panic.
+        let yaml = r#"
+name: Evil
+time: "4/4"
+parts:
+  verse:
+    motif:
+      rhythm: ["1/4", "1/4"]
+      contour: [root, step_up]
+      emphasis: [strong]
+    structure: [return]
+arrangement: [verse]
+"#;
+        let config = GenerateConfig {
+            pattern_path: String::new(),
+            key: "C".into(),
+            mode: "major".into(),
+            chords: "Cmaj".into(),
+            voice: "mel".into(),
+            range: None,
+            variations: 1,
+            seed: 42,
+            output: None,
+        };
+
+        let result = SongFile::from_yaml(yaml).and_then(|song| run_generate_song(&song, &config));
+        assert!(
+            result.is_err(),
+            "expected an error for a short motif emphasis, not a panic"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("verse"),
+            "error should identify the offending part, got: {msg}"
+        );
+    }
 }

@@ -464,9 +464,22 @@ fn beats_to_rest(beats: f64) -> String {
 }
 
 /// Get motif emphasis, defaulting to alternating strong/weak if not specified.
+///
+/// The returned vector always has length `motif.rhythm.len()`. A non-empty
+/// emphasis array whose length disagrees with the rhythm (which the validators
+/// reject, but which could still reach the expander defensively) is padded with
+/// `"medium"` or truncated to match. This guarantees the downstream slice sites
+/// (`return`, `truncation`) can never index past the emphasis vector.
 fn motif_emphasis(motif: &MotifSpec) -> Vec<String> {
+    let target = motif.rhythm.len();
     if !motif.emphasis.is_empty() {
-        motif.emphasis.clone()
+        let mut emph = motif.emphasis.clone();
+        if emph.len() > target {
+            emph.truncate(target);
+        } else {
+            emph.resize(target, "medium".into());
+        }
+        emph
     } else {
         motif
             .rhythm
