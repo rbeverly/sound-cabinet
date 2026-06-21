@@ -82,6 +82,13 @@ pub fn run_export(config: &ExportConfig) -> Result<()> {
         return Err(anyhow!("No notes to export (check voice/source filters)"));
     }
 
+    // Reject non-finite note timings before rendering. The DSL `number`
+    // grammar accepts arbitrarily long digit strings, which `parse::<f64>()`
+    // silently maps to `f64::INFINITY` on overflow. A non-finite beat or
+    // duration would otherwise drive the LilyPond rest-fill loop into an
+    // unbounded spin (a denial of service). Fail with a clear error instead.
+    check_finite_timings(&notes)?;
+
     // Generate LilyPond
     let ly_output = lilypond::write_lilypond(&notes, &extracted.tempos, config);
 
@@ -147,4 +154,89 @@ fn count_voices(notes: &[extract::NoteEvent]) -> usize {
     voices.sort();
     voices.dedup();
     voices.len()
+}
+
+/// Validate that every note's beat position and duration is a finite number.
+///
+/// Returns an error identifying the first offending value if any note's `beat`
+/// or `duration_beats` is infinite or NaN. This prevents non-finite timings —
+/// produced when an overflowing digit string parses to `f64::INFINITY` — from
+/// reaching the LilyPond rest-fill routine, where they would cause an
+/// unbounded loop.
+fn check_finite_timings(notes: &[extract::NoteEvent]) -> Result<()> {
+    for n in notes {
+        if !n.beat.is_finite() || !n.duration_beats.is_finite() {
+            return Err(anyhow!(
+                "Cannot export note with non-finite timing: beat {}, duration {}",
+                n.beat,
+                n.duration_beats
+            ));
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dsl::ast::{Command, Expr};
+
+    fn note_event(beat: f64, duration_beats: f64) -> extract::NoteEvent {
+        extract::NoteEvent {
+            beat,
+            pitch: None,
+            duration_beats,
+            voice_name: "piano".to_string(),
+            voice_label: None,
+            velocity: 1.0,
+            source: None,
+        }
+    }
+
+    #[test]
+    fn export_rejects_nonfinite_duration() {
+        // Mirror the real pipeline: an overflowing duration parses to infinity,
+        // flows through extraction, and must be rejected before rendering.
+        let commands = vec![Command::PlayAt {
+            beat: 0.0,
+            expr: Expr::FnCall {
+                name: "piano".to_string(),
+                args: vec![Expr::Number(440.0)],
+            },
+            duration_beats: f64::INFINITY,
+            source: None,
+            voice_label: None,
+        }];
+        let extracted = extract::extract_notes(&commands);
+        let result = check_finite_timings(&extracted.notes);
+        assert!(result.is_err(), "non-finite duration should be rejected");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("non-finite timing"),
+            "error should identify the non-finite timing, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn export_rejects_nonfinite_beat() {
+        let notes = vec![note_event(f64::INFINITY, 1.0)];
+        assert!(check_finite_timings(&notes).is_err());
+    }
+
+    #[test]
+    fn export_rejects_nan_timing() {
+        let notes = vec![note_event(0.0, f64::NAN)];
+        assert!(check_finite_timings(&notes).is_err());
+    }
+
+    #[test]
+    fn export_accepts_finite_timings() {
+        // A normal finite score passes the finiteness check.
+        let notes = vec![note_event(0.0, 1.0), note_event(2.0, 0.5)];
+        assert!(check_finite_timings(&notes).is_ok());
+    }
 }
