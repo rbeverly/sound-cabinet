@@ -261,4 +261,72 @@ mod tests {
         assert!((beats_per_bar(3, 4) - 3.0).abs() < 1e-10);
         assert!((beats_per_bar(6, 8) - 3.0).abs() < 1e-10);
     }
+
+    // -- parse_rhythm error paths -------------------------------------------
+
+    #[test]
+    fn parse_rhythm_rejects_unrecognized_token() {
+        let err = parse_rhythm(&["xyz".to_string()]).unwrap_err();
+        assert!(
+            err.to_string().contains("Unrecognized rhythm token"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_rhythm_rejects_invalid_tied_component() {
+        let err = parse_rhythm(&["1/4+2/8".to_string()]).unwrap_err();
+        assert!(
+            err.to_string().contains("Invalid tied duration component"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_rhythm_rejects_non_numeric_denominator() {
+        let err = parse_rhythm(&["1/x".to_string()]).unwrap_err();
+        assert!(
+            err.to_string().contains("Invalid duration denominator"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_rhythm_rejects_zero_denominator() {
+        let err = parse_rhythm(&["1/0".to_string()]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Duration denominator must be positive"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // -- parse_time_sig error paths -----------------------------------------
+
+    #[test]
+    fn parse_time_sig_rejects_missing_slash() {
+        let err = parse_time_sig("44").unwrap_err();
+        assert!(
+            err.to_string().contains("expected N/N"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_time_sig_rejects_non_numeric_numerator() {
+        let err = parse_time_sig("x/4").unwrap_err();
+        assert!(
+            err.to_string().contains("numerator"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_time_sig_rejects_non_numeric_denominator() {
+        let err = parse_time_sig("4/x").unwrap_err();
+        assert!(
+            err.to_string().contains("denominator"),
+            "unexpected error: {err}"
+        );
+    }
 }
