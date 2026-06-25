@@ -398,4 +398,60 @@ contour: [root]
             "expected an error when resolving a non-rest contour with no chords"
         );
     }
+
+    #[test]
+    fn resolve_pattern_rejects_unknown_contour_token() {
+        // A non-rest hit carrying a contour token that is not a recognized
+        // keyword must surface the catch-all "Unknown contour token" error
+        // from resolve_token through the public resolve_pattern entry point.
+        let yaml = r#"
+name: Test Unknown Contour
+type: bass
+time: "4/4"
+rhythm:
+  hits: ["1/4"]
+contour: [bogus]
+"#;
+        let pattern = PatternFile::from_yaml(yaml).unwrap();
+        let params = make_params(PitchClass::C, Mode::Major, &["Cmaj"], "C2-G3");
+
+        let result = resolve_pattern(&pattern, &params);
+        assert!(
+            result.is_err(),
+            "expected an error for an unknown contour token"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("Unknown contour token"),
+            "expected an 'Unknown contour token' error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn resolve_pattern_rejects_invalid_leap_token() {
+        // A leap_up_<suffix> token whose suffix is not a valid integer must
+        // surface the "Invalid leap" error from resolve_token through the
+        // public resolve_pattern entry point.
+        let yaml = r#"
+name: Test Invalid Leap
+type: bass
+time: "4/4"
+rhythm:
+  hits: ["1/4"]
+contour: [leap_up_x]
+"#;
+        let pattern = PatternFile::from_yaml(yaml).unwrap();
+        let params = make_params(PitchClass::C, Mode::Major, &["Cmaj"], "C2-G3");
+
+        let result = resolve_pattern(&pattern, &params);
+        assert!(
+            result.is_err(),
+            "expected an error for a malformed leap token"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("Invalid leap"),
+            "expected an 'Invalid leap' error, got: {msg}"
+        );
+    }
 }
