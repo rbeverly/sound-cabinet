@@ -195,6 +195,182 @@ contour: [chord_low, chord_high, chord_mid, chord_high,
 emphasis: [strong, weak, medium, weak, strong, weak, medium, weak]
 ```
 
+## Motif Patterns
+
+A *direct* pattern (above) spells out a full `rhythm` and `contour`.  A **motif
+pattern** instead supplies a short musical idea (3--6 notes) plus a sequence of
+transformations that develop it into a multi-bar phrase.  The motif expander
+(`src/generate/motif.rs`) applies each transformation to produce one bar,
+padding or truncating it to fill the time signature.
+
+A motif pattern carries the same header fields as a direct pattern (`name`,
+`type`, `tags`, `time`), but in place of top-level `rhythm`/`contour` it has:
+
+- a `motif:` block --- `rhythm`, `contour`, and optional `emphasis`, using the
+  same vocabularies as the layered sections above.  The arrays must be the same
+  length.
+- **either** an explicit `structure:` list of transformations **or** a
+  `complexity:` level.  Supply one of these (not the direct `rhythm`+`contour`
+  form); if you give neither, `complexity` defaults to `simple`.
+
+```yaml
+# patterns/motif/lullaby.yaml
+name: Lullaby
+type: melody
+tags: [simple, gentle, lullaby, 4-bar]
+time: "3/4"
+
+motif:
+  rhythm: ["1/4", "1/4", "1/4"]
+  contour: [root, step_up, step_down]
+  emphasis: [medium, weak, weak]
+
+structure:
+  - statement
+  - sequence_up
+  - repeat
+  - resolve
+```
+
+### Structure transformations
+
+Each entry in `structure` expands to one bar.  The vocabulary:
+
+| Transformation | What it does |
+|---|---|
+| `statement` | Play the motif as written (resets the running degree offset) |
+| `repeat` | Repeat the previous bar verbatim (behaves as `statement` if it is first) |
+| `sequence_up` / `sequence_down` | Restate the motif one scale degree higher / lower than the last sequence step (cumulative) |
+| `inversion` | Flip the motif's contour directions (up ↔ down) |
+| `retrograde` | Play the motif's contour back to front |
+| `augmentation` | Double every note's duration (truncated to fit the bar) |
+| `truncation` | Play only the first half of the motif |
+| `extension` | Play the motif, then fill the rest of the bar with stepwise eighth notes |
+| `departure` / `departure_high` / `departure_low` | Contrasting material with wider leaps; the `_high` / `_low` variants bias the direction up / down |
+| `return` | Echo the motif's first two notes, then step down to the root (resets the offset) |
+| `resolve` | Stepwise descent landing on the root (resets the offset) |
+| `approach` | A short two-note chromatic approach figure |
+| `rest` | A full bar of rest |
+
+An unrecognized transformation is rejected at expansion time (the
+`Motif expansion must reject missing motifs and unknown transformations`
+requirement in the `song-generation` spec).
+
+### Complexity levels
+
+When you give `complexity` instead of `structure`, the expander substitutes a
+preset structure (`default_structure()` in `src/generate/motif.rs` is the
+authoritative source):
+
+| `complexity` | Bars | Auto-generated structure |
+|---|---|---|
+| `simple` | 4 | `statement, repeat, sequence_up, resolve` |
+| `moderate` | 8 | `statement, sequence_up, departure, return, statement, sequence_down, extension, resolve` |
+| `complex` | 12 | `statement, sequence_up, sequence_up, departure_high, inversion, sequence_down, departure, extension, return, statement, truncation, resolve` |
+
+An unknown level falls back to `simple`.
+
+Worked examples ship in `patterns/motif/`: `folk-simple.yaml`
+(`complexity: simple`), `pop-verse.yaml` (`moderate`), `jazz-exploration.yaml`
+(`complex`), and `lullaby.yaml` (an explicit `structure` in 3/4).  A motif
+pattern resolves against `--key`, `--mode`, `--chords`, and `--range` exactly
+like a direct pattern --- the motif expansion just happens first.
+
+## Song Files
+
+A **song file** composes several named **parts** (verse, chorus, bridge, ...)
+into an **arrangement**.  It is rendered by `src/generate/song.rs`.
+`generate --pattern <song.yaml>` auto-detects a song file by its top-level
+`parts` key and renders every part, emitting one pattern per variation per
+part plus the arrangement order as comments.
+
+```yaml
+# patterns/song/verse-chorus-bridge.yaml (abbreviated — the file also has a bridge part)
+name: Verse-Chorus-Bridge
+time: "4/4"
+
+parts:
+  verse:
+    motif:
+      rhythm: ["1/8", "1/8", "1/8", "1/8", "1/4"]
+      contour: [root, step_up, step_down, step_up, leap_up_2]
+      emphasis: [medium, weak, weak, medium, strong]
+    complexity: moderate
+  chorus:
+    motif:
+      rhythm: ["1/4", "1/8", "1/8", "1/2"]
+      contour: [leap_up_4, step_up, step_down, root]
+      emphasis: [strong, medium, weak, strong]
+    complexity: simple
+
+arrangement:
+  - verse
+  - verse
+  - chorus
+```
+
+Each part is a motif (a `motif` block plus `structure` or `complexity`, exactly
+as in a motif pattern) with two optional per-part overrides:
+
+| Part field | Meaning |
+|---|---|
+| `motif` | The part's motif (`rhythm` / `contour` / optional `emphasis`) --- required |
+| `structure` or `complexity` | How to develop the motif (as in a motif pattern) |
+| `chords` | A chord progression scoped to this part (space-separated, e.g. `"Am Dm Em Am"`), overriding the `--chords` progression for this part |
+| `range` | A pitch range scoped to this part (e.g. `"C4-C6"`), overriding `--range` for this part |
+
+`arrangement` lists part names in playback order; a part may appear more than
+once.  Every entry must name a defined part, and a song needs at least one part
+and at least one arrangement entry (the `Song files must define parts and a
+valid arrangement` requirement).  Worked examples ship in `patterns/song/`:
+`verse-chorus-bridge.yaml`, `verse-refrain-folk.yaml`, and
+`double-refrain.yaml`.
+
+## Drum Patterns
+
+A **drum pattern** defines a list of percussion **voices**, each with its own
+rhythm.  It is rendered by `src/generate/drums.rs`.
+`generate --pattern <drums.yaml>` auto-detects a drum pattern by its top-level
+`voices` key.  Pitches come from each voice's `pitch` field, so the harmonic
+flags (`--key` / `--mode` / `--chords`) do not affect a drum file.
+
+```yaml
+# patterns/drums/basic-rock.yaml
+name: Basic Rock
+time: "4/4"
+
+voices:
+  - voice: kick
+    pitch: A1
+    rhythm: ["1/4", "~/4", "1/4", "~/4"]
+    emphasis: [strong, "~", strong, "~"]
+
+  - voice: snare
+    pitch: G3
+    rhythm: ["~/4", "1/4", "~/4", "1/4"]
+    emphasis: ["~", strong, "~", strong]
+
+  - voice: hat
+    pitch: C5
+    rhythm: ["1/8", "1/8", "1/8", "1/8", "1/8", "1/8", "1/8", "1/8"]
+    emphasis: [strong, weak, medium, weak, strong, weak, medium, weak]
+```
+
+Each entry in `voices` has:
+
+| Voice field | Meaning |
+|---|---|
+| `voice` | The voice name (e.g. `kick`, `snare`, `hat`) used in the `.sc` output --- swap instruments with `with` |
+| `pitch` | Default pitch for the voice (a note name, e.g. `A1` for kick, `G3` for snare) |
+| `rhythm` | The voice's rhythm, using the `~/N` rest form (e.g. `~/4` for a quarter rest) |
+| `emphasis` | Optional dynamics, using the `~` rest form on silent positions; if present it must match `rhythm`'s length |
+
+The `~/N` and `~` rest forms keep each voice's `rhythm` and `emphasis` aligned
+position-by-position (the `Drum patterns must define voices with consistent
+emphasis` requirement).  A pattern needs at least one voice.  Worked examples
+ship in `patterns/drums/`: `basic-rock.yaml`, `boom-bap.yaml`,
+`bossa-nova.yaml`, and `waltz.yaml` (3/4).
+
 ## Ornamentation as a Separate Layer
 
 Ornaments are not melody --- they are commentary on melody.  A trill doesn't
@@ -295,6 +471,11 @@ section groove = 16 beats
 ```
 
 ## Workflow Integration
+
+`generate --pattern <file>` accepts four kinds of YAML file --- a **direct
+pattern**, a **motif pattern**, a **song file**, and a **drum pattern** --- and
+auto-detects which by content, trying song (a `parts` key) → drums (a `voices`
+key) → pattern/motif, in that order (`src/generate/mod.rs::run_generate`).
 
 ### CLI
 

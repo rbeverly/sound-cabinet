@@ -137,6 +137,8 @@ sound-cabinet export song.sc -o song.pdf --title "My Song"
 
 The `generate` command composes musical phrases from YAML pattern files. Each pattern defines a reusable musical gesture through layered decomposition: rhythm (note placement), contour (relative pitch motion), and emphasis (dynamics). The generator resolves these against a key, mode, and chord progression to produce concrete `.sc` patterns.
 
+`generate --pattern` also accepts three other file kinds, auto-detected by content: **motif patterns** (a `motif` block developed by a `structure` list or `complexity` level), **song files** (a `parts` map plus an `arrangement`), and **drum patterns** (a `voices` list). The full schema for all four is in [docs/algorithmic-generation.md](docs/algorithmic-generation.md).
+
 ```bash
 sound-cabinet generate \
   --pattern patterns/bass/walking-jazz.yaml \
@@ -170,18 +172,18 @@ section verse = 16 beats
   repeat pick(bass_a, bass_b, bass_c) every 4 beats
 ```
 
-Starter patterns ship in `patterns/`:
+23 starter patterns ship in `patterns/`, grouped by family:
 
-| Pattern | Type | Description |
-|---------|------|-------------|
-| `bass/walking-jazz` | bass | Quarter-note walking line with chromatic approach |
-| `bass/root-fifth-country` | bass | Alternating root and fifth |
-| `bass/octave-pulse` | bass | Driving eighth-note pulse on root |
-| `melody/question-phrase` | melody | Ascending phrase creating tension |
-| `melody/answer-phrase` | melody | Descending phrase resolving to root |
-| `accomp/alberti-bass` | accomp | Classical arpeggiated chord pattern |
+| Family | Kind | Files | Description |
+|--------|------|-------|-------------|
+| `bass/` | direct pattern | 5 | Bass lines — `walking-jazz`, `root-fifth-country`, `octave-pulse`, `4bar-anchor`, `4bar-walking-chromatic` |
+| `melody/` | direct pattern | 6 | Melodic phrases — `question-phrase`, `answer-phrase`, `4bar-arch`, `4bar-consequence`, `4bar-sentence`, `4bar-wandering` |
+| `accomp/` | direct pattern | 1 | Accompaniment — `alberti-bass` (classical arpeggiated chord pattern) |
+| `motif/` | motif pattern | 4 | Motif + structure/complexity — `folk-simple`, `pop-verse`, `jazz-exploration`, `lullaby` |
+| `song/` | song file | 3 | Multi-part `parts`/`arrangement` compositions — `verse-chorus-bridge`, `verse-refrain-folk`, `double-refrain` |
+| `drums/` | drum pattern | 4 | Percussion `voices` — `basic-rock`, `boom-bap`, `bossa-nova`, `waltz` |
 
-See [docs/algorithmic-generation.md](docs/algorithmic-generation.md) for the design and how to write your own patterns.
+See [docs/algorithmic-generation.md](docs/algorithmic-generation.md) for the design and how to write your own patterns of every kind.
 
 ### Sheet music export
 
