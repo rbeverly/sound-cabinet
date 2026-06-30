@@ -159,6 +159,9 @@ impl Engine {
                 self.wavetables.insert(name, samples);
             }
             Command::SetBpm { bpm, at_beat } => {
+                if !(bpm.is_finite() && bpm > 0.0) {
+                    return Err(anyhow::anyhow!("bpm must be a positive number"));
+                }
                 let change_beat = at_beat.unwrap_or(0.0);
                 if (bpm - self.bpm).abs() > 0.001 && change_beat > 0.0 {
                     // Mid-score tempo change — add to tempo map
@@ -959,6 +962,67 @@ mod tests {
         assert_eq!(engine.beats_to_samples(1.0), 22050);
         assert_eq!(engine.beats_to_samples(4.0), 88200);
         assert_eq!(engine.beats_to_samples(0.0), 0);
+    }
+
+    #[test]
+    fn test_zero_bpm_is_rejected() {
+        let mut engine = Engine::new(44100.0);
+        let before = engine.bpm;
+        assert!(engine
+            .handle_command(Command::SetBpm { bpm: 0.0, at_beat: None })
+            .is_err());
+        // Tempo unchanged: the rejected value is never stored.
+        assert_eq!(engine.bpm, before);
+    }
+
+    #[test]
+    fn test_negative_bpm_is_rejected() {
+        let mut engine = Engine::new(44100.0);
+        assert!(engine
+            .handle_command(Command::SetBpm { bpm: -120.0, at_beat: None })
+            .is_err());
+    }
+
+    #[test]
+    fn test_valid_bpm_still_renders() {
+        let mut engine = Engine::new(44100.0);
+        assert!(engine
+            .handle_command(Command::SetBpm { bpm: 120.0, at_beat: None })
+            .is_ok());
+        // 1 beat at 120 BPM = 0.5s = 22050 samples at 44100 Hz.
+        assert_eq!(engine.beats_to_samples(1.0), 22050);
+    }
+
+    #[test]
+    fn test_zero_bpm_schedules_no_saturated_event() {
+        let mut engine = Engine::new(44100.0);
+        // A real command driver `?`-propagates the first error, so a bad bpm
+        // aborts before any PlayAt is handled. Mirror that here.
+        let script = vec![
+            Command::SetBpm { bpm: 0.0, at_beat: None },
+            Command::PlayAt {
+                beat: 0.0,
+                expr: Expr::FnCall {
+                    name: "sine".into(),
+                    args: vec![Expr::Number(440.0)],
+                },
+                duration_beats: 4.0,
+                source: None,
+                voice_label: None,
+            },
+        ];
+        let mut err = None;
+        for cmd in script {
+            if let Err(e) = engine.handle_command(cmd) {
+                err = Some(e);
+                break;
+            }
+        }
+        // The bad bpm surfaced an error...
+        assert!(err.is_some());
+        // ...so no event (with a saturated end_sample) was ever scheduled,
+        // and the render loop has nothing to spin on.
+        assert!(engine.schedule.is_empty());
     }
 
     #[test]
