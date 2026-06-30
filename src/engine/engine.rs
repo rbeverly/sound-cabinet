@@ -1074,6 +1074,44 @@ mod tests {
         let opts = parse_arp_options(&args).expect("accent 2 should parse");
         assert_eq!(opts.accent_every, Some(2));
     }
+
+    #[test]
+    fn test_arp_rate_zero_rejected() {
+        // `arp(C4, 0)`: a zero rate must be rejected, not silently scheduled
+        // as zero steps.
+        let args = vec![Expr::VoiceRef("C4".into()), Expr::Number(0.0)];
+        assert!(parse_arp_options(&args).is_err(), "zero rate should be rejected");
+    }
+
+    #[test]
+    fn test_arp_rate_negative_rejected() {
+        let args = vec![Expr::VoiceRef("C4".into()), Expr::Number(-4.0)];
+        assert!(parse_arp_options(&args).is_err(), "negative rate should be rejected");
+    }
+
+    #[test]
+    fn test_arp_rate_non_finite_rejected_without_panic() {
+        // A non-finite rate would saturate total_steps to usize::MAX and
+        // overflow Vec::with_capacity; it must return Err, not panic.
+        let args = vec![Expr::VoiceRef("C4".into()), Expr::Number(f64::INFINITY)];
+        assert!(parse_arp_options(&args).is_err(), "non-finite rate should be rejected");
+    }
+
+    #[test]
+    fn test_arp_rate_four_still_parses() {
+        // Regression: a valid rate is honored as before.
+        let args = vec![Expr::VoiceRef("C4".into()), Expr::Number(4.0)];
+        let opts = parse_arp_options(&args).expect("rate 4 should parse");
+        assert_eq!(opts.rate_start, 4.0);
+        assert_eq!(opts.rate_end, None);
+    }
+
+    #[test]
+    fn test_arp_rate_range_nonpositive_endpoint_rejected() {
+        // A rate range with a non-positive endpoint must be rejected.
+        let args = vec![Expr::VoiceRef("C4".into()), Expr::Range(4.0, 0.0)];
+        assert!(parse_arp_options(&args).is_err(), "range with 0 endpoint should be rejected");
+    }
 }
 
 /// Convert a sample position back to beats using a tempo map.
@@ -1219,10 +1257,21 @@ fn parse_arp_options(args: &[Expr]) -> Result<ArpOptions> {
 
     let rate_idx = rate_idx.ok_or_else(|| anyhow::anyhow!("arp: could not find rate argument"))?;
 
-    // Extract rate
+    // Extract rate. A non-finite or non-positive rate would either size the
+    // step buffer to usize::MAX (allocation panic) or schedule zero steps
+    // (silent no-op), so reject it before it is stored.
+    let positive = |r: f64| r.is_finite() && r > 0.0;
     match &args[rate_idx] {
-        Expr::Number(v) => opts.rate_start = *v,
+        Expr::Number(v) => {
+            if !positive(*v) {
+                return Err(anyhow::anyhow!("arp: rate must be a positive number"));
+            }
+            opts.rate_start = *v;
+        }
         Expr::Range(start, end) => {
+            if !positive(*start) || !positive(*end) {
+                return Err(anyhow::anyhow!("arp: rate must be a positive number"));
+            }
             opts.rate_start = *start;
             opts.rate_end = Some(*end);
         }
