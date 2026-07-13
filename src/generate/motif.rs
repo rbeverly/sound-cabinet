@@ -464,9 +464,22 @@ fn beats_to_rest(beats: f64) -> String {
 }
 
 /// Get motif emphasis, defaulting to alternating strong/weak if not specified.
+///
+/// The returned vector always has length `motif.rhythm.len()`. A non-empty
+/// emphasis array whose length disagrees with the rhythm (which the validators
+/// reject, but which could still reach the expander defensively) is padded with
+/// `"medium"` or truncated to match. This guarantees the downstream slice sites
+/// (`return`, `truncation`) can never index past the emphasis vector.
 fn motif_emphasis(motif: &MotifSpec) -> Vec<String> {
+    let target = motif.rhythm.len();
     if !motif.emphasis.is_empty() {
-        motif.emphasis.clone()
+        let mut emph = motif.emphasis.clone();
+        if emph.len() > target {
+            emph.truncate(target);
+        } else {
+            emph.resize(target, "medium".into());
+        }
+        emph
     } else {
         motif
             .rhythm
@@ -675,6 +688,63 @@ motif:
             (parsed.total_beats - 16.0).abs() < 0.5,
             "Expected ~16 beats, got {}",
             parsed.total_beats
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // expand_motif error paths
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn expand_motif_errors_when_no_motif() {
+        // A direct rhythm+contour pattern has no motif, so asking the motif
+        // expander to expand it must error rather than produce empty output.
+        let yaml = r#"
+name: Direct Pattern
+type: bass
+time: "4/4"
+rhythm:
+  hits: ["1/4"]
+contour: [root]
+"#;
+        let pattern = PatternFile::from_yaml(yaml).unwrap();
+        let result = expand_motif(&pattern, (4, 4));
+        assert!(
+            result.is_err(),
+            "expected a motif-less pattern to be rejected by expand_motif"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("has no motif to expand"),
+            "error should report the missing motif, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn expand_motif_rejects_unknown_transformation() {
+        // `structure` entries are not validated at load, so a transform that is
+        // not a recognized keyword reaches the expander and must surface an
+        // error naming the unknown transformation.
+        let yaml = r#"
+name: Bad Structure
+type: melody
+time: "4/4"
+motif:
+  rhythm: ["1/4", "1/4"]
+  contour: [root, step_up]
+structure:
+  - bogus_xform
+"#;
+        let pattern = PatternFile::from_yaml(yaml).unwrap();
+        let result = expand_motif(&pattern, (4, 4));
+        assert!(
+            result.is_err(),
+            "expected an unknown transformation to be rejected by expand_motif"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("Unknown transformation") && msg.contains("bogus_xform"),
+            "error should identify the unknown transformation, got: {msg}"
         );
     }
 }

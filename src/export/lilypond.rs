@@ -285,6 +285,16 @@ fn render_drum_sequence(
 
 /// Create rest tokens to fill a gap of `beats` duration.
 fn make_rests(beats: f64, _cursor: f64, _beats_per_bar: f64) -> Vec<String> {
+    // Guard against non-finite or non-positive gaps. A non-finite `beats`
+    // (e.g. `f64::INFINITY` from an overflowing duration) would make the
+    // decomposition loop below spin forever, since `inf - d == inf` never
+    // falls below the threshold. Produce no rests in that case rather than
+    // hanging. This is defense in depth for both the pitched
+    // (`render_note_sequence`) and drum (`render_drum_sequence`) paths.
+    if !beats.is_finite() || beats <= 0.0 {
+        return Vec::new();
+    }
+
     let mut remaining = beats;
     let mut rests = Vec::new();
 
@@ -518,5 +528,71 @@ mod tests {
         assert!((quantize(0.48, 0.25) - 0.5).abs() < 0.01);
         assert!((quantize(1.02, 0.25) - 1.0).abs() < 0.01);
         assert!((quantize(2.0, 0.25) - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn make_rests_terminates_on_infinite_gap() {
+        // A non-finite gap must not enter the unbounded decomposition loop.
+        // If this regresses, the test hangs instead of failing — which is the
+        // observable symptom we are guarding against.
+        assert_eq!(make_rests(f64::INFINITY, 0.0, 4.0), Vec::<String>::new());
+        assert_eq!(make_rests(f64::NAN, 0.0, 4.0), Vec::<String>::new());
+        assert_eq!(make_rests(f64::NEG_INFINITY, 0.0, 4.0), Vec::<String>::new());
+        // Non-positive gaps also yield no rests.
+        assert_eq!(make_rests(0.0, 0.0, 4.0), Vec::<String>::new());
+        assert_eq!(make_rests(-2.0, 0.0, 4.0), Vec::<String>::new());
+    }
+
+    #[test]
+    fn make_rests_fills_finite_gap() {
+        // A normal finite gap still decomposes into rest tokens as before.
+        let rests = make_rests(4.0, 0.0, 4.0);
+        assert_eq!(rests, vec!["r1".to_string()]);
+        let rests = make_rests(1.5, 0.0, 4.0);
+        assert_eq!(rests, vec!["r4.".to_string()]);
+    }
+
+    #[test]
+    fn render_note_sequence_handles_finite_score() {
+        // A finite score still renders notes with rests filling the gaps and
+        // bar lines inserted — no regression from the make_rests guard.
+        let c4 = Pitch::from_midi(60);
+        let events = vec![
+            NoteEvent {
+                beat: 0.0,
+                pitch: Some(c4),
+                duration_beats: 1.0,
+                voice_name: "piano".to_string(),
+                voice_label: None,
+                velocity: 1.0,
+                source: None,
+            },
+            NoteEvent {
+                beat: 2.0,
+                pitch: Some(c4),
+                duration_beats: 1.0,
+                voice_name: "piano".to_string(),
+                voice_label: None,
+                velocity: 1.0,
+                source: None,
+            },
+        ];
+        let refs: Vec<&NoteEvent> = events.iter().collect();
+        let config = ExportConfig {
+            score_path: String::new(),
+            output: String::new(),
+            format: crate::export::ExportFormat::Lilypond,
+            voice_filter: None,
+            source_filter: None,
+            from_beat: None,
+            to_beat: None,
+            time_sig: "4/4".to_string(),
+            key: None,
+            title: None,
+        };
+        let seq = render_note_sequence(&refs, 4.0, &config);
+        // Two quarter notes at beats 0 and 2, with quarter rests filling the
+        // gap between them (beats 1..2) and the tail of the bar (beats 3..4).
+        assert_eq!(seq, "c'4 r4 c'4 r4");
     }
 }

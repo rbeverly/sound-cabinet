@@ -256,6 +256,17 @@ impl SongFile {
                     part.motif.contour.len()
                 ));
             }
+            if !part.motif.emphasis.is_empty()
+                && part.motif.emphasis.len() != part.motif.rhythm.len()
+            {
+                return Err(anyhow!(
+                    "Song '{}', part '{}': motif emphasis has {} entries but rhythm has {}",
+                    self.name,
+                    name,
+                    part.motif.emphasis.len(),
+                    part.motif.rhythm.len()
+                ));
+            }
         }
         super::rhythm::parse_time_sig(&self.time)?;
         Ok(())
@@ -402,10 +413,283 @@ contour: [root, step_up]
     }
 
     #[test]
+    fn test_song_part_emphasis_mismatch_rejected() {
+        // A song part whose motif emphasis length disagrees with its rhythm
+        // length must be rejected at load, naming the offending part.
+        let yaml = r#"
+name: Evil
+time: "4/4"
+parts:
+  verse:
+    motif:
+      rhythm: ["1/4", "1/4"]
+      contour: [root, step_up]
+      emphasis: [strong]
+    structure: [return]
+arrangement: [verse]
+"#;
+        let result = SongFile::from_yaml(yaml);
+        assert!(
+            result.is_err(),
+            "expected mismatched motif emphasis to be rejected"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("verse") && msg.contains("emphasis"),
+            "error should identify the part and emphasis mismatch, got: {msg}"
+        );
+    }
+
+    #[test]
     fn test_emphasis_to_velocity() {
         assert!((emphasis_to_velocity("strong") - 1.0).abs() < 1e-10);
         assert!((emphasis_to_velocity("weak") - 0.4).abs() < 1e-10);
         assert!((emphasis_to_velocity("ghost") - 0.2).abs() < 1e-10);
         assert!((emphasis_to_velocity("medium") - 0.7).abs() < 1e-10);
+    }
+
+    // -----------------------------------------------------------------------
+    // PatternFile::validate error paths
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn pattern_file_requires_rhythm_contour_or_motif() {
+        // A pattern file with neither a direct rhythm+contour pair nor a motif
+        // has no shape to generate from and must be rejected.
+        let yaml = r#"
+name: Shapeless
+type: bass
+time: "4/4"
+"#;
+        let result = PatternFile::from_yaml(yaml);
+        assert!(
+            result.is_err(),
+            "expected a shapeless pattern to be rejected"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("must have either rhythm+contour or motif"),
+            "error should name the missing shape, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn pattern_file_rejects_direct_emphasis_length_mismatch() {
+        // Direct pattern whose emphasis array disagrees with its rhythm length.
+        let yaml = r#"
+name: Bad Emphasis
+type: bass
+time: "4/4"
+rhythm:
+  hits: ["1/4", "1/4"]
+contour: [root, step_up]
+emphasis: [strong]
+"#;
+        let result = PatternFile::from_yaml(yaml);
+        assert!(
+            result.is_err(),
+            "expected emphasis/rhythm mismatch to be rejected"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("emphasis has 1 entries but rhythm has 2"),
+            "error should report the emphasis/rhythm mismatch, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn pattern_file_rejects_contour_rest_without_rhythm_rest() {
+        // A contour rest must align to a rhythm rest; a '~' in the contour with
+        // a sounding hit in the rhythm is the reverse of the case already
+        // covered by `test_rest_mismatch_rejected`.
+        let yaml = r#"
+name: Misaligned Rest
+type: bass
+time: "4/4"
+rhythm:
+  hits: ["1/4", "1/4"]
+contour: [root, "~"]
+"#;
+        let result = PatternFile::from_yaml(yaml);
+        assert!(
+            result.is_err(),
+            "expected a misaligned contour rest to be rejected"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("contour position 2 is '~'"),
+            "error should identify the misaligned contour position, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn pattern_file_rejects_motif_rhythm_contour_mismatch() {
+        // A motif whose rhythm and contour lengths disagree cannot be expanded.
+        let yaml = r#"
+name: Bad Motif
+type: bass
+time: "4/4"
+motif:
+  rhythm: ["1/4", "1/4"]
+  contour: [root]
+"#;
+        let result = PatternFile::from_yaml(yaml);
+        assert!(
+            result.is_err(),
+            "expected motif rhythm/contour mismatch to be rejected"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("motif rhythm has 2 entries but motif contour has 1"),
+            "error should report the motif rhythm/contour mismatch, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn pattern_file_rejects_motif_emphasis_length_mismatch() {
+        // A motif whose emphasis array disagrees with its rhythm length.
+        let yaml = r#"
+name: Bad Motif Emphasis
+type: bass
+time: "4/4"
+motif:
+  rhythm: ["1/4", "1/4"]
+  contour: [root, step_up]
+  emphasis: [strong]
+"#;
+        let result = PatternFile::from_yaml(yaml);
+        assert!(
+            result.is_err(),
+            "expected motif emphasis mismatch to be rejected"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("motif emphasis has 1 entries but motif rhythm has 2"),
+            "error should report the motif emphasis/rhythm mismatch, got: {msg}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // SongFile::validate error paths
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn song_file_rejects_empty_parts() {
+        // A song with no parts has nothing to arrange and must be rejected.
+        let yaml = r#"
+name: Empty Parts
+time: "4/4"
+parts: {}
+arrangement: [verse]
+"#;
+        let result = SongFile::from_yaml(yaml);
+        assert!(
+            result.is_err(),
+            "expected a song with no parts to be rejected"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("must have at least one part"),
+            "error should report the missing parts, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn song_file_rejects_empty_arrangement() {
+        // A song with one valid part but an empty arrangement plays nothing.
+        let yaml = r#"
+name: Empty Arrangement
+time: "4/4"
+parts:
+  verse:
+    motif:
+      rhythm: ["1/4", "1/4"]
+      contour: [root, step_up]
+arrangement: []
+"#;
+        let result = SongFile::from_yaml(yaml);
+        assert!(
+            result.is_err(),
+            "expected a song with an empty arrangement to be rejected"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("arrangement must have at least one entry"),
+            "error should report the empty arrangement, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn song_file_rejects_part_motif_rhythm_contour_mismatch() {
+        // A song part whose motif rhythm and contour lengths disagree must be
+        // rejected, naming the offending part.
+        let yaml = r#"
+name: Bad Part Motif
+time: "4/4"
+parts:
+  verse:
+    motif:
+      rhythm: ["1/4", "1/4"]
+      contour: [root]
+arrangement: [verse]
+"#;
+        let result = SongFile::from_yaml(yaml);
+        assert!(
+            result.is_err(),
+            "expected part motif rhythm/contour mismatch to be rejected"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("verse") && msg.contains("motif rhythm has 2 entries but contour has 1"),
+            "error should identify the part and the rhythm/contour mismatch, got: {msg}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // DrumPattern::validate error paths
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn drum_pattern_rejects_empty_voices() {
+        // A drum pattern with no voices produces no percussion and is rejected.
+        let yaml = r#"
+name: Silent Kit
+time: "4/4"
+voices: []
+"#;
+        let result = DrumPattern::from_yaml(yaml);
+        assert!(
+            result.is_err(),
+            "expected a drum pattern with no voices to be rejected"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("must have at least one voice"),
+            "error should report the missing voices, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn drum_pattern_rejects_emphasis_length_mismatch() {
+        // A drum voice whose emphasis array disagrees with its rhythm length.
+        let yaml = r#"
+name: Bad Kit
+time: "4/4"
+voices:
+  - voice: kick
+    pitch: A1
+    rhythm: ["1/4", "1/4"]
+    emphasis: [strong]
+"#;
+        let result = DrumPattern::from_yaml(yaml);
+        assert!(
+            result.is_err(),
+            "expected a drum voice emphasis mismatch to be rejected"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("emphasis has 1 entries but rhythm has 2"),
+            "error should report the voice emphasis/rhythm mismatch, got: {msg}"
+        );
     }
 }

@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, Result};
 use rand::Rng;
@@ -256,6 +256,8 @@ impl ExpansionContext {
         // active expansion stack. The guard pops on drop, including via `?`.
         let _guard = self.push_name(name)?;
         if let Some(p) = self.patterns.get(name) {
+            // Patterns cannot reference sections, so they never recurse — no
+            // cycle tracking is needed for them.
             let swing = p.swing.unwrap_or(global_swing);
             let humanize = p.humanize.unwrap_or(global_humanize);
             Ok(expand_pattern_events(&p.events, base_beat, swing, humanize, bpm, with_map, Some(name.to_string()), rng, gain_automation))
@@ -328,6 +330,13 @@ impl ExpansionContext {
                         Some(e) => *e,
                         None => self.duration_of_ref(pattern)?,
                     };
+                    // A non-positive interval never advances `beat`, spinning the
+                    // tiling loop forever and growing `output` without bound. Reject it.
+                    if every <= 0.0 {
+                        return Err(anyhow!(
+                            "section repeat interval must be positive, got {every} beats"
+                        ));
+                    }
                     let start = from_beat.unwrap_or(0.0);
                     let end = to_beat.unwrap_or(section_duration);
                     let abs_end = base_beat + end;
@@ -365,6 +374,13 @@ impl ExpansionContext {
                         Some(e) => *e,
                         None => self.duration_of_ref(pattern)?,
                     };
+                    // Same unbounded-loop guard as RepeatEvery: a non-positive
+                    // interval would never advance `b`.
+                    if every <= 0.0 {
+                        return Err(anyhow!(
+                            "section repeat interval must be positive, got {every} beats"
+                        ));
+                    }
                     let start = from_beat.unwrap_or(*beat);
                     let end = to_beat.unwrap_or(section_duration);
                     let abs_end = base_beat + end;
@@ -650,6 +666,12 @@ fn weighted_pick(
     rng: &mut impl Rng,
 ) -> String {
     let total: f64 = choices.iter().map(|c| c.weight).sum();
+    // Defense in depth: a non-positive total would make `gen_range(0.0..total)`
+    // sample an empty/invalid range and panic. Parsing rejects non-positive
+    // weights, but if one ever reaches here, fall back to the last choice.
+    if total <= 0.0 {
+        return choices.last().unwrap().name.clone();
+    }
     let mut r = rng.gen_range(0.0..total);
     for choice in choices {
         r -= choice.weight;
@@ -803,6 +825,62 @@ mod tests {
         }
     }
 
+    /// Build a script whose only section repeats a pattern at `every_beats`.
+    fn repeat_interval_script(every_beats: f64) -> Script {
+        Script {
+            commands: vec![
+                Command::PatternDef {
+                    name: "drums".into(),
+                    duration_beats: 4.0,
+                    events: vec![PatternEvent {
+                        beat_offset: 0.0,
+                        expr: Expr::VoiceRef("kick".into()),
+                        duration_beats: 0.5,
+                    }],
+                    swing: None,
+                    humanize: None,
+                },
+                Command::SectionDef {
+                    name: "verse".into(),
+                    duration_beats: Some(16.0),
+                    entries: vec![SectionEntry::RepeatEvery {
+                        pattern: PatternRef::Name("drums".into()),
+                        every_beats: Some(every_beats),
+                        from_beat: None,
+                        to_beat: None,
+                        with_map: None,
+                        gain: None,
+                    }],
+                    with_map: None,
+                },
+                Command::PlaySequential {
+                    pattern: PatternRef::Name("verse".into()),
+                    gain: None,
+                    fade_in: None,
+                    fade_out: None,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn expand_rejects_zero_repeat_interval() {
+        // A zero interval previously spun the tiling loop forever (DoS). It must
+        // now fail fast with an error rather than hang.
+        let script = repeat_interval_script(0.0);
+        let result = expand_script(script, &mut make_rng());
+        assert!(result.is_err(), "zero repeat interval must be rejected");
+        assert!(result.unwrap_err().to_string().contains("must be positive"));
+    }
+
+    #[test]
+    fn expand_rejects_negative_repeat_interval() {
+        let script = repeat_interval_script(-1.0);
+        let result = expand_script(script, &mut make_rng());
+        assert!(result.is_err(), "negative repeat interval must be rejected");
+        assert!(result.unwrap_err().to_string().contains("must be positive"));
+    }
+
     #[test]
     fn test_absolute_play_at_passes_through() {
         let script = Script {
@@ -922,6 +1000,76 @@ play loop
             result.is_err(),
             "expand_script should return Err for implicit self-cycle",
         );
+    }
+
+    #[test]
+    fn test_weighted_pick_zero_weight_does_not_panic() {
+        let choices = vec![WeightedChoice {
+            name: "a".into(),
+            weight: 0.0,
+        }];
+        let mut rng = make_rng();
+        // A non-positive total must not sample an empty range; the selector
+        // falls back to the last (here, only) choice.
+        assert_eq!(weighted_pick(&choices, &mut rng), "a");
+    }
+
+    #[test]
+    fn expand_allows_section_replayed_from_independent_positions() {
+        // The cycle stack is scoped to the call stack, NOT a global "seen" set:
+        // the same section may be played from multiple non-nested top-level
+        // positions. If the guard used a persistent set, the second `play verse`
+        // below would be wrongly rejected.
+        let script = Script {
+            commands: vec![
+                Command::PatternDef {
+                    name: "drums".into(),
+                    duration_beats: 4.0,
+                    events: vec![PatternEvent {
+                        beat_offset: 0.0,
+                        expr: Expr::VoiceRef("kick".into()),
+                        duration_beats: 0.5,
+                    }],
+                    swing: None,
+                    humanize: None,
+                },
+                Command::SectionDef {
+                    name: "verse".into(),
+                    duration_beats: Some(4.0),
+                    entries: vec![SectionEntry::Play {
+                        pattern: PatternRef::Name("drums".into()),
+                        with_map: None,
+                        gain: None,
+                    }],
+                    with_map: None,
+                },
+                Command::PlaySequential {
+                    pattern: PatternRef::Name("verse".into()),
+                    gain: None,
+                    fade_in: None,
+                    fade_out: None,
+                },
+                Command::PlaySequential {
+                    pattern: PatternRef::Name("verse".into()),
+                    gain: None,
+                    fade_in: None,
+                    fade_out: None,
+                },
+            ],
+        };
+        let mut rng = make_rng();
+        let expanded =
+            expand_script(script, &mut rng).expect("replaying a section must succeed");
+        // One PlayAt per top-level play of `verse`, at cursor 0 then 4.
+        assert_eq!(expanded.commands.len(), 2);
+        match &expanded.commands[0] {
+            Command::PlayAt { beat, .. } => assert_eq!(*beat, 0.0),
+            _ => panic!("Expected PlayAt"),
+        }
+        match &expanded.commands[1] {
+            Command::PlayAt { beat, .. } => assert_eq!(*beat, 4.0),
+            _ => panic!("Expected PlayAt"),
+        }
     }
 }
 

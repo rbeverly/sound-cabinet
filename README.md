@@ -153,6 +153,98 @@ Score files (`.sc`) are plain text. Lines starting with `//` are comments.
 ### Define sounds
 
 ```sc
+`generate --pattern` also accepts three other file kinds, auto-detected by content: **motif patterns** (a `motif` block developed by a `structure` list or `complexity` level), **song files** (a `parts` map plus an `arrangement`), and **drum patterns** (a `voices` list). The full schema for all four is in [docs/algorithmic-generation.md](docs/algorithmic-generation.md).
+
+```bash
+sound-cabinet generate \
+  --pattern patterns/bass/walking-jazz.yaml \
+  --key D --mode dorian \
+  --chords "Dm7 G7 Cmaj7 Am7" \
+  --voice bass \
+  --range C2-G3 \
+  --variations 5 \
+  --seed 42 \
+  -o bass-lines.sc
+```
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--pattern` | yes | Path to a YAML pattern file |
+| `--key` | yes | Root note (C, D, Bb, F#, etc.) |
+| `--mode` | yes | Scale mode (major, minor, dorian, mixolydian, blues, etc.) |
+| `--chords` | yes | Space-separated chord progression ("Dm7 G7 Cmaj7") |
+| `--voice` | yes | Instrument name for the output patterns |
+| `--range` | no | Pitch range, e.g. C2-G3 (defaults by type: bass=C2-G3, melody=C4-C6) |
+| `--variations` | no | Number of variations to generate (default: 5) |
+| `--seed` | no | RNG seed for reproducibility (default: random) |
+| `-o` | no | Output file path (default: stdout) |
+
+The output is standard `.sc` with named patterns (`bass_a`, `bass_b`, ...) ready to import and use:
+
+```sc
+import generated/bass-lines.sc
+
+section verse = 16 beats
+  repeat pick(bass_a, bass_b, bass_c) every 4 beats
+```
+
+23 starter patterns ship in `patterns/`, grouped by family:
+
+| Family | Kind | Files | Description |
+|--------|------|-------|-------------|
+| `bass/` | direct pattern | 5 | Bass lines — `walking-jazz`, `root-fifth-country`, `octave-pulse`, `4bar-anchor`, `4bar-walking-chromatic` |
+| `melody/` | direct pattern | 6 | Melodic phrases — `question-phrase`, `answer-phrase`, `4bar-arch`, `4bar-consequence`, `4bar-sentence`, `4bar-wandering` |
+| `accomp/` | direct pattern | 1 | Accompaniment — `alberti-bass` (classical arpeggiated chord pattern) |
+| `motif/` | motif pattern | 4 | Motif + structure/complexity — `folk-simple`, `pop-verse`, `jazz-exploration`, `lullaby` |
+| `song/` | song file | 3 | Multi-part `parts`/`arrangement` compositions — `verse-chorus-bridge`, `verse-refrain-folk`, `double-refrain` |
+| `drums/` | drum pattern | 4 | Percussion `voices` — `basic-rock`, `boom-bap`, `bossa-nova`, `waltz` |
+
+See [docs/algorithmic-generation.md](docs/algorithmic-generation.md) for the design and how to write your own patterns of every kind.
+
+### Sheet music export
+
+Export any `.sc` score as LilyPond notation for printing or sharing with musicians. The exporter extracts pitches, durations, and voice assignments from the expanded score and produces standard LilyPond `.ly` files.
+
+```bash
+# Export all voices
+sound-cabinet export song.sc -o song.ly --key Am --title "My Song"
+
+# Export one instrument only
+sound-cabinet export song.sc -o bass.ly --voice bass --key Am
+
+# Export events from a specific pattern
+sound-cabinet export song.sc -o verse.ly --source verse_a
+
+# Export a beat range (e.g., bars 1-8 in 4/4)
+sound-cabinet export song.sc -o intro.ly --from 0 --to 32
+
+# Render directly to PDF (requires LilyPond: brew install lilypond)
+sound-cabinet export song.sc -o song.pdf --key Am
+```
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `-o` | yes | Output file (.ly or .pdf) |
+| `--key` | no | Key signature (Am, D, Bb, F#m, etc.) |
+| `--voice` | no | Export only this voice/instrument |
+| `--source` | no | Export only events from this pattern name |
+| `--from` | no | Start beat |
+| `--to` | no | End beat |
+| `--time` | no | Time signature (default: 4/4) |
+| `--title` | no | Title for the score header |
+| `--format` | no | `lilypond` (default) or `pdf` |
+
+The exporter auto-detects clefs from pitch range (treble for melody, bass for low voices), quantizes timing to the 16th-note grid, fills gaps with rests, and splits notes across bar lines with ties.
+
+## The Score Format
+
+Score files (`.sc`) are plain text. Lines starting with `//` are comments. Blank lines are ignored.
+
+### Basics
+
+#### Set tempo
+
+```
 bpm 120
 
 // A voice is a complete signal graph
@@ -172,9 +264,23 @@ voice hat = noise() >> highpass(8000) >> decay(25) >> pan(0.6)  // right
 
 All output is stereo (2-channel WAV). Without `pan()`, voices play center. `pan()` uses equal-power panning: -1.0 = full left, 0.0 = center, 1.0 = full right.
 
+### Tempo changes
+
+```
+bpm 78
+play intro
+play verse
+
+bpm 82
+play chorus
+
+bpm 78
+play bridge
+```
+
 ### Custom waveforms
 
-```sc
+```
 // Define arbitrary wave shapes — the array is one cycle, played at any frequency
 wave plateau = [0.0, 0.4, 0.8, 1.0, 1.0, 1.0, 0.8, 0.4, 0.0, -0.4, -0.8, -1.0, -1.0, -1.0, -0.8, -0.4]
 wave spike = [0.0, 1.0, 0.3, 0.1, 0.0, -0.1, -0.3, -1.0]
@@ -187,7 +293,7 @@ Fewer points = crunchier (8-bit character). More points = smoother. Asymmetric w
 
 ### Schedule playback
 
-```sc
+```
 // Play at specific beats
 at 0 play pad for 4 beats
 at 0 play piano(C4) for 2 beats
@@ -202,7 +308,7 @@ at 0 play piano(C4, E4, G4) for 2 beats
 
 ### Patterns and sections
 
-```sc
+```
 // Patterns group events with relative timing
 pattern drums = 4 beats
   at 0 play kick for 0.5 beats
@@ -246,37 +352,23 @@ repeat 8 {
 }
 ```
 
-### Tempo changes
-
-```sc
-bpm 78
-play intro
-play verse
-
-bpm 82
-play chorus
-
-bpm 78
-play bridge
-```
-
 ### Voice substitution
 
-```sc
+```
 with kick = 808_kick, snare = clap
 play drums   // uses substituted voices
 ```
 
 ### Arpeggiator
 
-```sc
+```
 voice pluck = 0.3 * saw(0) >> lowpass(2000, 0.8) >> decay(10)
 at 0 play pluck >> arp(C:m7, 4, updown, gate, 0.5) for 8 beats
 ```
 
 ### Sustain pedal
 
-```sc
+```
 pedal down at 4.0                      // sustain all voices
 pedal down piano at 4.0                // sustain only piano
 pedal down [piano, strings] at 4.0     // sustain multiple voices
@@ -285,7 +377,7 @@ pedal up piano at 8.0
 
 ### Mixing
 
-```sc
+```
 // Normalize instruments to consistent levels
 normalize bass 0.5
 normalize piano 0.5
@@ -326,7 +418,7 @@ See [Expressions & Effects](docs/expressions.md) for the full reference.
 
 Patterns cannot contain other patterns or sections. A pattern is a flat list of events:
 
-```sc
+```
 // WRONG:
 pattern verse = 8 beats
   pattern melody = 4 beats       // nesting not supported
@@ -341,7 +433,7 @@ section verse = 8 beats
 
 ### Playing patterns in alternation
 
-```sc
+```
 // WRONG — both play simultaneously (at section beat 0):
 section broken = 16 beats
   play pattern_a
@@ -367,7 +459,7 @@ Use `sound-cabinet profile song.sc` to check levels. Or use `normalize` to auto-
 
 ### Forgetting that `with` is not `play`
 
-```sc
+```
 // WRONG — defines substitutions but never plays:
 with kick = 808_kick, snare = clap
 
@@ -378,7 +470,7 @@ play drums_pattern
 
 ### Effects without a source
 
-```sc
+```
 // WRONG — reverb of nothing:
 at 0 play reverb(0.8, 0.4, 0.3) for 4 beats
 
@@ -458,15 +550,3 @@ Starter patterns ship in `patterns/`:
 | `accomp/alberti-bass` | accomp | Classical arpeggiated chord pattern |
 
 See [Algorithmic Generation](docs/algorithmic-generation.md) for the full design and how to write patterns.
-
-## Sheet Music Export
-
-Export any `.sc` score as LilyPond notation or PDF:
-
-```bash
-sound-cabinet export song.sc -o song.pdf --key Am --title "My Song"
-sound-cabinet export song.sc -o bass.ly --voice bass --key Am
-sound-cabinet export song.sc -o verse.ly --source verse_a --from 0 --to 32
-```
-
-Requires [LilyPond](https://lilypond.org/) for PDF output (`brew install lilypond`).

@@ -368,6 +368,9 @@ impl Engine {
                 self.wavetables.insert(name, samples);
             }
             Command::SetBpm { bpm, at_beat } => {
+                if !(bpm.is_finite() && bpm > 0.0) {
+                    return Err(anyhow::anyhow!("bpm must be a positive number"));
+                }
                 let change_beat = at_beat.unwrap_or(0.0);
                 if (bpm - self.bpm).abs() > 0.001 && change_beat > 0.0 {
                     // Mid-score tempo change — add to tempo map
@@ -1285,9 +1288,11 @@ impl Engine {
                 fade_in.min(fade_out)
             });
 
-            // Accent: boost every Nth step
+            // Accent: boost every Nth step. Guard `n > 0` so a zero divisor can
+            // never reach `i % n` (defense in depth; parse_arp_options already
+            // rejects accent < 1).
             let accent_gain = if let Some(n) = opts.accent_every {
-                if i % n == 0 { 1.5 } else { 0.7 }
+                if n > 0 && i % n == 0 { 1.5 } else { 0.7 }
             } else {
                 1.0
             };
@@ -1375,6 +1380,68 @@ mod tests {
         assert_eq!(engine.beats_to_samples(1.0), 22050);
         assert_eq!(engine.beats_to_samples(4.0), 88200);
         assert_eq!(engine.beats_to_samples(0.0), 0);
+    }
+
+    #[test]
+    fn test_zero_bpm_is_rejected() {
+        let mut engine = Engine::new(44100.0);
+        let before = engine.bpm;
+        assert!(engine
+            .handle_command(Command::SetBpm { bpm: 0.0, at_beat: None })
+            .is_err());
+        // Tempo unchanged: the rejected value is never stored.
+        assert_eq!(engine.bpm, before);
+    }
+
+    #[test]
+    fn test_negative_bpm_is_rejected() {
+        let mut engine = Engine::new(44100.0);
+        assert!(engine
+            .handle_command(Command::SetBpm { bpm: -120.0, at_beat: None })
+            .is_err());
+    }
+
+    #[test]
+    fn test_valid_bpm_still_renders() {
+        let mut engine = Engine::new(44100.0);
+        assert!(engine
+            .handle_command(Command::SetBpm { bpm: 120.0, at_beat: None })
+            .is_ok());
+        // 1 beat at 120 BPM = 0.5s = 22050 samples at 44100 Hz.
+        assert_eq!(engine.beats_to_samples(1.0), 22050);
+    }
+
+    #[test]
+    fn test_zero_bpm_schedules_no_saturated_event() {
+        let mut engine = Engine::new(44100.0);
+        // A real command driver `?`-propagates the first error, so a bad bpm
+        // aborts before any PlayAt is handled. Mirror that here.
+        let script = vec![
+            Command::SetBpm { bpm: 0.0, at_beat: None },
+            Command::PlayAt {
+                beat: 0.0,
+                expr: Expr::FnCall {
+                    name: "sine".into(),
+                    args: vec![Expr::Number(440.0)],
+                },
+                duration_beats: 4.0,
+                source: None,
+                voice_label: None,
+                velocity: 1.0,
+            },
+        ];
+        let mut err = None;
+        for cmd in script {
+            if let Err(e) = engine.handle_command(cmd) {
+                err = Some(e);
+                break;
+            }
+        }
+        // The bad bpm surfaced an error...
+        assert!(err.is_some());
+        // ...so no event (with a saturated end_sample) was ever scheduled,
+        // and the render loop has nothing to spin on.
+        assert!(engine.schedule.is_empty());
     }
 
     #[test]
@@ -1467,7 +1534,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("rate {bad_rate} should produce Err"));
             let msg = format!("{err}");
             assert!(
-                msg.contains("must be a finite positive number"),
+                msg.contains("must be a positive number"),
                 "unexpected error message for rate {bad_rate}: {msg}"
             );
         }
@@ -1487,6 +1554,117 @@ mod tests {
             msg.contains("duration must be a finite positive number"),
             "unexpected error message: {msg}"
         );
+    }
+
+    #[test]
+    fn test_arp_accent_zero_rejected_at_parse() {
+        // arp(C4, 4, accent, 0) — accent value of 0 would cause `i % 0` panic.
+        let args = vec![
+            Expr::Number(261.63),
+            Expr::Number(4.0),
+            Expr::VoiceRef("accent".into()),
+            Expr::Number(0.0),
+        ];
+        let result = parse_arp_options(&args);
+        assert!(result.is_err(), "accent 0 should be rejected");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("accent") && msg.contains("positive integer"),
+            "error should mention accent must be a positive integer, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_arp_accent_negative_rejected_at_parse() {
+        // arp(C4, 4, accent, -1) — negative saturates to 0 on `as usize`.
+        let args = vec![
+            Expr::Number(261.63),
+            Expr::Number(4.0),
+            Expr::VoiceRef("accent".into()),
+            Expr::Number(-1.0),
+        ];
+        let result = parse_arp_options(&args);
+        assert!(result.is_err(), "negative accent should be rejected");
+    }
+
+    #[test]
+    fn test_arp_accent_zero_play_command_errors_without_panic() {
+        // Scheduling `sine(440) >> arp(C4, 4, accent, 0)` must return Err, not panic.
+        let mut engine = Engine::new(44100.0);
+        let arp = Expr::FnCall {
+            name: "arp".into(),
+            args: vec![
+                Expr::VoiceRef("C4".into()),
+                Expr::Number(4.0),
+                Expr::VoiceRef("accent".into()),
+                Expr::Number(0.0),
+            ],
+        };
+        let sine = Expr::FnCall {
+            name: "sine".into(),
+            args: vec![Expr::Number(440.0)],
+        };
+        let expr = Expr::Pipe(Box::new(sine), Box::new(arp));
+        let result = engine.handle_command(Command::PlayAt {
+            beat: 0.0,
+            expr,
+            duration_beats: 4.0,
+            source: None,
+            voice_label: None,
+            velocity: 1.0,
+        });
+        assert!(result.is_err(), "accent 0 play command should return Err");
+    }
+
+    #[test]
+    fn test_arp_accent_two_still_parses() {
+        // Regression: a valid accent value (>= 1) is honored as before.
+        let args = vec![
+            Expr::Number(261.63),
+            Expr::Number(4.0),
+            Expr::VoiceRef("accent".into()),
+            Expr::Number(2.0),
+        ];
+        let opts = parse_arp_options(&args).expect("accent 2 should parse");
+        assert_eq!(opts.accent_every, Some(2));
+    }
+
+    #[test]
+    fn test_arp_rate_zero_rejected() {
+        // `arp(C4, 0)`: a zero rate must be rejected, not silently scheduled
+        // as zero steps.
+        let args = vec![Expr::VoiceRef("C4".into()), Expr::Number(0.0)];
+        assert!(parse_arp_options(&args).is_err(), "zero rate should be rejected");
+    }
+
+    #[test]
+    fn test_arp_rate_negative_rejected() {
+        let args = vec![Expr::VoiceRef("C4".into()), Expr::Number(-4.0)];
+        assert!(parse_arp_options(&args).is_err(), "negative rate should be rejected");
+    }
+
+    #[test]
+    fn test_arp_rate_non_finite_rejected_without_panic() {
+        // A non-finite rate would saturate total_steps to usize::MAX and
+        // overflow Vec::with_capacity; it must return Err, not panic.
+        let args = vec![Expr::VoiceRef("C4".into()), Expr::Number(f64::INFINITY)];
+        assert!(parse_arp_options(&args).is_err(), "non-finite rate should be rejected");
+    }
+
+    #[test]
+    fn test_arp_rate_four_still_parses() {
+        // Regression: a valid rate is honored as before.
+        let args = vec![Expr::VoiceRef("C4".into()), Expr::Number(4.0)];
+        let opts = parse_arp_options(&args).expect("rate 4 should parse");
+        assert_eq!(opts.rate_start, 4.0);
+        assert_eq!(opts.rate_end, None);
+    }
+
+    #[test]
+    fn test_arp_rate_range_nonpositive_endpoint_rejected() {
+        // A rate range with a non-positive endpoint must be rejected.
+        let args = vec![Expr::VoiceRef("C4".into()), Expr::Range(4.0, 0.0)];
+        assert!(parse_arp_options(&args).is_err(), "range with 0 endpoint should be rejected");
     }
 }
 
@@ -1640,10 +1818,21 @@ fn parse_arp_options(args: &[Expr]) -> Result<ArpOptions> {
 
     let rate_idx = rate_idx.ok_or_else(|| anyhow::anyhow!("arp: could not find rate argument"))?;
 
-    // Extract rate
+    // Extract rate. A non-finite or non-positive rate would either size the
+    // step buffer to usize::MAX (allocation panic) or schedule zero steps
+    // (silent no-op), so reject it before it is stored.
+    let positive = |r: f64| r.is_finite() && r > 0.0;
     match &args[rate_idx] {
-        Expr::Number(v) => opts.rate_start = *v,
+        Expr::Number(v) => {
+            if !positive(*v) {
+                return Err(anyhow::anyhow!("arp: rate must be a positive number"));
+            }
+            opts.rate_start = *v;
+        }
         Expr::Range(start, end) => {
+            if !positive(*start) || !positive(*end) {
+                return Err(anyhow::anyhow!("arp: rate must be a positive number"));
+            }
             opts.rate_start = *start;
             opts.rate_end = Some(*end);
         }
@@ -1693,6 +1882,15 @@ fn parse_arp_options(args: &[Expr]) -> Result<ArpOptions> {
                 } else if name == "accent" {
                     oi += 1;
                     if let Some(Expr::Number(v)) = option_args.get(oi) {
+                        // `accent` boosts every Nth step via `i % n`, so `n` must be
+                        // a positive integer. `*v < 1.0` covers `0` and negatives
+                        // (which would otherwise saturate to `0` on `as usize` and
+                        // cause a remainder-by-zero panic at the use site).
+                        if *v < 1.0 {
+                            return Err(anyhow::anyhow!(
+                                "arp: 'accent' must be a positive integer"
+                            ));
+                        }
                         opts.accent_every = Some(*v as usize);
                     } else {
                         return Err(anyhow::anyhow!("arp: 'accent' requires a number"));
