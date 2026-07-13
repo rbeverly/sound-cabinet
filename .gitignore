@@ -43,3 +43,6 @@ Thumbs.db
 __pycache__/
 *.pyc
 *.egg-info/
+
+# Local agent settings
+.claude/settings.local.json
