@@ -392,7 +392,7 @@ impl Engine {
                 let start_sample = self.beats_to_samples(beat);
 
                 // Check for arpeggiator: arp(...) or arp(...) >> swell(...)
-                if self.try_handle_arp(&expr, start_sample, duration_beats, voice_label.clone(), extract_voice_label(&expr))?.is_some() {
+                if self.try_handle_arp(&expr, start_sample, duration_beats, velocity as f32, voice_label.clone(), extract_voice_label(&expr))?.is_some() {
                     // Arpeggiator handled — sub-events already scheduled
                 } else {
                     let duration_samples = self.beats_to_samples(duration_beats);
@@ -415,7 +415,7 @@ impl Engine {
                         duration_secs,
                         net,
                         swell,
-                        gain: 1.0,
+                        gain: velocity as f32,
                         source,
                         logged: false,
                         bus_name,
@@ -601,7 +601,7 @@ impl Engine {
                 let offset = self.beats_to_samples(beat);
                 let start_sample = self.current_sample + offset;
 
-                if let Some(_) = self.try_handle_arp(&expr, start_sample, duration_beats, voice_label.clone(), extract_voice_label(&expr))? {
+                if let Some(_) = self.try_handle_arp(&expr, start_sample, duration_beats, velocity as f32, voice_label.clone(), extract_voice_label(&expr))? {
                     // Arpeggiator handled
                 } else {
                     let duration_samples = self.beats_to_samples(duration_beats);
@@ -624,7 +624,7 @@ impl Engine {
                         duration_secs,
                         net,
                         swell,
-                        gain: 1.0,
+                        gain: velocity as f32,
                         source,
                         logged: false,
                         bus_name,
@@ -1083,6 +1083,7 @@ impl Engine {
         expr: &Expr,
         base_start: u64,
         duration_beats: f64,
+        velocity: f32,
         voice_label: Option<String>,
         voice_resolved: Option<String>,
     ) -> Result<Option<()>> {
@@ -1297,7 +1298,7 @@ impl Engine {
                 1.0
             };
 
-            let step_gain = sub_swell_gain.unwrap_or(1.0) as f32 * accent_gain as f32;
+            let step_gain = sub_swell_gain.unwrap_or(1.0) as f32 * accent_gain as f32 * velocity;
 
             self.schedule.push(ScheduledEvent {
                 start_sample: start,

@@ -181,8 +181,12 @@ fn try_parse_command(line: &str) -> Result<Option<Command>> {
     if line.starts_with("play ") && !line.contains(" for ") {
         if let Ok(pairs) = ScoreParser::parse(Rule::play_stmt, line) {
             for pair in pairs {
-                let pref = parse_pattern_ref(pair.into_inner().next().unwrap())?;
-                return Ok(Some(Command::PlaySequential { pattern: pref, gain: None, fade_in: None, fade_out: None }));
+                let mut inner = pair.into_inner();
+                let pref = parse_pattern_ref(inner.next().unwrap())?;
+                let gain = parse_optional_gain(&mut inner)?;
+                let fade_in = parse_optional_fade_in(&mut inner)?;
+                let fade_out = parse_optional_fade_out(&mut inner)?;
+                return Ok(Some(Command::PlaySequential { pattern: pref, gain, fade_in, fade_out }));
             }
         }
     }
@@ -773,7 +777,8 @@ fn parse_section_entry(line: &str) -> Result<SectionEntry> {
                 let beat: f64 = ei.next().unwrap().as_str().parse()?;
                 let pref = parse_pattern_ref(ei.next().unwrap())?;
                 let entry_with = parse_optional_with(&mut ei);
-                Ok(SectionEntry::AtPlay { beat, pattern: pref, with_map: entry_with, gain: None })
+                let gain = parse_optional_gain(&mut ei)?;
+                Ok(SectionEntry::AtPlay { beat, pattern: pref, with_map: entry_with, gain })
             }
         } else if line.contains(" repeat ") {
             let entry_pairs = ScoreParser::parse(Rule::section_entry_at_repeat, line)
@@ -807,13 +812,14 @@ fn parse_section_entry(line: &str) -> Result<SectionEntry> {
         let pref = parse_pattern_ref(ei.next().unwrap())?;
         let (every, from, to) = parse_repeat_modifiers(&mut ei);
         let entry_with = parse_optional_with(&mut ei);
+        let gain = parse_optional_gain(&mut ei)?;
         Ok(SectionEntry::RepeatEvery {
             pattern: pref,
             every_beats: every,
             from_beat: from,
             to_beat: to,
             with_map: entry_with,
-            gain: None,
+            gain,
         })
     } else if line.starts_with("play ") {
         let entry_pairs = ScoreParser::parse(Rule::section_entry_play, line)
@@ -821,6 +827,7 @@ fn parse_section_entry(line: &str) -> Result<SectionEntry> {
         let entry_pair = entry_pairs.into_iter().next().unwrap();
         let mut ei = entry_pair.into_inner();
         let pref = parse_pattern_ref(ei.next().unwrap())?;
+        let gain = parse_optional_gain(&mut ei)?;
         // Check for play_from modifier: "play melody from 8" => AtPlay
         let mut play_from_beat: Option<f64> = None;
         let mut remaining_pairs: Vec<Pair<Rule>> = Vec::new();
@@ -843,9 +850,9 @@ fn parse_section_entry(line: &str) -> Result<SectionEntry> {
             wm
         };
         if let Some(beat) = play_from_beat {
-            Ok(SectionEntry::AtPlay { beat, pattern: pref, with_map: entry_with, gain: None })
+            Ok(SectionEntry::AtPlay { beat, pattern: pref, with_map: entry_with, gain })
         } else {
-            Ok(SectionEntry::Play { pattern: pref, with_map: entry_with, gain: None })
+            Ok(SectionEntry::Play { pattern: pref, with_map: entry_with, gain })
         }
     } else if line.starts_with("sequence ") {
         let entry_pairs = ScoreParser::parse(Rule::section_entry_sequence, line)
@@ -885,7 +892,9 @@ fn parse_repeat_modifiers(pairs: &mut pest::iterators::Pairs<Rule>) -> (Option<f
     let mut from = None;
     let mut to = None;
 
-    for pair in pairs {
+    // Scan a clone so the with_clause/gain_clause that follows stays visible
+    // to parse_optional_with / parse_optional_gain.
+    for pair in pairs.clone() {
         match pair.as_rule() {
             Rule::repeat_modifier => {
                 let inner = pair.into_inner().next().unwrap();

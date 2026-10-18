@@ -534,6 +534,26 @@ fn expand_pattern_events(events: &[PatternEvent], base_beat: f64, swing: f64, hu
         .collect()
 }
 
+/// Scale event velocities by a linear fade in from `start` and/or fade out
+/// toward `start + duration`. Like gain automation, the factor is sampled at
+/// each event's onset, so a single sustained note keeps one level throughout.
+fn apply_fades(events: &mut [Command], start: f64, duration: f64, fade_in: Option<f64>, fade_out: Option<f64>) {
+    if fade_in.is_none() && fade_out.is_none() {
+        return;
+    }
+    let end = start + duration;
+    for cmd in events.iter_mut() {
+        if let Command::PlayAt { beat, velocity, .. } = cmd {
+            if let Some(len) = fade_in.filter(|l| *l > 0.0) {
+                *velocity *= ((*beat - start) / len).clamp(0.0, 1.0);
+            }
+            if let Some(len) = fade_out.filter(|l| *l > 0.0) {
+                *velocity *= ((end - *beat) / len).clamp(0.0, 1.0);
+            }
+        }
+    }
+}
+
 /// Expand a script containing patterns, sections, repeat blocks, pick, and shuffle
 /// into a flat script of VoiceDef, SetBpm, and PlayAt commands.
 pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
@@ -605,14 +625,15 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
                 ctx.sections
                     .insert(name, SectionInfo { duration_beats, entries, with_map });
             }
-            Command::PlaySequential { pattern, gain, fade_in: _, fade_out: _ } => {
+            Command::PlaySequential { pattern, gain, fade_in, fade_out } => {
                 // Each top-level statement is its own recursive descent: clear
                 // the cycle-tracking stack so independent `play` statements
                 // that reference the same non-cyclic section do not collide.
                 ctx.active_stack.borrow_mut().clear();
                 let duration = ctx.duration_of_ref(&pattern)?;
                 ctx.active_stack.borrow_mut().clear();
-                let events = ctx.expand_pattern_ref(&pattern, cursor, global_swing, global_humanize, bpm, &global_with, rng, gain.as_ref())?;
+                let mut events = ctx.expand_pattern_ref(&pattern, cursor, global_swing, global_humanize, bpm, &global_with, rng, gain.as_ref())?;
+                apply_fades(&mut events, cursor, duration, fade_in, fade_out);
                 output.extend(events);
                 cursor += duration;
             }
@@ -1071,5 +1092,94 @@ play loop
             _ => panic!("Expected PlayAt"),
         }
     }
-}
 
+    /// Expand `source` and return the velocity of every PlayAt, in beat order.
+    fn velocities(source: &str) -> Vec<(f64, f64)> {
+        let script = crate::dsl::parser::parse_script(source).unwrap();
+        let out = expand_script(script, &mut make_rng()).unwrap();
+        let mut v: Vec<(f64, f64)> = out
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                Command::PlayAt { beat, velocity, .. } => Some((*beat, *velocity)),
+                _ => None,
+            })
+            .collect();
+        v.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        v
+    }
+
+    const FOUR_HITS: &str = "\
+voice tone = sine(440)
+pattern hits = 4 beats
+  at 0 play tone for 1 beats
+  at 1 play tone for 1 beats
+  at 2 play tone for 1 beats
+  at 3 play tone for 1 beats
+";
+
+    #[test]
+    fn section_play_gain_points_reach_events() {
+        let source = format!("{FOUR_HITS}
+section coda = 4 beats
+  play hits gain [0: 1.0, 4: 0.0]
+
+play coda
+");
+        let vels: Vec<f64> = velocities(&source).into_iter().map(|(_, v)| v).collect();
+        assert_eq!(vels, vec![1.0, 0.75, 0.5, 0.25]);
+    }
+
+    #[test]
+    fn section_repeat_and_at_play_gain_reach_events() {
+        let source = format!("{FOUR_HITS}
+section s = 8 beats
+  repeat hits every 4 beats gain 0.5
+  at 0 play hits gain 0.25
+
+play s
+");
+        let vels = velocities(&source);
+        assert!(vels.iter().all(|(_, v)| *v == 0.5 || *v == 0.25), "got {vels:?}");
+        assert_eq!(vels.iter().filter(|(_, v)| *v == 0.25).count(), 4);
+    }
+
+    #[test]
+    fn section_at_repeat_gain_and_with_survive_repeat_modifiers() {
+        let source = format!("{FOUR_HITS}voice other = sine(220)
+section s = 8 beats
+  at 4 repeat hits every 4 beats with {{tone = other}} gain 0.5
+
+play s
+");
+        let script = crate::dsl::parser::parse_script(&source).unwrap();
+        let out = expand_script(script, &mut make_rng()).unwrap();
+        let events: Vec<_> = out.commands.iter().filter_map(|c| match c {
+            Command::PlayAt { expr, velocity, .. } => Some((expr.clone(), *velocity)),
+            _ => None,
+        }).collect();
+        assert_eq!(events.len(), 4);
+        for (expr, vel) in events {
+            assert_eq!(vel, 0.5);
+            assert!(matches!(expr, Expr::VoiceRef(ref n) if n == "other"), "with not applied: {expr:?}");
+        }
+    }
+
+    #[test]
+    fn top_level_play_gain_and_fade_out() {
+        let source = format!("{FOUR_HITS}
+play hits gain 0.5 fade out 4 beats
+");
+        let vels: Vec<f64> = velocities(&source).into_iter().map(|(_, v)| v).collect();
+        assert_eq!(vels, vec![0.5, 0.375, 0.25, 0.125]);
+    }
+
+    #[test]
+    fn top_level_play_fade_in() {
+        let source = format!("{FOUR_HITS}
+play hits fade in 4 beats
+");
+        let vels: Vec<f64> = velocities(&source).into_iter().map(|(_, v)| v).collect();
+        assert_eq!(vels, vec![0.0, 0.25, 0.5, 0.75]);
+    }
+}
