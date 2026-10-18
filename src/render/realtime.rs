@@ -26,6 +26,25 @@ pub enum EnvNoiseProfile {
     Subway,
 }
 
+/// Sample rate of the default output device. Live engines must be built at
+/// this rate: the stream doesn't resample, so a 44.1 kHz engine on a 48 kHz
+/// device plays ~9% fast and ~1.5 semitones sharp.
+pub fn output_sample_rate() -> Result<f64> {
+    let device = cpal::default_host()
+        .default_output_device()
+        .ok_or_else(|| anyhow::anyhow!("No output audio device found"))?;
+    Ok(device.default_output_config()?.sample_rate().0 as f64)
+}
+
+fn ensure_rate_matches(engine_rate: f64, device_rate: f64) -> Result<()> {
+    if (engine_rate - device_rate).abs() > 0.5 {
+        anyhow::bail!(
+            "Engine sample rate ({engine_rate} Hz) does not match the output device ({device_rate} Hz); playback would run at the wrong speed and pitch"
+        );
+    }
+    Ok(())
+}
+
 /// Play the engine's scheduled events through the default audio output.
 pub fn play_realtime(engine: Engine) -> Result<()> {
     play_realtime_inner(engine, MonitorFlags::default())
@@ -204,6 +223,7 @@ fn play_realtime_inner(engine: Engine, flags: MonitorFlags) -> Result<()> {
     let sample_format = supported.sample_format();
     let channels = supported.channels();
     let sample_rate = supported.sample_rate().0 as f64;
+    ensure_rate_matches(engine.sample_rate, sample_rate)?;
 
     // Use a fixed buffer size to avoid underruns with complex compositions
     let stream_config = StreamConfig {
@@ -440,6 +460,7 @@ pub fn play_streaming(
     let supported = device.default_output_config()?;
     let sample_format = supported.sample_format();
     let channels = supported.channels();
+    ensure_rate_matches(engine.lock().unwrap().sample_rate, supported.sample_rate().0 as f64)?;
 
     let stream_config = StreamConfig {
         channels,

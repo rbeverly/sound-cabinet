@@ -13,6 +13,8 @@ use sound_cabinet::stream::channel::EngineMsg;
 use sound_cabinet::stream::dispatcher::run_dispatcher;
 use sound_cabinet::stream::stdin_reader::run_stdin_reader;
 
+/// Sample rate for offline rendering (render/profile). Live modes use the
+/// output device's rate instead.
 const SAMPLE_RATE: f64 = 44100.0;
 
 fn main() -> Result<()> {
@@ -110,7 +112,7 @@ fn cmd_profile(args: &[String]) -> Result<()> {
     eprintln!("Profiling {}...", score_path);
 
     // First, do a full render to get combined levels
-    let mut engine = build_engine(score_path)?;
+    let mut engine = build_engine(score_path, SAMPLE_RATE)?;
 
     // Render all samples — accumulate both per-voice stats AND final output stats
     let mut left_buf = vec![0.0f32; 1024];
@@ -777,7 +779,7 @@ fn cmd_generate(args: &[String]) -> Result<()> {
 
 /// Parse, import, and load only definitions (voices, instruments, fx, waves, bpm)
 /// from a score file — no playback events scheduled.
-fn load_definitions(score_path: &str) -> Result<Engine> {
+fn load_definitions(score_path: &str, sample_rate: f64) -> Result<Engine> {
     use sound_cabinet::dsl::Command;
 
     let source = std::fs::read_to_string(score_path)?;
@@ -787,7 +789,7 @@ fn load_definitions(score_path: &str) -> Result<Engine> {
     let script = expand_script(script, &mut rand::thread_rng())?;
 
 
-    let mut engine = Engine::new(SAMPLE_RATE);
+    let mut engine = Engine::new(sample_rate);
     for cmd in script.commands {
         match &cmd {
             Command::VoiceDef { .. }
@@ -812,7 +814,7 @@ fn load_definitions(score_path: &str) -> Result<Engine> {
 }
 
 /// Parse, import, expand, and build an engine from a score file.
-fn build_engine(score_path: &str) -> Result<Engine> {
+fn build_engine(score_path: &str, sample_rate: f64) -> Result<Engine> {
     let source = std::fs::read_to_string(score_path)?;
     let script = parse_script(&source)?;
     let base_dir = Path::new(score_path).parent().unwrap_or(Path::new("."));
@@ -820,7 +822,7 @@ fn build_engine(score_path: &str) -> Result<Engine> {
     let script = expand_script(script, &mut rand::thread_rng())?;
 
 
-    let mut engine = Engine::new(SAMPLE_RATE);
+    let mut engine = Engine::new(sample_rate);
     for cmd in script.commands {
         engine.handle_command(cmd)?;
     }
@@ -888,7 +890,7 @@ fn cmd_render(args: &[String]) -> Result<()> {
     let score_path = score_path.ok_or_else(|| anyhow!(usage))?;
     let output_path = output_path.ok_or_else(|| anyhow!(usage))?;
 
-    let mut engine = build_engine(score_path)?;
+    let mut engine = build_engine(score_path, SAMPLE_RATE)?;
     // Apply solo filter
     if let Some(voice) = parse_flag_str(args, "--solo") {
         let voices: Vec<String> = voice.split(',').map(|s| s.trim().to_string()).collect();
@@ -930,7 +932,7 @@ fn cmd_play(args: &[String]) -> Result<()> {
         .find(|a| !a.starts_with('-') && !is_flag_value(args, a))
         .ok_or_else(|| anyhow!("Usage: sound-cabinet play <score.sc> [-v] [--vu] [--subfold] [--env car] [--from <beat>] [--solo <voice>]"))?;
 
-    let mut engine = build_engine(score_path)?;
+    let mut engine = build_engine(score_path, realtime::output_sample_rate()?)?;
     engine.verbose = verbose;
     if let Some(voice) = solo {
         let voices: Vec<String> = voice.split(',').map(|s| s.trim().to_string()).collect();
@@ -994,7 +996,9 @@ fn cmd_watch(args: &[String]) -> Result<()> {
         .to_path_buf();
 
     // Initial build
-    let mut engine = build_engine(&score_path)?;
+    // Live playback must match the output device's rate (see output_sample_rate).
+    let live_rate = realtime::output_sample_rate()?;
+    let mut engine = build_engine(&score_path, live_rate)?;
     engine.verbose = verbose;
     if let Some(beat) = from_beat {
         engine.skip_to_beat(beat);
@@ -1036,7 +1040,7 @@ fn cmd_watch(args: &[String]) -> Result<()> {
 
                 // Rebuild engine
                 eprintln!("\nFile changed, rebuilding...");
-                match build_engine(&score_path) {
+                match build_engine(&score_path, live_rate) {
                     Ok(mut new_engine) => {
                         new_engine.verbose = verbose;
                         if let Some(beat) = from_beat {
@@ -1209,7 +1213,7 @@ fn cmd_piano(args: &[String]) -> Result<()> {
         .map(|s| s.as_str());
 
     // Load definitions from the score file
-    let engine = load_definitions(score_path)?;
+    let engine = load_definitions(score_path, realtime::output_sample_rate()?)?;
 
     // Wrap in Arc<Mutex> for audio thread
     let engine = Arc::new(Mutex::new(engine));
@@ -1797,7 +1801,7 @@ fn next_recording_filename() -> String {
 
 /// Stream mode: read lines from stdin, play in real-time.
 fn cmd_stream() -> Result<()> {
-    let engine = Arc::new(Mutex::new(Engine::new(SAMPLE_RATE)));
+    let engine = Arc::new(Mutex::new(Engine::new(realtime::output_sample_rate()?)));
 
     // Channels: stdin_reader -> dispatcher -> engine
     let (line_tx, line_rx) = crossbeam_channel::unbounded::<String>();
