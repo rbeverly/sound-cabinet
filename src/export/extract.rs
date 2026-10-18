@@ -62,6 +62,7 @@ pub fn extract_notes(commands: &[Command]) -> ExtractedScore {
                 source,
                 voice_label,
                 velocity,
+                ..
             } => {
                 let (voice_name, freq_hz, gain) = extract_voice_and_freq(expr);
                 let pitch = freq_hz.map(Pitch::from_hz);
@@ -252,6 +253,7 @@ mod tests {
                 source: Some("verse_a".to_string()),
                 voice_label: None,
                 velocity: 1.0,
+                gain_curves: Vec::new(),
             },
             Command::PlayAt {
                 beat: 1.0,
@@ -260,6 +262,7 @@ mod tests {
                 source: Some("drums_a".to_string()),
                 voice_label: None,
                 velocity: 1.0,
+                gain_curves: Vec::new(),
             },
         ];
 

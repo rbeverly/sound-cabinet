@@ -84,6 +84,25 @@ pub struct PatternEvent {
 /// Voice substitution map: maps pattern voice names to actual voice/instrument names.
 pub type WithMap = HashMap<String, String>;
 
+/// Piecewise-linear gain over absolute score beats: `(beat, linear_gain)`,
+/// sorted by beat. Held flat before the first point and after the last.
+pub type GainCurve = Vec<(f64, f64)>;
+
+/// Evaluate a gain curve at `beat`.
+pub fn gain_curve_at(curve: &[(f64, f64)], beat: f64) -> f64 {
+    match curve {
+        [] => 1.0,
+        [(b0, v0), ..] if beat <= *b0 => *v0,
+        [.., (bn, vn)] if beat >= *bn => *vn,
+        _ => {
+            let i = curve.partition_point(|(b, _)| *b <= beat);
+            let (b0, v0) = curve[i - 1];
+            let (b1, v1) = curve[i];
+            v0 + (beat - b0) / (b1 - b0) * (v1 - v0)
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum GainAutomation {
     Constant(f64),
@@ -181,6 +200,9 @@ pub enum Command {
         voice_label: Option<String>,
         /// Gain multiplier (velocity) for this event. 1.0 by default.
         velocity: f64,
+        /// Time-varying gain (from `gain [...]`, `fade in`, `fade out`) applied
+        /// continuously while the event sounds. All curves are multiplied.
+        gain_curves: Vec<GainCurve>,
     },
     /// Import another .sc file: `import voices/kick.sc`
     Import { path: String },

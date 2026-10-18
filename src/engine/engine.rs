@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use fundsp::hacker::*;
 
-use crate::dsl::ast::{Command, DefKind, EqType, Expr, MasterChainStage};
+use crate::dsl::ast::{gain_curve_at, Command, DefKind, EqType, Expr, GainCurve, MasterChainStage};
 use crate::dsl::parser::{extract_voice_label, resolve_chord};
 use crate::engine::effects::{MasterBus, MasterStage, StageCompress, StageEq, StageExcite, StageExpand, StageMultiband, StageSaturate};
 use crate::engine::graph::{build_graph, extract_arp, extract_bus, extract_sidechain, extract_swell, strip_bus, strip_sidechain, strip_swell, substitute_freq, substitute_var, SidechainConfig};
@@ -36,6 +36,9 @@ struct ScheduledEvent {
     /// Per-event gain multiplier (used by arp for swell-based per-step dynamics).
     /// Applied multiplicatively with the swell envelope.
     gain: f32,
+    /// Time-varying gain curves over absolute sample positions, multiplied
+    /// together and applied per sample (from `gain [...]`, `fade in/out`).
+    gain_curves: Vec<GainCurve>,
     /// Provenance: pattern/voice name that produced this event (for verbose output).
     source: Option<String>,
     /// Whether this event has been logged in verbose mode.
@@ -388,11 +391,13 @@ impl Engine {
                 source,
                 voice_label,
                 velocity,
+                gain_curves,
             } => {
                 let start_sample = self.beats_to_samples(beat);
+                let sample_curves = self.curves_to_samples(&gain_curves, 0);
 
                 // Check for arpeggiator: arp(...) or arp(...) >> swell(...)
-                if self.try_handle_arp(&expr, start_sample, duration_beats, velocity as f32, voice_label.clone(), extract_voice_label(&expr))?.is_some() {
+                if self.try_handle_arp(&expr, start_sample, duration_beats, velocity as f32, &sample_curves, voice_label.clone(), extract_voice_label(&expr))?.is_some() {
                     // Arpeggiator handled — sub-events already scheduled
                 } else {
                     let duration_samples = self.beats_to_samples(duration_beats);
@@ -416,6 +421,7 @@ impl Engine {
                         net,
                         swell,
                         gain: velocity as f32,
+                        gain_curves: sample_curves.clone(),
                         source,
                         logged: false,
                         bus_name,
@@ -597,11 +603,13 @@ impl Engine {
                 source,
                 voice_label,
                 velocity,
+                gain_curves,
             } => {
                 let offset = self.beats_to_samples(beat);
                 let start_sample = self.current_sample + offset;
+                let sample_curves = self.curves_to_samples(&gain_curves, self.current_sample);
 
-                if let Some(_) = self.try_handle_arp(&expr, start_sample, duration_beats, velocity as f32, voice_label.clone(), extract_voice_label(&expr))? {
+                if let Some(_) = self.try_handle_arp(&expr, start_sample, duration_beats, velocity as f32, &sample_curves, voice_label.clone(), extract_voice_label(&expr))? {
                     // Arpeggiator handled
                 } else {
                     let duration_samples = self.beats_to_samples(duration_beats);
@@ -625,6 +633,7 @@ impl Engine {
                         net,
                         swell,
                         gain: velocity as f32,
+                        gain_curves: sample_curves.clone(),
                         source,
                         logged: false,
                         bus_name,
@@ -661,6 +670,7 @@ impl Engine {
             net,
             swell: None,
             gain: 1.0,
+            gain_curves: Vec::new(),
             source: None,
             logged: false,
             bus_name: None,
@@ -817,7 +827,8 @@ impl Engine {
                     event.end_sample = pos; // mark as finished
                     break; // stop processing this event for the rest of the buffer
                 }
-                let env = anti_click * swell_env * release_env * event.gain * sc_gain;
+                let automation: f64 = event.gain_curves.iter().map(|c| gain_curve_at(c, pos as f64)).product();
+                let env = anti_click * swell_env * release_env * event.gain * automation as f32 * sc_gain;
                 let left_sample = out_l * env;
                 let right_sample = out_r * env;
                 left[i] += left_sample;
@@ -1084,6 +1095,7 @@ impl Engine {
         base_start: u64,
         duration_beats: f64,
         velocity: f32,
+        sample_curves: &[GainCurve],
         voice_label: Option<String>,
         voice_resolved: Option<String>,
     ) -> Result<Option<()>> {
@@ -1307,6 +1319,7 @@ impl Engine {
                 net,
                 swell: None,
                 gain: step_gain,
+                gain_curves: sample_curves.to_vec(),
                 source: None,
                 logged: false,
                 bus_name: None,
@@ -1330,6 +1343,28 @@ impl Engine {
     ///
     /// With a single BPM (no mid-score changes), this is equivalent to:
     ///   beats * 60.0 / bpm * sample_rate
+    /// Convert gain curves from score beats to sample positions (offset by
+    /// `base`), honoring the tempo map. Points before beat 0 can occur (e.g. a
+    /// fade longer than its pattern) and map to negative positions.
+    fn curves_to_samples(&self, curves: &[GainCurve], base: u64) -> Vec<GainCurve> {
+        curves
+            .iter()
+            .map(|curve| {
+                curve
+                    .iter()
+                    .map(|&(b, v)| {
+                        let s = if b >= 0.0 {
+                            self.beats_to_samples(b) as f64
+                        } else {
+                            -(self.beats_to_samples(-b) as f64)
+                        };
+                        (base as f64 + s, v)
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
     fn beats_to_samples(&self, beat: f64) -> u64 {
         let mut total_seconds = 0.0;
 
@@ -1429,6 +1464,7 @@ mod tests {
                 source: None,
                 voice_label: None,
                 velocity: 1.0,
+                gain_curves: Vec::new(),
             },
         ];
         let mut err = None;
@@ -1503,6 +1539,7 @@ mod tests {
             source: None,
             voice_label: None,
             velocity: 1.0,
+            gain_curves: Vec::new(),
         })
     }
 
@@ -1613,6 +1650,7 @@ mod tests {
             source: None,
             voice_label: None,
             velocity: 1.0,
+            gain_curves: Vec::new(),
         });
         assert!(result.is_err(), "accent 0 play command should return Err");
     }

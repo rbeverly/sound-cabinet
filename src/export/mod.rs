@@ -211,6 +211,7 @@ mod tests {
             source: None,
             voice_label: None,
             velocity: 1.0,
+            gain_curves: Vec::new(),
         }];
         let extracted = extract::extract_notes(&commands);
         let result = check_finite_timings(&extracted.notes);

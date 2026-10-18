@@ -171,6 +171,27 @@ play outro
 
 Each `play` starts after the previous one finishes.
 
+## Gain and Fades
+
+Any section entry (`play`, `at N play`, `repeat`, `at N repeat`, `sequence`) and any top-level `play` can take a `gain` clause -- either a constant or a list of `beat: level` points:
+
+```sc
+section coda = 16 beats
+  play coda_chords gain 0.6                  // constant
+  play coda_vinyl gain [8: 1.0, 16: 0.0]     // hold, then fade out over beats 8-16
+  repeat hats every 4 beats gain [0: 0.2, 16: 1.0]   // one ramp across all repetitions
+
+play intro fade in 4 beats
+play coda gain 0.8 fade out 4 beats
+```
+
+- Gain is applied **continuously over time**, like a mixer fader -- a held note or long pad fades smoothly, not just notes that start later.
+- Point beats are relative to where the entry starts: the section start for `play`, `repeat`, and `sequence`; beat N for `at N ...`; and the play position for a top-level `play`. Between points the level is interpolated linearly; before the first point and after the last, it holds that point's level.
+- `fade in N beats` ramps from silence over the first N beats; `fade out N beats` ramps to silence over the last N beats.
+- Gains stack by multiplication: `play coda gain 0.5` on a section whose entry has `gain 0.5` plays that entry at 0.25.
+- Effects can't be attached to a pattern name in a section (`play coda_vinyl >> decay(5)` is an error). Put them on the events inside the pattern instead.
+- Gain is applied before the master bus, so heavy master compression will flatten fades.
+
 ## Repeat Blocks with Pick and Shuffle
 
 Loop with variation at the top level:

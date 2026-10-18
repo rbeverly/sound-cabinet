@@ -514,7 +514,7 @@ fn cmd_freeze(args: &[String]) -> Result<()> {
                 }
                 out.push_str(&format!("bpm {bpm}\n"));
             }
-            Command::PlayAt { beat, expr, duration_beats, source, voice_label, velocity: _ } => {
+            Command::PlayAt { beat, expr, duration_beats, source, voice_label, .. } => {
                 let beat_str = format_beat_freeze(*beat);
                 let dur_str = format_beat_freeze(*duration_beats);
                 let mut comment_parts = Vec::new();
@@ -1347,6 +1347,7 @@ fn cmd_piano(args: &[String]) -> Result<()> {
                 eng.handle_command_relative(Command::PlayAt {
                     beat: 0.0,
                     velocity: 1.0,
+                    gain_curves: Vec::new(),
                     expr: sound_cabinet::dsl::ast::Expr::Mul(
                         Box::new(sound_cabinet::dsl::ast::Expr::Pipe(
                             Box::new(sound_cabinet::dsl::ast::Expr::FnCall {
@@ -1535,6 +1536,7 @@ fn cmd_piano(args: &[String]) -> Result<()> {
                                         source: None,
                                         voice_label: None,
                                         velocity: 1.0,
+                                        gain_curves: Vec::new(),
                                     })
                                     .unwrap_or_else(|e| { let _ = e; });
 
@@ -1850,6 +1852,7 @@ fn cmd_stream() -> Result<()> {
                         source: None,
                         voice_label: None,
                         velocity: 1.0,
+                        gain_curves: Vec::new(),
                     })
                     .unwrap_or_else(|e| eprintln!("Engine error: {e}"));
                 }

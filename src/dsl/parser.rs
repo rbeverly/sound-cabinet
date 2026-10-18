@@ -752,6 +752,22 @@ fn parse_pattern_ref(pair: Pair<Rule>) -> Result<PatternRef> {
 }
 
 /// Parse a single section entry line.
+/// Section entry rules aren't anchored to end-of-line, so pest happily matches
+/// a prefix. Reject anything left over (other than a trailing comment) instead
+/// of silently dropping it — e.g. `play coda >> decay(5)`.
+fn ensure_entry_consumed(pair: &Pair<Rule>, line: &str) -> Result<()> {
+    let rest = line[pair.as_span().end()..].trim();
+    if rest.is_empty() || rest.starts_with("//") {
+        return Ok(());
+    }
+    let hint = if rest.starts_with(">>") {
+        "\n  Hint: Effects can't be applied to a pattern by name inside a section. Put them on the events in the pattern instead:\n    at 0 play my_voice >> swell(0, 4) for 16 beats"
+    } else {
+        "\n  Hint: Section entries accept: play <pattern> [from N] [with {...}] [gain ...]"
+    };
+    Err(anyhow!("Unexpected `{rest}` in section entry: {line}{hint}"))
+}
+
 fn parse_section_entry(line: &str) -> Result<SectionEntry> {
     if line.starts_with("at ") {
         // at N play X ... or at N repeat X ...
@@ -763,8 +779,9 @@ fn parse_section_entry(line: &str) -> Result<SectionEntry> {
                 let at_pairs = ScoreParser::parse(Rule::at_stmt, line)
                     .map_err(|e| anyhow!("Section inline event parse error:\n{e}"))?;
                 let at_pair = at_pairs.into_iter().next().unwrap();
+                ensure_entry_consumed(&at_pair, line)?;
                 let parsed = parse_at(at_pair)?;
-                if let Command::PlayAt { beat, expr, duration_beats, source, voice_label, velocity } = parsed {
+                if let Command::PlayAt { beat, expr, duration_beats, voice_label, .. } = parsed {
                     return Ok(SectionEntry::InlineEvent { beat, expr, duration_beats, voice_label });
                 }
                 unreachable!()
@@ -773,6 +790,7 @@ fn parse_section_entry(line: &str) -> Result<SectionEntry> {
                 let entry_pairs = ScoreParser::parse(Rule::section_entry_at_play, line)
                     .map_err(|e| anyhow!("Section entry parse error:\n{e}\n  Hint: 'at' inside sections positions a pattern by name: at 8 play my_pattern\n  For inline expressions, include 'for N beats': at 0 play sine(440) for 2 beats"))?;
                 let entry_pair = entry_pairs.into_iter().next().unwrap();
+                ensure_entry_consumed(&entry_pair, line)?;
                 let mut ei = entry_pair.into_inner();
                 let beat: f64 = ei.next().unwrap().as_str().parse()?;
                 let pref = parse_pattern_ref(ei.next().unwrap())?;
@@ -784,6 +802,7 @@ fn parse_section_entry(line: &str) -> Result<SectionEntry> {
             let entry_pairs = ScoreParser::parse(Rule::section_entry_at_repeat, line)
                 .map_err(|e| anyhow!("Section entry parse error:\n{e}"))?;
             let entry_pair = entry_pairs.into_iter().next().unwrap();
+            ensure_entry_consumed(&entry_pair, line)?;
             let mut ei = entry_pair.into_inner();
             let beat: f64 = ei.next().unwrap().as_str().parse()?;
             let pref = parse_pattern_ref(ei.next().unwrap())?;
@@ -808,6 +827,7 @@ fn parse_section_entry(line: &str) -> Result<SectionEntry> {
         let entry_pairs = ScoreParser::parse(Rule::section_entry_repeat, line)
             .map_err(|e| anyhow!("Section repeat entry parse error:\n{e}"))?;
         let entry_pair = entry_pairs.into_iter().next().unwrap();
+        ensure_entry_consumed(&entry_pair, line)?;
         let mut ei = entry_pair.into_inner();
         let pref = parse_pattern_ref(ei.next().unwrap())?;
         let (every, from, to) = parse_repeat_modifiers(&mut ei);
@@ -825,6 +845,7 @@ fn parse_section_entry(line: &str) -> Result<SectionEntry> {
         let entry_pairs = ScoreParser::parse(Rule::section_entry_play, line)
             .map_err(|e| anyhow!("Section play entry parse error:\n{e}"))?;
         let entry_pair = entry_pairs.into_iter().next().unwrap();
+        ensure_entry_consumed(&entry_pair, line)?;
         let mut ei = entry_pair.into_inner();
         let pref = parse_pattern_ref(ei.next().unwrap())?;
         let gain = parse_optional_gain(&mut ei)?;
@@ -858,6 +879,7 @@ fn parse_section_entry(line: &str) -> Result<SectionEntry> {
         let entry_pairs = ScoreParser::parse(Rule::section_entry_sequence, line)
             .map_err(|e| anyhow!("Section sequence entry parse error:\n{e}"))?;
         let entry_pair = entry_pairs.into_iter().next().unwrap();
+        ensure_entry_consumed(&entry_pair, line)?;
         let mut patterns = Vec::new();
         let mut entry_with = None;
         for token in entry_pair.into_inner() {
@@ -1020,6 +1042,7 @@ fn parse_at(pair: Pair<Rule>) -> Result<Command> {
         source: None,
         voice_label,
         velocity: 1.0,
+        gain_curves: Vec::new(),
     })
 }
 
@@ -1622,5 +1645,19 @@ repeat 3 {
             result.is_err(),
             "expected negative-weight pick to be rejected, got {result:?}"
         );
+    }
+
+    #[test]
+    fn section_entry_rejects_trailing_effects() {
+        let src = "pattern p = 4 beats\n  at 0 play sine(440) for 1 beats\nsection s = 4 beats\n  play p >> decay(5)\n";
+        let err = parse_script(src).expect_err("trailing `>> decay(5)` must not be silently dropped");
+        let msg = format!("{err:#}");
+        assert!(msg.contains(">> decay(5)"), "error should quote the leftover text, got: {msg}");
+    }
+
+    #[test]
+    fn section_entry_allows_trailing_comment() {
+        let src = "pattern p = 4 beats\n  at 0 play sine(440) for 1 beats\nsection s = 4 beats\n  play p gain [0: 1.0, 4: 0.0] // fade\n  repeat p every 4 beats // loop\n";
+        parse_script(src).expect("trailing comments are fine");
     }
 }

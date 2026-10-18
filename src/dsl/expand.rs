@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{anyhow, Result};
 use rand::Rng;
 
-use super::ast::{Command, Expr, GainAutomation, PatternEvent, PatternRef, RepeatBody, Script, SectionEntry, WithMap};
+use super::ast::{Command, Expr, GainAutomation, GainCurve, PatternEvent, PatternRef, RepeatBody, Script, SectionEntry, WithMap};
 #[cfg(test)]
 use super::ast::DefKind;
 
@@ -90,13 +90,13 @@ fn truncate_to_boundary(cmd: Command, abs_end: f64) -> Command {
     if abs_end <= 0.0 {
         return cmd; // no boundary (implicit length sections)
     }
-    if let Command::PlayAt { beat, expr, duration_beats, source, voice_label, velocity } = cmd {
+    if let Command::PlayAt { beat, expr, duration_beats, source, voice_label, velocity, gain_curves } = cmd {
         if beat >= abs_end {
             // Event starts past boundary — make it zero-length (will be inaudible)
-            Command::PlayAt { beat, expr, duration_beats: 0.0, source, voice_label, velocity }
+            Command::PlayAt { beat, expr, duration_beats: 0.0, source, voice_label, velocity, gain_curves }
         } else {
             let clipped = duration_beats.min(abs_end - beat);
-            Command::PlayAt { beat, expr, duration_beats: clipped, source, voice_label, velocity }
+            Command::PlayAt { beat, expr, duration_beats: clipped, source, voice_label, velocity, gain_curves }
         }
     } else {
         cmd
@@ -251,7 +251,7 @@ impl ExpansionContext {
         Ok(max_end)
     }
 
-    fn expand_name(&self, name: &str, base_beat: f64, global_swing: f64, global_humanize: f64, bpm: f64, with_map: &WithMap, rng: &mut impl Rng, gain_automation: Option<&GainAutomation>) -> Result<Vec<Command>> {
+    fn expand_name(&self, name: &str, base_beat: f64, global_swing: f64, global_humanize: f64, bpm: f64, with_map: &WithMap, rng: &mut impl Rng, gain: &[GainCurve]) -> Result<Vec<Command>> {
         // Cycle check before dispatch: returns Err if `name` is already on the
         // active expansion stack. The guard pops on drop, including via `?`.
         let _guard = self.push_name(name)?;
@@ -260,17 +260,17 @@ impl ExpansionContext {
             // cycle tracking is needed for them.
             let swing = p.swing.unwrap_or(global_swing);
             let humanize = p.humanize.unwrap_or(global_humanize);
-            Ok(expand_pattern_events(&p.events, base_beat, swing, humanize, bpm, with_map, Some(name.to_string()), rng, gain_automation))
+            Ok(expand_pattern_events(&p.events, base_beat, swing, humanize, bpm, with_map, Some(name.to_string()), rng, gain))
         } else if let Some(s) = self.sections.get(name) {
-            self.expand_section(name, s, base_beat, global_swing, global_humanize, bpm, with_map, rng, gain_automation)
+            self.expand_section(name, s, base_beat, global_swing, global_humanize, bpm, with_map, rng, gain)
         } else {
             Err(anyhow!("Unknown pattern or section: '{name}'"))
         }
     }
 
-    fn expand_pattern_ref(&self, pref: &PatternRef, base_beat: f64, swing: f64, humanize: f64, bpm: f64, with_map: &WithMap, rng: &mut impl Rng, gain_automation: Option<&crate::dsl::ast::GainAutomation>) -> Result<Vec<Command>> {
+    fn expand_pattern_ref(&self, pref: &PatternRef, base_beat: f64, swing: f64, humanize: f64, bpm: f64, with_map: &WithMap, rng: &mut impl Rng, gain: &[GainCurve]) -> Result<Vec<Command>> {
         match pref {
-            PatternRef::Name(name) => self.expand_name(name, base_beat, swing, humanize, bpm, with_map, rng, gain_automation),
+            PatternRef::Name(name) => self.expand_name(name, base_beat, swing, humanize, bpm, with_map, rng, gain),
             PatternRef::Sample { name, start, end } => {
                 let p = self.patterns.get(name)
                     .ok_or_else(|| anyhow!("Unknown pattern: '{name}' (referenced via sample())"))?;
@@ -285,7 +285,7 @@ impl ExpansionContext {
                     .collect();
                 let pat_swing = p.swing.unwrap_or(swing);
                 let pat_humanize = p.humanize.unwrap_or(humanize);
-                Ok(expand_pattern_events(&filtered, base_beat, pat_swing, pat_humanize, bpm, with_map, Some(name.to_string()), rng, gain_automation))
+                Ok(expand_pattern_events(&filtered, base_beat, pat_swing, pat_humanize, bpm, with_map, Some(name.to_string()), rng, gain))
             }
         }
     }
@@ -301,7 +301,7 @@ impl ExpansionContext {
         }
     }
 
-    fn expand_section(&self, _section_name: &str, section: &SectionInfo, base_beat: f64, global_swing: f64, global_humanize: f64, bpm: f64, inherited_with: &WithMap, rng: &mut impl Rng, section_gain: Option<&GainAutomation>) -> Result<Vec<Command>> {
+    fn expand_section(&self, _section_name: &str, section: &SectionInfo, base_beat: f64, global_swing: f64, global_humanize: f64, bpm: f64, inherited_with: &WithMap, rng: &mut impl Rng, section_gain: &[GainCurve]) -> Result<Vec<Command>> {
         let mut output = Vec::new();
 
         // Merge inherited with_map with section-level with_map
@@ -340,10 +340,10 @@ impl ExpansionContext {
                     let start = from_beat.unwrap_or(0.0);
                     let end = to_beat.unwrap_or(section_duration);
                     let abs_end = base_beat + end;
+                    let final_gain = with_gain(section_gain, gain.as_ref(), base_beat);
                     let mut beat = start;
                     while beat < end {
-                        let final_gain = gain.as_ref().or(section_gain);
-                        let cmds = self.expand_pattern_ref(pattern, base_beat + beat, global_swing, global_humanize, bpm, &resolved_with, rng, final_gain)?;
+                        let cmds = self.expand_pattern_ref(pattern, base_beat + beat, global_swing, global_humanize, bpm, &resolved_with, rng, &final_gain)?;
                         for cmd in cmds {
                             output.push(truncate_to_boundary(cmd, abs_end));
                         }
@@ -353,8 +353,8 @@ impl ExpansionContext {
                 SectionEntry::Play { pattern, gain, .. } => {
                     // Play starts at the section's base beat (simultaneous with other entries).
                     // Use `sequence` for back-to-back sequential playback.
-                    let final_gain = gain.as_ref().or(section_gain);
-                    let cmds = self.expand_pattern_ref(pattern, base_beat, global_swing, global_humanize, bpm, &resolved_with, rng, final_gain)?;
+                    let final_gain = with_gain(section_gain, gain.as_ref(), base_beat);
+                    let cmds = self.expand_pattern_ref(pattern, base_beat, global_swing, global_humanize, bpm, &resolved_with, rng, &final_gain)?;
                     // Truncate events to section boundary
                     let abs_end = base_beat + section_duration;
                     for cmd in cmds {
@@ -362,8 +362,8 @@ impl ExpansionContext {
                     }
                 }
                 SectionEntry::AtPlay { beat, pattern, gain, .. } => {
-                    let final_gain = gain.as_ref().or(section_gain);
-                    let cmds = self.expand_pattern_ref(pattern, base_beat + beat, global_swing, global_humanize, bpm, &resolved_with, rng, final_gain)?;
+                    let final_gain = with_gain(section_gain, gain.as_ref(), base_beat + beat);
+                    let cmds = self.expand_pattern_ref(pattern, base_beat + beat, global_swing, global_humanize, bpm, &resolved_with, rng, &final_gain)?;
                     let abs_end = base_beat + section_duration;
                     for cmd in cmds {
                         output.push(truncate_to_boundary(cmd, abs_end));
@@ -384,9 +384,10 @@ impl ExpansionContext {
                     let start = from_beat.unwrap_or(*beat);
                     let end = to_beat.unwrap_or(section_duration);
                     let abs_end = base_beat + end;
+                    let final_gain = with_gain(section_gain, gain.as_ref(), base_beat + *beat);
                     let mut b = start;
                     while b < end {
-                        let cmds = self.expand_pattern_ref(pattern, base_beat + b, global_swing, global_humanize, bpm, &resolved_with, rng, gain.as_ref())?;
+                        let cmds = self.expand_pattern_ref(pattern, base_beat + b, global_swing, global_humanize, bpm, &resolved_with, rng, &final_gain)?;
                         for cmd in cmds {
                             output.push(truncate_to_boundary(cmd, abs_end));
                         }
@@ -394,12 +395,12 @@ impl ExpansionContext {
                     }
                 }
                 SectionEntry::Sequence { patterns, with_map: _, gain } => {
+                    let final_gain = with_gain(section_gain, gain.as_ref(), base_beat);
                     let mut seq_cursor = 0.0;
                     for pref in patterns {
                         let name_with = resolve_entry_with(&section_with, entry_with_map);
                         let dur = self.duration_of_ref(pref)?;
-                        let final_gain = gain.as_ref().or(section_gain);
-                        let cmds = self.expand_pattern_ref(pref, base_beat + seq_cursor, global_swing, global_humanize, bpm, &name_with, rng, final_gain)?;
+                        let cmds = self.expand_pattern_ref(pref, base_beat + seq_cursor, global_swing, global_humanize, bpm, &name_with, rng, &final_gain)?;
                         output.extend(cmds);
                         seq_cursor += dur;
                     }
@@ -417,7 +418,8 @@ impl ExpansionContext {
                         duration_beats: *duration_beats,
                         source: None,
                         voice_label: voice_label.clone(),
-                        velocity: 1.0, // TODO: Apply inline gain automation
+                        velocity: 1.0,
+                        gain_curves: section_gain.to_vec(),
                     });
                 }
                 SectionEntry::RepeatBlock { count, body } => {
@@ -459,7 +461,7 @@ impl ExpansionContext {
     }
 }
 
-fn expand_pattern_events(events: &[PatternEvent], base_beat: f64, swing: f64, humanize_ms: f64, bpm: f64, with_map: &WithMap, source_name: Option<String>, rng: &mut impl Rng, gain_automation: Option<&GainAutomation>) -> Vec<Command> {
+fn expand_pattern_events(events: &[PatternEvent], base_beat: f64, swing: f64, humanize_ms: f64, bpm: f64, with_map: &WithMap, source_name: Option<String>, rng: &mut impl Rng, gain: &[GainCurve]) -> Vec<Command> {
     events
         .iter()
         .map(|e| {
@@ -494,64 +496,47 @@ fn expand_pattern_events(events: &[PatternEvent], base_beat: f64, swing: f64, hu
                 apply_with_map(&e.expr, with_map)
             };
 
-            let mut vel = 1.0;
-            if let Some(auto) = gain_automation {
-                match auto {
-                    GainAutomation::Constant(v) => vel *= v,
-                    GainAutomation::Points(pts) => {
-                        if pts.is_empty() {
-                        } else if pts.len() == 1 {
-                            vel *= pts[0].1;
-                        } else {
-                            let b = e.beat_offset;
-                            if b <= pts[0].0 {
-                                vel *= pts[0].1;
-                            } else if b >= pts.last().unwrap().0 {
-                                vel *= pts.last().unwrap().1;
-                            } else {
-                                for i in 0..pts.len() - 1 {
-                                    if b >= pts[i].0 && b <= pts[i+1].0 {
-                                        let t = (b - pts[i].0) / (pts[i+1].0 - pts[i].0);
-                                        vel *= pts[i].1 + t * (pts[i+1].1 - pts[i].1);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
             Command::PlayAt {
                 beat,
                 expr,
                 duration_beats: e.duration_beats,
                 source: source_name.clone(),
                 voice_label,
-                velocity: vel,
+                velocity: 1.0,
+                gain_curves: gain.to_vec(),
             }
         })
         .collect()
 }
 
-/// Scale event velocities by a linear fade in from `start` and/or fade out
-/// toward `start + duration`. Like gain automation, the factor is sampled at
-/// each event's onset, so a single sustained note keeps one level throughout.
-fn apply_fades(events: &mut [Command], start: f64, duration: f64, fade_in: Option<f64>, fade_out: Option<f64>) {
-    if fade_in.is_none() && fade_out.is_none() {
-        return;
-    }
-    let end = start + duration;
-    for cmd in events.iter_mut() {
-        if let Command::PlayAt { beat, velocity, .. } = cmd {
-            if let Some(len) = fade_in.filter(|l| *l > 0.0) {
-                *velocity *= ((*beat - start) / len).clamp(0.0, 1.0);
-            }
-            if let Some(len) = fade_out.filter(|l| *l > 0.0) {
-                *velocity *= ((end - *beat) / len).clamp(0.0, 1.0);
-            }
+/// Stack an entry's `gain` clause (if any) on top of inherited gain curves.
+/// The clause's beat positions are relative to `origin`, the entry's start.
+fn with_gain(inherited: &[GainCurve], gain: Option<&GainAutomation>, origin: f64) -> Vec<GainCurve> {
+    let mut curves = inherited.to_vec();
+    match gain {
+        Some(GainAutomation::Constant(v)) => curves.push(vec![(origin, *v)]),
+        Some(GainAutomation::Points(pts)) if !pts.is_empty() => {
+            let mut curve: GainCurve = pts.iter().map(|(b, v)| (origin + b, *v)).collect();
+            curve.sort_by(|a, b| a.0.total_cmp(&b.0));
+            curves.push(curve);
         }
+        _ => {}
     }
+    curves
+}
+
+/// Linear fade-in from `start` and/or fade-out ending at `start + duration`,
+/// as gain curves.
+fn fade_curves(start: f64, duration: f64, fade_in: Option<f64>, fade_out: Option<f64>) -> Vec<GainCurve> {
+    let end = start + duration;
+    let mut curves = Vec::new();
+    if let Some(len) = fade_in.filter(|l| *l > 0.0) {
+        curves.push(vec![(start, 0.0), (start + len, 1.0)]);
+    }
+    if let Some(len) = fade_out.filter(|l| *l > 0.0) {
+        curves.push(vec![(end - len, 1.0), (end, 0.0)]);
+    }
+    curves
 }
 
 /// Expand a script containing patterns, sections, repeat blocks, pick, and shuffle
@@ -632,8 +617,9 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
                 ctx.active_stack.borrow_mut().clear();
                 let duration = ctx.duration_of_ref(&pattern)?;
                 ctx.active_stack.borrow_mut().clear();
-                let mut events = ctx.expand_pattern_ref(&pattern, cursor, global_swing, global_humanize, bpm, &global_with, rng, gain.as_ref())?;
-                apply_fades(&mut events, cursor, duration, fade_in, fade_out);
+                let mut curves = with_gain(&[], gain.as_ref(), cursor);
+                curves.extend(fade_curves(cursor, duration, fade_in, fade_out));
+                let events = ctx.expand_pattern_ref(&pattern, cursor, global_swing, global_humanize, bpm, &global_with, rng, &curves)?;
                 output.extend(events);
                 cursor += duration;
             }
@@ -645,7 +631,7 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
                                 ctx.active_stack.borrow_mut().clear();
                                 let duration = ctx.duration_of(name)?;
                                 ctx.active_stack.borrow_mut().clear();
-                                let events = ctx.expand_name(name, cursor, global_swing, global_humanize, bpm, &global_with, rng, None)?;
+                                let events = ctx.expand_name(name, cursor, global_swing, global_humanize, bpm, &global_with, rng, &[])?;
                                 output.extend(events);
                                 cursor += duration;
                             }
@@ -654,7 +640,7 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
                                 ctx.active_stack.borrow_mut().clear();
                                 let duration = ctx.duration_of(&name)?;
                                 ctx.active_stack.borrow_mut().clear();
-                                let events = ctx.expand_name(&name, cursor, global_swing, global_humanize, bpm, &global_with, rng, None)?;
+                                let events = ctx.expand_name(&name, cursor, global_swing, global_humanize, bpm, &global_with, rng, &[])?;
                                 output.extend(events);
                                 cursor += duration;
                             }
@@ -665,7 +651,7 @@ pub fn expand_script(script: Script, rng: &mut impl Rng) -> Result<Script> {
                                     ctx.active_stack.borrow_mut().clear();
                                     let duration = ctx.duration_of(name)?;
                                     ctx.active_stack.borrow_mut().clear();
-                                    let events = ctx.expand_name(name, cursor, global_swing, global_humanize, bpm, &global_with, rng, None)?;
+                                    let events = ctx.expand_name(name, cursor, global_swing, global_humanize, bpm, &global_with, rng, &[])?;
                                     output.extend(events);
                                     cursor += duration;
                                 }
@@ -912,6 +898,7 @@ mod tests {
                 source: None,
                 voice_label: None,
                 velocity: 1.0,
+                gain_curves: Vec::new(),
             }],
         };
 
@@ -1093,20 +1080,36 @@ play loop
         }
     }
 
-    /// Expand `source` and return the velocity of every PlayAt, in beat order.
-    fn velocities(source: &str) -> Vec<(f64, f64)> {
+    /// Combined gain (velocity × every gain curve) of a PlayAt at score beat `at`.
+    fn gain_at(cmd: &Command, at: f64) -> f64 {
+        match cmd {
+            Command::PlayAt { velocity, gain_curves, .. } => {
+                velocity * gain_curves.iter().map(|c| crate::dsl::ast::gain_curve_at(c, at)).product::<f64>()
+            }
+            _ => panic!("Expected PlayAt"),
+        }
+    }
+
+    fn play_ats(source: &str) -> Vec<Command> {
         let script = crate::dsl::parser::parse_script(source).unwrap();
         let out = expand_script(script, &mut make_rng()).unwrap();
-        let mut v: Vec<(f64, f64)> = out
-            .commands
-            .iter()
-            .filter_map(|c| match c {
-                Command::PlayAt { beat, velocity, .. } => Some((*beat, *velocity)),
-                _ => None,
-            })
-            .collect();
-        v.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        let mut v: Vec<Command> = out.commands.into_iter().filter(|c| matches!(c, Command::PlayAt { .. })).collect();
+        v.sort_by(|a, b| match (a, b) {
+            (Command::PlayAt { beat: x, .. }, Command::PlayAt { beat: y, .. }) => x.partial_cmp(y).unwrap(),
+            _ => unreachable!(),
+        });
         v
+    }
+
+    /// Expand `source` and return each PlayAt's gain at its own onset, in beat order.
+    fn velocities(source: &str) -> Vec<(f64, f64)> {
+        play_ats(source)
+            .iter()
+            .map(|c| match c {
+                Command::PlayAt { beat, .. } => (*beat, gain_at(c, *beat)),
+                _ => unreachable!(),
+            })
+            .collect()
     }
 
     const FOUR_HITS: &str = "\
@@ -1152,17 +1155,74 @@ section s = 8 beats
 
 play s
 ");
-        let script = crate::dsl::parser::parse_script(&source).unwrap();
-        let out = expand_script(script, &mut make_rng()).unwrap();
-        let events: Vec<_> = out.commands.iter().filter_map(|c| match c {
-            Command::PlayAt { expr, velocity, .. } => Some((expr.clone(), *velocity)),
-            _ => None,
-        }).collect();
+        let events = play_ats(&source);
         assert_eq!(events.len(), 4);
-        for (expr, vel) in events {
-            assert_eq!(vel, 0.5);
-            assert!(matches!(expr, Expr::VoiceRef(ref n) if n == "other"), "with not applied: {expr:?}");
+        for cmd in &events {
+            let Command::PlayAt { beat, expr, .. } = cmd else { unreachable!() };
+            assert_eq!(gain_at(cmd, *beat), 0.5);
+            assert!(matches!(expr, Expr::VoiceRef(n) if n == "other"), "with not applied: {expr:?}");
         }
+    }
+
+    const HELD: &str = "\
+voice pad = sine(220)
+pattern held = 16 beats
+  at 0 play pad for 16 beats
+";
+
+    #[test]
+    fn gain_points_fade_a_held_note_over_time() {
+        // The neon-cascade coda case: one note starting before the first point.
+        let source = format!("{HELD}
+section coda = 16 beats
+  play held gain [8: 1.0, 16: 0]
+
+play coda
+");
+        let events = play_ats(&source);
+        assert_eq!(events.len(), 1);
+        let e = &events[0];
+        assert_eq!(gain_at(e, 0.0), 1.0);
+        assert_eq!(gain_at(e, 8.0), 1.0);
+        assert_eq!(gain_at(e, 12.0), 0.5);
+        assert_eq!(gain_at(e, 16.0), 0.0);
+    }
+
+    #[test]
+    fn top_level_fade_out_fades_a_held_note() {
+        let source = format!("{HELD}
+play held fade out 4 beats
+");
+        let events = play_ats(&source);
+        let e = &events[0];
+        assert_eq!(gain_at(e, 11.0), 1.0);
+        assert_eq!(gain_at(e, 14.0), 0.5);
+        assert_eq!(gain_at(e, 16.0), 0.0);
+    }
+
+    #[test]
+    fn repeat_gain_spans_the_whole_section_not_each_repetition() {
+        let source = format!("{FOUR_HITS}
+section s = 8 beats
+  repeat hits every 4 beats gain [0: 1.0, 8: 0.0]
+
+play s
+");
+        let vels: Vec<f64> = velocities(&source).into_iter().map(|(_, v)| v).collect();
+        assert_eq!(vels, vec![1.0, 0.875, 0.75, 0.625, 0.5, 0.375, 0.25, 0.125]);
+    }
+
+    #[test]
+    fn nested_gains_multiply() {
+        let source = format!("{FOUR_HITS}
+section s = 4 beats
+  play hits gain 0.5
+
+play s gain 0.5 fade out 4 beats
+");
+        let events = play_ats(&source);
+        assert_eq!(gain_at(&events[0], 0.0), 0.25);
+        assert_eq!(gain_at(&events[0], 2.0), 0.125);
     }
 
     #[test]
